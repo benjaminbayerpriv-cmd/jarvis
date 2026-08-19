@@ -1,0 +1,6 @@
+{
+  "name": "Jarvis",
+  "personality": "locker_direkt",
+  "hotkey": "cmd+shift+j",
+  "default_city": "Hamburg"
+}

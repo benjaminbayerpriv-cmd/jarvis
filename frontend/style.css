@@ -1,0 +1,441 @@
+/* Jarvis — an instrument console, not a chat window.
+   Colour carries machine state: green when you speak, amber when Jarvis
+   speaks, red when the mic is off. Mono is the machine's voice, Avenir is
+   the conversation's. */
+
+:root {
+  color-scheme: dark;
+
+  --ground: #12120f;
+  --housing: #191915;
+  --raised: #1f1f1a;
+  --line: #2c2c25;
+  --line-soft: #232320;
+
+  --text: #e8e4d9;
+  --dim: #8b8676;
+  --faint: #5d594d;
+
+  --sig-in: #7fd86b;    /* you are speaking */
+  --sig-out: #e3a63c;   /* Jarvis is speaking */
+  --sig-work: #c9a227;  /* thinking */
+  --alert: #d9634a;     /* mic off */
+
+  --mono: ui-monospace, "SF Mono", Menlo, monospace;
+  --sans: "Avenir Next", "Helvetica Neue", system-ui, sans-serif;
+
+  --rail: 400px;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: var(--ground);
+  color: var(--text);
+  font-family: var(--sans);
+  overflow: hidden;
+}
+
+button { font-family: var(--mono); cursor: pointer; }
+
+:focus-visible {
+  outline: 2px solid var(--sig-out);
+  outline-offset: 2px;
+}
+
+/* ---------- shell ---------- */
+
+.console {
+  height: 100vh;
+  display: grid;
+  grid-template-columns: 1fr;
+  transition: grid-template-columns 420ms cubic-bezier(.22,.61,.36,1);
+}
+
+.console.has-bench {
+  grid-template-columns: var(--rail) 1fr;
+}
+
+/* ---------- deck (left rail) ---------- */
+
+.deck {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 22px 24px 20px;
+  border-right: 1px solid transparent;
+  max-width: 640px;
+  margin: 0 auto;
+  width: 100%;
+}
+
+.console.has-bench .deck {
+  border-right-color: var(--line);
+  max-width: none;
+  margin: 0;
+}
+
+.deck-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 18px;
+}
+
+.wordmark {
+  font-family: var(--mono);
+  font-size: 13px;
+  letter-spacing: .34em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+
+.state-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: .16em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+
+.state-pill .dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--faint);
+  transition: background 200ms, box-shadow 200ms;
+}
+
+body[data-state="listening"] .dot { background: var(--sig-in); box-shadow: 0 0 10px var(--sig-in); }
+body[data-state="thinking"]  .dot { background: var(--sig-work); box-shadow: 0 0 10px var(--sig-work); }
+body[data-state="speaking"]  .dot { background: var(--sig-out); box-shadow: 0 0 10px var(--sig-out); }
+body[data-state="off"]       .dot { background: var(--alert); }
+
+body[data-state="listening"] .state-pill { color: var(--sig-in); }
+body[data-state="thinking"]  .state-pill { color: var(--sig-work); }
+body[data-state="speaking"]  .state-pill { color: var(--sig-out); }
+body[data-state="off"]       .state-pill { color: var(--alert); }
+
+/* ---------- the meter: the one bold element ---------- */
+
+.meter-stage {
+  display: grid;
+  place-items: center;
+  padding: 6px 0 14px;
+}
+
+.meter {
+  position: relative;
+  width: 190px;
+  height: 190px;
+  display: grid;
+  place-items: center;
+}
+
+.meter svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+
+.meter .tick {
+  fill: var(--line);
+  transition: fill 90ms linear;
+}
+
+.meter .tick.lit { fill: var(--sig-in); }
+body[data-state="speaking"] .meter .tick.lit { fill: var(--sig-out); }
+body[data-state="thinking"] .meter .tick.lit { fill: var(--sig-work); }
+
+.core {
+  width: 84px;
+  height: 84px;
+  border-radius: 50%;
+  background: var(--raised);
+  border: 1px solid var(--line);
+  transition: transform 90ms linear, border-color 200ms, box-shadow 200ms;
+}
+
+body[data-state="listening"] .core { border-color: color-mix(in srgb, var(--sig-in) 45%, var(--line)); }
+body[data-state="speaking"]  .core { border-color: color-mix(in srgb, var(--sig-out) 55%, var(--line)); box-shadow: 0 0 34px -8px var(--sig-out); }
+body[data-state="thinking"]  .core { border-color: color-mix(in srgb, var(--sig-work) 45%, var(--line)); }
+body[data-state="off"]       .core { border-color: color-mix(in srgb, var(--alert) 40%, var(--line)); }
+
+/* Thinking has no audio to drive the ring, so give it its own pulse. */
+body[data-state="thinking"] .core { animation: breathe 1.5s ease-in-out infinite; }
+
+@keyframes breathe {
+  0%, 100% { transform: scale(.96); }
+  50%      { transform: scale(1.04); }
+}
+
+.hint {
+  margin: 0 0 16px;
+  text-align: center;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  letter-spacing: .04em;
+  color: var(--faint);
+  min-height: 16px;
+}
+
+/* ---------- conversation ---------- */
+
+.log {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 4px 2px 16px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
+}
+
+.turn { display: flex; flex-direction: column; gap: 5px; }
+
+.turn .who {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: .2em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+.turn .said {
+  font-size: 15.5px;
+  line-height: 1.55;
+  color: var(--text);
+}
+
+.turn.you .said { color: var(--dim); }
+.turn.you .who { color: color-mix(in srgb, var(--sig-in) 60%, var(--faint)); }
+.turn.jarvis .who { color: color-mix(in srgb, var(--sig-out) 60%, var(--faint)); }
+
+.turn.pending .said::after {
+  content: "";
+  display: inline-block;
+  width: 7px; height: 14px;
+  margin-left: 3px;
+  background: var(--sig-out);
+  vertical-align: text-bottom;
+  animation: caret 1s steps(2) infinite;
+}
+
+@keyframes caret { 0%,49% { opacity: 1 } 50%,100% { opacity: 0 } }
+
+/* ---------- composer ---------- */
+
+.composer {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 9px 10px 9px 14px;
+  background: var(--housing);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+
+.composer:focus-within { border-color: color-mix(in srgb, var(--sig-out) 40%, var(--line)); }
+
+.composer input {
+  flex: 1;
+  background: none;
+  border: 0;
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 14.5px;
+  padding: 4px 0;
+}
+
+.composer input::placeholder { color: var(--faint); }
+.composer input:focus { outline: none; }
+
+.send {
+  background: none;
+  border: 1px solid var(--line);
+  color: var(--dim);
+  border-radius: 8px;
+  width: 32px; height: 32px;
+  font-size: 13px;
+  transition: color 160ms, border-color 160ms;
+}
+
+.send:hover { color: var(--sig-out); border-color: var(--sig-out); }
+
+/* ---------- controls ---------- */
+
+.controls { display: flex; gap: 8px; padding-top: 10px; }
+
+.ctrl {
+  flex: 1;
+  padding: 8px 12px;
+  background: none;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  color: var(--dim);
+  font-size: 11px;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  transition: color 160ms, border-color 160ms;
+}
+
+.ctrl:hover { color: var(--text); border-color: var(--dim); }
+.ctrl.off { color: var(--alert); border-color: color-mix(in srgb, var(--alert) 45%, var(--line)); }
+.ctrl.ghost { flex: 0 0 auto; }
+
+/* ---------- bench (right) ---------- */
+
+.bench {
+  display: none;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--housing);
+}
+
+.console.has-bench .bench { display: flex; }
+
+.bench-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18px 22px;
+  border-bottom: 1px solid var(--line);
+}
+
+.bench-head .label {
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: .26em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+
+.bench-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 20px 22px 40px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
+}
+
+.card {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--ground);
+  overflow: hidden;
+  animation: rise 320ms cubic-bezier(.22,.61,.36,1);
+}
+
+@keyframes rise {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: none; }
+}
+
+.card > h3 {
+  margin: 0;
+  padding: 11px 14px;
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: .16em;
+  text-transform: uppercase;
+  color: var(--dim);
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.card img { display: block; width: 100%; }
+
+.card pre {
+  margin: 0;
+  padding: 14px;
+  overflow-x: auto;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--text);
+  white-space: pre;
+}
+
+.card .prose {
+  padding: 14px 16px;
+  font-size: 14.5px;
+  line-height: 1.65;
+}
+
+.card .prose h1, .card .prose h2, .card .prose h3 {
+  font-size: 15px;
+  margin: 14px 0 6px;
+  letter-spacing: .01em;
+}
+
+.card .prose code {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  background: var(--raised);
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+
+.card .prose li { margin: 3px 0; }
+.card .prose p { margin: 0 0 10px; }
+
+.filelist {
+  margin: 0;
+  padding: 10px 14px 14px;
+  list-style: none;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  color: var(--dim);
+  columns: 2;
+  column-gap: 22px;
+}
+
+.filelist li { padding: 2px 0; break-inside: avoid; }
+
+.card .path {
+  padding: 0 14px 12px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--faint);
+  word-break: break-all;
+}
+
+.card a {
+  display: block;
+  padding: 13px 14px;
+  color: var(--sig-out);
+  font-family: var(--mono);
+  font-size: 12.5px;
+  text-decoration: none;
+  word-break: break-all;
+}
+
+.card a:hover { text-decoration: underline; }
+
+/* ---------- responsive ---------- */
+
+@media (max-width: 900px) {
+  html, body { overflow: auto; }
+  .console, .console.has-bench {
+    grid-template-columns: 1fr;
+    height: auto;
+  }
+  .console.has-bench .deck { border-right: 0; border-bottom: 1px solid var(--line); }
+  .log { max-height: 40vh; }
+  .filelist { columns: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .001ms !important;
+  }
+}
