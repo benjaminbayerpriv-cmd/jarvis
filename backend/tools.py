@@ -159,6 +159,26 @@ TOOL_SCHEMAS = [
     {
         "type": "function",
         "function": {
+            "name": "move_file",
+            "description": (
+                "Verschiebt eine Datei oder einen Ordner von einem Ort zum anderen. "
+                "Nutze das immer, wenn der Nutzer etwas 'verschieben', 'bewegen' oder "
+                "'in einen anderen Ordner legen' will. 'source' ist der komplette Pfad "
+                "der Datei, 'destination' der Zielordner oder Zielpfad."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "source": {"type": "string", "description": "Der vollständige Pfad der Datei, z.B. ~/Desktop/bild.png"},
+                    "destination": {"type": "string", "description": "Der Zielordner, z.B. ~/Documents oder ein Zielpfad"},
+                },
+                "required": ["source", "destination"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "build_project",
             "description": (
                 "Etwas programmieren: eine App, Website, ein Skript oder Tool. Baut das "
@@ -313,6 +333,66 @@ TOOL_SCHEMAS = [
                     "button": {"type": "string", "enum": ["left", "right"]},
                 },
                 "required": ["action"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "find_coordinates",
+            "description": (
+                "Findet die Bildschirm-Koordinaten (x, y) eines Elements auf dem "
+                "Bildschirm, ohne darauf zu klicken. Nutze das, um Positionen zu "
+                "überprüfen oder mehrere Aktionen zu planen. Gibt Pixel-Koordinaten "
+                "zurück, die mit mouse_action verwendet werden können."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "description": {
+                        "type": "string",
+                        "description": "Was zu finden ist, z.B. 'der rote Button', 'das Suchfeld oben links'",
+                    }
+                },
+                "required": ["description"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_screen_elements",
+            "description": (
+                "Analysiert den Bildschirm und gibt eine Liste der sichtbaren "
+                "interaktiven Elemente zurück (Buttons, Links, Eingabefelder). "
+                "Nutze das, um zu sehen, was auf dem Bildschirm klickbar ist, "
+                "bevor du auf etwas klickst."
+            ),
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "drag_on_screen",
+            "description": (
+                "Zieht ein Element von einer Position zu einer anderen. "
+                "Koordinaten können von find_coordinates kommen oder als Beschreibungen "
+                "angegeben werden ('vom roten Button zum blauen Feld')."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "from_description": {
+                        "type": "string",
+                        "description": "Beschreibung des Startelements oder 'x,y' Koordinaten",
+                    },
+                    "to_description": {
+                        "type": "string",
+                        "description": "Beschreibung des Zielelements oder 'x,y' Koordinaten",
+                    },
+                },
+                "required": ["from_description", "to_description"],
             },
         },
     },
@@ -501,6 +581,30 @@ def _build_project(location: str, description: str) -> str:
     return coder.start_build(location, description)
 
 
+def _move_file(source: str, destination: str) -> str:
+    """Move a file or folder; safer than a raw `mv` via run_shell."""
+    import shutil
+
+    src = Path(os.path.expanduser((source or "").strip().strip("\"'")))
+    dst = Path(os.path.expanduser((destination or "").strip().strip("\"'")))
+
+    if not src.exists():
+        return f"Konnte '{source}' nicht finden."
+
+    # "in die Dokumente" → move into the folder, keeping the filename.
+    if dst.is_dir():
+        dst = dst / src.name
+    else:
+        # A destination like "~/Documents" that doesn't exist yet is almost
+        # always meant as the Documents folder, not a renamed file.
+        if dst.suffix == "" and not dst.exists():
+            dst = dst / src.name
+
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(src), str(dst))
+    return f"'{src.name}' nach '{dst.parent}' verschoben."
+
+
 def _show_on_screen(title: str, content: str, language: str = "") -> str:
     if language:
         panel.push("code", title=title, language=language, text=content)
@@ -529,11 +633,11 @@ def _mouse_action(a: dict) -> str:
         # osascript's "click at" is the only reliable primitive here (see
         # mouse.py), so a bare hover-move isn't available — approximate
         # with a click, which is what the user almost always actually wants.
-        mouse.click(x, y)
-        return f"Bei ({int(x)}, {int(y)}) geklickt (reines Bewegen wird nicht unterstützt)."
+        ok = mouse.click(x, y)
+        return f"Bei ({int(x)}, {int(y)}) geklickt (reines Bewegen wird nicht unterstützt)." if ok else f"Klick fehlgeschlagen bei ({int(x)}, {int(y)})."
     if action == "click":
-        mouse.click(x, y, button=a.get("button", "left"))
-        return f"Bei ({int(x)}, {int(y)}) geklickt."
+        ok = mouse.click(x, y, button=a.get("button", "left"))
+        return f"Bei ({int(x)}, {int(y)}) geklickt." if ok else f"Klick fehlgeschlagen bei ({int(x)}, {int(y)})."
     if action == "drag":
         x2 = clamp(float(a.get("x2", x)), 0, w)
         y2 = clamp(float(a.get("y2", y)), 0, h)
@@ -543,6 +647,100 @@ def _mouse_action(a: dict) -> str:
         mouse.scroll(dy=int(a.get("y", 0)))
         return "Gescrollt."
     return f"Unbekannte Mausaktion: {action}"
+
+
+def _find_coordinates(description: str) -> str:
+    """Find element and return its coordinates without clicking."""
+    if not description.strip():
+        return "Was soll ich finden?"
+    coords = mouse.find_on_screen(description)
+    if coords is None:
+        return f"Konnte '{description}' nicht auf dem Bildschirm finden."
+    x, y = coords
+    return f"'{description}' gefunden bei Koordinaten: x={int(x)}, y={int(y)}"
+
+
+def _get_screen_elements() -> str:
+    """Analyze screen and return list of interactive elements."""
+    try:
+        shot_path = vision.capture_screen()
+        raw = vision.downscale(shot_path, max_width=1400)
+    except Exception as exc:
+        return f"Konnte keinen Screenshot machen: {exc}"
+
+    import base64
+    import io
+    from PIL import Image
+
+    img = Image.open(io.BytesIO(raw))
+    shot_w, shot_h = img.size
+
+    b64 = base64.b64encode(raw).decode("ascii")
+    panel.push("image", title="Bildschirm-Analyse", data_url=f"data:image/png;base64,{b64}")
+
+    prompt = (
+        f"Analysiere diesen Bildschirm ({shot_w}x{shot_h} Pixel). "
+        "Liste alle sichtbaren interaktiven Elemente auf: Buttons, Links, "
+        "Eingabefelder, Menüpunkte, Icons. Gib für jedes Element zurück: "
+        "eine kurze Beschreibung und die ungefähren Koordinaten (x,y). "
+        "Format: 'Beschreibung bei x,y'. Maximal 10 wichtigste Elemente."
+    )
+    try:
+        resp = requests.post(
+            f"{config.LM_STUDIO_BASE_URL}/chat/completions",
+            json={
+                "model": vision.VISION_MODEL,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": prompt},
+                            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
+                        ],
+                    }
+                ],
+                "max_tokens": 400,
+                "reasoning_effort": "none",
+            },
+            timeout=180,
+        )
+        resp.raise_for_status()
+        answer = resp.json()["choices"][0]["message"].get("content", "").strip()
+        if not answer:
+            return "Konnte keine Elemente erkennen."
+        return f"Gefundene Elemente:\n{answer}"
+    except Exception as exc:
+        return f"Analyse fehlgeschlagen: {exc}"
+
+
+def _drag_on_screen(from_desc: str, to_desc: str) -> str:
+    """Drag from one element/coordinate to another."""
+    # Parse coordinates if provided as "x,y" strings
+    def parse_coord(s: str) -> tuple[float, float] | None:
+        import re
+        m = re.match(r"(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)", s.strip())
+        if m:
+            return (float(m.group(1)), float(m.group(2)))
+        return None
+
+    # Get start position
+    start = parse_coord(from_desc)
+    if start is None:
+        start = mouse.find_on_screen(from_desc)
+        if start is None:
+            return f"Konnte Startpunkt '{from_desc}' nicht finden."
+
+    # Get end position
+    end = parse_coord(to_desc)
+    if end is None:
+        end = mouse.find_on_screen(to_desc)
+        if end is None:
+            return f"Konnte Zielpunkt '{to_desc}' nicht finden."
+
+    x1, y1 = start
+    x2, y2 = end
+    mouse.drag(x1, y1, x2, y2)
+    return f"Von ({int(x1)}, {int(y1)}) nach ({int(x2)}, {int(y2)}) gezogen."
 
 
 DISPATCH = {
@@ -565,6 +763,10 @@ DISPATCH = {
     "save_screenshot": lambda a: vision.save_screenshot(a.get("location", "")),
     "type_text": lambda a: keyboard.type_text(a.get("text", "")),
     "press_key": lambda a: keyboard.press_key(a.get("key", ""), a.get("modifiers")),
+    "find_coordinates": lambda a: _find_coordinates(a.get("description", "")),
+    "get_screen_elements": lambda a: _get_screen_elements(),
+    "drag_on_screen": lambda a: _drag_on_screen(a.get("from_description", ""), a.get("to_description", "")),
+    "move_file": lambda a: _move_file(a.get("source", ""), a.get("destination", "")),
 }
 
 
@@ -576,7 +778,7 @@ def call_tool(name: str, arguments: dict) -> str:
     panel.push("action", id=action_id, action=name, status="läuft", target=arguments)
     try:
         result = handler(arguments)
-        failed = result.lower().startswith(("fehler", "konnte", "unbekannt", "browser-aktion fehlgeschlagen", "screenshot fehlgeschlagen", "tastendruck fehlgeschlagen", "tippen fehlgeschlagen"))
+        failed = result.lower().startswith(("fehler", "konnte", "unbekannt", "browser-agent nicht verbunden", "browser-aktion fehlgeschlagen", "screenshot fehlgeschlagen", "tastendruck fehlgeschlagen", "tippen fehlgeschlagen", "klick fehlgeschlagen"))
         panel.push("action", id=action_id, action=name, status="fehlgeschlagen" if failed else "erfolgreich", detail=result)
         return result
     except Exception as exc:

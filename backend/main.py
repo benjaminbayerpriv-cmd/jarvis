@@ -240,6 +240,9 @@ async def browser_ws(websocket: WebSocket):
     try:
         while True:
             result = await websocket.receive_json()
+            if result.get("type") == "heartbeat":
+                browser_agent.agent.heartbeat()
+                continue
             browser_agent.agent.resolve(result.get("id", ""), result)
     except WebSocketDisconnect:
         browser_agent.agent.disconnect(websocket)

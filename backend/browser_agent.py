@@ -62,6 +62,10 @@ class BrowserAgent:
             request.done.set()
             return True
 
+    def heartbeat(self) -> None:
+        """Keep the extension connection alive when no command is pending."""
+        self._last_seen = time.monotonic()
+
     def command(self, action: str, payload: dict, timeout: float = 20) -> str:
         if not self.connected():
             return "Browser-Agent nicht verbunden. Installiere oder aktiviere die Jarvis-Chrome-Erweiterung."

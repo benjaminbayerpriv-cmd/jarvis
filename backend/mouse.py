@@ -18,6 +18,8 @@ for — those work once/if the Python binary itself gets trusted, and no-op
 harmlessly otherwise.
 """
 
+from __future__ import annotations
+
 import base64
 import io
 import re
@@ -48,17 +50,45 @@ def screen_size() -> tuple[int, int]:
         return shot.size
 
 
-def _osascript(script: str) -> subprocess.CompletedProcess:
-    return subprocess.run(["osascript", "-e", script], capture_output=True, text=True, timeout=15)
+def _osascript(script: str) -> subprocess.CompletedProcess | None:
+    try:
+        return subprocess.run(["osascript", "-e", script], capture_output=True, text=True, timeout=15)
+    except (subprocess.TimeoutExpired, subprocess.SubprocessError, OSError):
+        # System Events can briefly hang (permission prompt, busy app). Report
+        # failure rather than letting the exception crash the whole tool round.
+        return None
 
 
-def click(x: float, y: float, button: str = "left", count: int = 1) -> None:
+def _move_mouse(x: int, y: int) -> None:
+    """Move the cursor visibly (best-effort).
+
+    `osascript`'s `click at` clicks without moving the on-screen cursor, so a
+    click looks like nothing happened. pynput's `Controller.position` uses
+    CGWarpMouseCursorPosition, which moves the cursor without needing the
+    Accessibility trust that CGEventPost (and therefore a real synthetic click)
+    requires — so the move is visible even when the click path has to go
+    through osascript. When it fails, the osascript click still lands.
+    """
+    try:
+        pynput_mouse.Controller().position = (int(x), int(y))
+    except Exception:
+        pass
+
+
+def click(x: float, y: float, button: str = "left", count: int = 1) -> bool:
+    """Click at screen coordinates; returns True if the click was dispatched."""
     x, y = int(x), int(y)
     if not platform_utils.is_macos():
         controller = pynput_mouse.Controller()
         controller.position = (x, y)
         controller.click(pynput_mouse.Button.right if button == "right" else pynput_mouse.Button.left, count)
-        return
+        return True
+
+    # Move the cursor visibly first, then click via osascript (the reliable,
+    # Apple-signed path that already holds Accessibility trust).
+    _move_mouse(x, y)
+    time.sleep(0.05)
+
     if button == "right":
         script = f'''
         tell application "System Events"
@@ -66,11 +96,12 @@ def click(x: float, y: float, button: str = "left", count: int = 1) -> None:
             click at {{{x}, {y}}}
             key up control
         end tell'''
-        _osascript(script)
-        return
+        proc = _osascript(script)
+        return proc is not None and proc.returncode == 0
 
     clicks = "\n            delay 0.05\n            ".join([f"click at {{{x}, {y}}}"] * max(count, 1))
-    _osascript(f'tell application "System Events"\n            {clicks}\n        end tell')
+    proc = _osascript(f'tell application "System Events"\n            {clicks}\n        end tell')
+    return proc is not None and proc.returncode == 0
 
 
 def drag(x1: float, y1: float, x2: float, y2: float) -> None:
@@ -120,14 +151,17 @@ def scroll(dx: int = 0, dy: int = 0) -> None:
 _COORD_RE = re.compile(r"(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)")
 
 
-def click_on_screen(description: str, action: str = "click") -> str:
-    """Screenshot, ask the vision model to point at `description`, click
-    there. Reports back honestly — this is approximate, not pixel-exact."""
+def find_on_screen(description: str) -> tuple[float, float] | None:
+    """Find element coordinates without clicking. Returns (x, y) in screen pixels.
+
+    Used internally by click_on_screen and exposed as a tool for multi-step
+    computer use workflows.
+    """
     try:
         shot_path = vision.capture_screen()
         raw = vision.downscale(shot_path, max_width=1400)
-    except Exception as exc:
-        return f"Konnte keinen Screenshot machen: {exc}"
+    except Exception:
+        return None
 
     img = Image.open(io.BytesIO(raw))
     shot_w, shot_h = img.size
@@ -163,29 +197,43 @@ def click_on_screen(description: str, action: str = "click") -> str:
         )
         resp.raise_for_status()
         answer = resp.json()["choices"][0]["message"].get("content", "").strip()
-    except requests.RequestException as exc:
-        return f"Bildanalyse fehlgeschlagen: {exc}"
+    except Exception:
+        return None
 
     m = _COORD_RE.search(answer)
     if not m:
-        return f"Konnte '{description}' nicht auf dem Bildschirm finden."
+        return None
 
     ix, iy = float(m.group(1)), float(m.group(2))
-    # Scale from the (possibly downscaled) screenshot back to real screen
-    # pixels.
+    # The small vision model sometimes returns coordinates outside the image
+    # (e.g. 4051 on a 1400-wide shot). Clamp to the image first, then scale.
+    ix = max(0.0, min(ix, shot_w))
+    iy = max(0.0, min(iy, shot_h))
+    # Scale from the (possibly downscaled) screenshot back to real screen pixels
     x = ix * real_w / shot_w
     y = iy * real_h / shot_h
+    return (x, y)
+
+
+def click_on_screen(description: str, action: str = "click") -> str:
+    """Screenshot, ask the vision model to point at `description`, click
+    there. Reports back honestly — this is approximate, not pixel-exact."""
+    coords = find_on_screen(description)
+    if coords is None:
+        return f"Konnte '{description}' nicht auf dem Bildschirm finden."
+
+    x, y = coords
 
     if action == "double_click":
-        click(x, y, count=2)
-        return f"'{description}' doppelt angeklickt."
+        ok = click(x, y, count=2)
+        return f"'{description}' doppelt angeklickt bei ({int(x)}, {int(y)})." if ok else f"Klick fehlgeschlagen: System Events konnte bei ({int(x)}, {int(y)}) nicht klicken."
     if action == "right_click":
-        click(x, y, button="right")
-        return f"'{description}' rechtsgeklickt."
+        ok = click(x, y, button="right")
+        return f"'{description}' rechtsgeklickt bei ({int(x)}, {int(y)})." if ok else f"Klick fehlgeschlagen: System Events konnte bei ({int(x)}, {int(y)}) nicht klicken."
     if action == "move":
         # No pure-hover primitive via osascript; approximate with a click.
         click(x, y)
-        return f"Bei '{description}' geklickt (reines Bewegen ohne Klick wird gerade nicht unterstützt)."
+        return f"Bei '{description}' geklickt ({int(x)}, {int(y)}) — reines Bewegen ohne Klick wird gerade nicht unterstützt."
 
-    click(x, y)
-    return f"'{description}' angeklickt."
+    ok = click(x, y)
+    return f"'{description}' angeklickt bei ({int(x)}, {int(y)})." if ok else f"Klick fehlgeschlagen: System Events konnte bei ({int(x)}, {int(y)}) nicht klicken."

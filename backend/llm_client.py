@@ -100,6 +100,10 @@ Du kannst seinen Computer wirklich bedienen: Programme und Webseiten öffnen, au
 den Bildschirm schauen, Shell-Befehle ausführen, Projekte programmieren und
 Inhalte im Interface anzeigen.
 
+Zum Steuern des Bildschirms nutze die passende Funktion: click_on_screen zum
+direkten Anklicken, find_coordinates um nur die Position zu nennen,
+look_at_display zum Beschreiben, mouse_action für bekannte Koordinaten.
+
 Für Chrome gibt es einen Browser-Agenten: Nutze youtube_search oder web_search
 für Suchen, browser_tabs für offene Tabs und open_url für konkrete Seiten. Eine
 YouTube-Suche ist keine App, sondern eine Browseraktion.
@@ -234,6 +238,23 @@ _DISPLAY_CMD_RE = re.compile(
 )
 _OPEN_CMD_RE = re.compile(
     r"^\s*(?:öffne|oeffne|mach(?:e)?\s+(?:mir\s+|mal\s+)?auf|starte)\s+(?P<target>.+?)\s*[.!]?\s*$",
+    re.IGNORECASE | re.DOTALL,
+)
+# "Wo ist der Button?" — return coordinates without clicking, so the user (or
+# a follow-up command) can act on them.
+_FIND_COORD_RE = re.compile(
+    r"^\s*(?:wo\s+ist|wo\s+finde\s+ich|wo\s+liegt|finde)\s+(?:mir\s+|mal\s+)?\s*(?P<target>.+?)\s*[.!]?\s*$",
+    re.IGNORECASE | re.DOTALL,
+)
+# "Was ist auf dem Bildschirm klickbar?" — list interactive elements.
+_LIST_ELEMENTS_RE = re.compile(
+    r"^\s*(?:was\s+ist\s+(?:auf\s+dem\s+(?:bildschirm|screen)\s+)?klickbar"
+    r"|liste\s+(?:mir\s+|mal\s+)?(?:alle\s+)?(?:klickbaren\s+)?elemente(?:\s+auf\s+dem\s+(?:bildschirm|screen))?)\s*[.!]?\s*$",
+    re.IGNORECASE,
+)
+# "Verschiebe die Datei nach Dokumente" / "in die Dokumente verschieben".
+_MOVE_CMD_RE = re.compile(
+    r"^\s*(?:verschiebe|verschieb|bewege|move)\s+(?P<source>.+?)\s+(?:nach|in|zu)\s+(?P<dest>.+?)\s*[.!]?\s*$",
     re.IGNORECASE | re.DOTALL,
 )
 _YOUTUBE_SEARCH_RE = re.compile(r"\b(?:suche|such)\s+(?:auf\s+)?youtube\s+(?:nach\s+)?(?P<query>.+)$", re.IGNORECASE)
@@ -523,6 +544,27 @@ def _fast_path(user_message: str) -> str | None:
 
     if _DISPLAY_CMD_RE.search(message):
         return tools.call_tool("look_at_display", {"question": message})
+
+    m = _FIND_COORD_RE.match(message)
+    if m:
+        return tools.call_tool("find_coordinates", {"description": m.group("target").strip().rstrip(".?!")})
+
+    if _LIST_ELEMENTS_RE.match(message):
+        return tools.call_tool("get_screen_elements", {})
+
+    m = _MOVE_CMD_RE.match(message)
+    if m:
+        source = m.group("source").strip().rstrip(".?!")
+        dest = m.group("dest").strip().rstrip(".?!")
+        dest = dest.lower().removeprefix("die ").removeprefix("den ").removeprefix("das ")
+        # Resolve the German names of the standard home folders.
+        if dest in ("dokumente", "documents", "papiere"):
+            dest = "~/Documents"
+        elif dest in ("desktop", "schreibtisch"):
+            dest = "~/Desktop"
+        elif dest == "downloads":
+            dest = "~/Downloads"
+        return tools.call_tool("move_file", {"source": source, "destination": dest})
 
     m = _OPEN_CMD_RE.match(message)
     if m:
