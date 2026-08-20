@@ -1,9 +1,15 @@
+from __future__ import annotations
+
 import json
 import re
 
 import requests
 
-from . import config, tools
+from . import config, memory, tools
+
+
+class ModelError(RuntimeError):
+    """A local-model failure that must become a user-facing response."""
 
 # At low reasoning effort this model occasionally leaks raw <think>/</think>
 # markers into the content field instead of keeping them confined to
@@ -94,6 +100,10 @@ Du kannst seinen Computer wirklich bedienen: Programme und Webseiten öffnen, au
 den Bildschirm schauen, Shell-Befehle ausführen, Projekte programmieren und
 Inhalte im Interface anzeigen.
 
+Für Chrome gibt es einen Browser-Agenten: Nutze youtube_search oder web_search
+für Suchen, browser_tabs für offene Tabs und open_url für konkrete Seiten. Eine
+YouTube-Suche ist keine App, sondern eine Browseraktion.
+
 Nutze dafür immer die bereitgestellten Funktionen. Erfinde niemals ein Ergebnis,
 das eine Funktion liefern würde, und schreibe einen Funktionsaufruf nie als Text.
 
@@ -118,11 +128,28 @@ def _post_chat(messages: list) -> dict:
             "tools": tools.TOOL_SCHEMAS,
             "tool_choice": "auto",
             "temperature": 0.2,
+            "reasoning_effort": "none",
         },
         timeout=60,
     )
     resp.raise_for_status()
-    return resp.json()
+    data = resp.json()
+    if not data.get("choices"):
+        raise ModelError(data.get("error", {}).get("message", "LM Studio lieferte keine Antwort."))
+    return data
+
+
+def model_health() -> tuple[bool, str]:
+    """Check that the configured single Jarvis model is loaded in LM Studio."""
+    try:
+        response = requests.get(f"{config.LM_STUDIO_BASE_URL}/models", timeout=5)
+        response.raise_for_status()
+        models = {entry.get("id") for entry in response.json().get("data", [])}
+    except requests.RequestException as exc:
+        return False, f"LM Studio nicht erreichbar: {exc}"
+    if config.LM_STUDIO_MODEL not in models:
+        return False, f"{config.LM_STUDIO_MODEL} ist in LM Studio nicht geladen."
+    return True, f"Modell bereit: {config.LM_STUDIO_MODEL}"
 
 
 def _clean_assistant_message(choice: dict) -> dict:
@@ -143,6 +170,7 @@ def _stream_chat(messages: list):
             "tools": tools.TOOL_SCHEMAS,
             "tool_choice": "auto",
             "temperature": 0.2,
+            "reasoning_effort": "none",
             "stream": True,
         },
         timeout=60,
@@ -159,9 +187,13 @@ def _stream_chat(messages: list):
         if payload == "[DONE]":
             break
         try:
-            yield json.loads(payload)
+            data = json.loads(payload)
         except json.JSONDecodeError:
             continue
+        if "error" in data or not data.get("choices"):
+            message = (data.get("error") or {}).get("message", "LM Studio-Stream ist ungültig.")
+            raise ModelError(message)
+        yield data
 
 
 # "Notiere: X" is unambiguous, and it is the one command this model kept
@@ -175,6 +207,43 @@ _NOTE_CMD_RE = re.compile(
     r"\s*[:,]?\s+(?P<body>.+)$",
     re.IGNORECASE | re.DOTALL,
 )
+
+# Actions with an unambiguous grammar never need an LLM decision. Routing them
+# here makes their execution deterministic: the model cannot replace a real
+# side effect with a plausible success sentence.
+_SCREENSHOT_CMD_RE = re.compile(
+    r"\b(?:screenshot|bildschirmfoto|bildschirmaufnahme)\b", re.IGNORECASE
+)
+_TIME_CMD_RE = re.compile(r"\b(?:wie spät|uhrzeit|welcher wochentag|welcher tag ist heute)\b", re.IGNORECASE)
+_WEATHER_CMD_RE = re.compile(r"\bwetter(?:\s+(?:gerade|heute|aktuell))?\s+(?:in|für)\s+(?P<city>[A-Za-zÄÖÜäöüß .-]+)", re.IGNORECASE)
+_TYPE_CMD_RE = re.compile(
+    r"^\s*(?:tippe|schreib(?:e)?)\s+(?:bitte\s+|mal\s+)?(?:den\s+)?text\s+(?P<text>.+?)\s*[.!]?\s*$",
+    re.IGNORECASE | re.DOTALL,
+)
+_PRESS_CMD_RE = re.compile(
+    r"^\s*(?:drück(?:e)?|drueck(?:e)?)\s+(?:bitte\s+|mal\s+)?(?P<key>[A-Za-z0-9+ ]+)\s*[.!]?\s*$",
+    re.IGNORECASE,
+)
+_CLICK_CMD_RE = re.compile(
+    r"^\s*klick(?:e)?\s+(?:bitte\s+|mal\s+)?(?:auf\s+)?(?P<target>.+?)\s*[.!]?\s*$",
+    re.IGNORECASE | re.DOTALL,
+)
+_DISPLAY_CMD_RE = re.compile(
+    r"\b(?:was siehst du|was zeigt (?:mein |der )?(?:bildschirm|screen)|schau(?:e)? (?:mal )?(?:auf )?(?:meinen |den )?(?:bildschirm|screen)|guck(?:e)? (?:mal )?(?:auf )?(?:meinen |den )?(?:bildschirm|screen))\b",
+    re.IGNORECASE,
+)
+_OPEN_CMD_RE = re.compile(
+    r"^\s*(?:öffne|oeffne|mach(?:e)?\s+(?:mir\s+|mal\s+)?auf|starte)\s+(?P<target>.+?)\s*[.!]?\s*$",
+    re.IGNORECASE | re.DOTALL,
+)
+_YOUTUBE_SEARCH_RE = re.compile(r"\b(?:suche|such)\s+(?:auf\s+)?youtube\s+(?:nach\s+)?(?P<query>.+)$", re.IGNORECASE)
+_WEB_SEARCH_RE = re.compile(r"^\s*(?:suche|such)\s+(?:im\s+web|bei\s+google|im\s+internet)?\s*(?:nach\s+)?(?P<query>.+)$", re.IGNORECASE)
+_RETRY_CMD_RE = re.compile(r"^\s*(?:mach(?:e)?(?:\s+es)?\s+richtig|versuch(?:e)?\s+(?:es\s+)?nochmal|nochmal)\s*[.!]?\s*$", re.IGNORECASE)
+_WEB_ALIASES = {
+    "youtube": "https://www.youtube.com",
+    "google": "https://www.google.com",
+    "github": "https://github.com",
+}
 
 
 # This model intermittently writes a function call into its reply as plain
@@ -404,15 +473,83 @@ def _claims_action(text: str) -> bool:
     return not (stripped.endswith("?") and stripped.count(".") == 0)
 
 
+def _looks_like_tool_text(text: str) -> bool:
+    """Never show a tool call as prose, even when it is in another language."""
+    names = "|".join(re.escape(name) for name in tools.DISPATCH)
+    return bool(re.search(rf"\b(?:{names})\s*\(", text or "", re.IGNORECASE))
+
+
 def _fast_path(user_message: str) -> str | None:
-    m = _NOTE_CMD_RE.match(user_message.strip())
-    if not m:
+    message = user_message.strip()
+
+    m = _NOTE_CMD_RE.match(message)
+    if m:
+        body = m.group("body").strip().rstrip(".")
+        if body:
+            return tools.call_tool("add_note", {"text": body})
+
+    if _SCREENSHOT_CMD_RE.search(message):
+        return tools.call_tool("save_screenshot", {"location": ""})
+
+    m = _YOUTUBE_SEARCH_RE.search(message)
+    if m:
+        return tools.call_tool("youtube_search", {"query": m.group("query").strip().rstrip(".?!")})
+
+    m = _WEB_SEARCH_RE.match(message)
+    if m and "youtube" not in message.lower():
+        return tools.call_tool("web_search", {"query": m.group("query").strip().rstrip(".?!")})
+
+    if _TIME_CMD_RE.search(message):
+        return tools.call_tool("get_time", {})
+
+    m = _WEATHER_CMD_RE.search(message)
+    if m:
+        city = m.group("city").strip().rstrip(".?!")
+        if city:
+            return tools.call_tool("get_weather", {"city": city})
+
+    m = _TYPE_CMD_RE.match(message)
+    if m:
+        return tools.call_tool("type_text", {"text": m.group("text").strip().rstrip(".")})
+
+    m = _PRESS_CMD_RE.match(message)
+    if m:
+        key = re.split(r"\s+(?:zum|für|um)\b", m.group("key"), maxsplit=1, flags=re.IGNORECASE)[0]
+        return tools.call_tool("press_key", {"key": key.strip().rstrip(".")})
+
+    m = _CLICK_CMD_RE.match(message)
+    if m:
+        return tools.call_tool("click_on_screen", {"description": m.group("target").strip().rstrip(".")})
+
+    if _DISPLAY_CMD_RE.search(message):
+        return tools.call_tool("look_at_display", {"question": message})
+
+    m = _OPEN_CMD_RE.match(message)
+    if m:
+        target = m.group("target").strip().rstrip(".")
+        lowered = target.lower().removeprefix("die ").removeprefix("den ").removeprefix("das ")
+        if lowered in _WEB_ALIASES:
+            return tools.call_tool("open_url", {"url": _WEB_ALIASES[lowered]})
+        if re.fullmatch(r"(?:https?://)?(?:www\.)?[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+(?:/\S*)?", target):
+            return tools.call_tool("open_url", {"url": target})
+        # A direct "öffne Spotify" is equally unambiguous. If the app does
+        # not exist, open_app returns an honest error instead of a claim.
+        return tools.call_tool("open_app", {"name": target})
+
+    return None
+
+
+def _retry_fast_path(user_message: str, history: list | None) -> str | None:
+    """Repeat the last clear command for messages such as "mach es richtig"."""
+    if not _RETRY_CMD_RE.match(user_message or "") or not history:
         return None
-    body = m.group("body").strip().rstrip(".")
-    if not body:
-        return None
-    tools.call_tool("add_note", {"text": body})
-    return f"Notiert: {body}."
+    for item in reversed(history):
+        if item.get("role") != "user" or not isinstance(item.get("content"), str):
+            continue
+        result = _fast_path(item["content"])
+        if result:
+            return result
+    return None
 
 
 def stream_reply(user_message: str, history: list | None = None):
@@ -424,13 +561,16 @@ def stream_reply(user_message: str, history: list | None = None):
     content — either the first round if no tool is needed, or the follow-up
     round after tool results are fed back in.
     """
-    shortcut = _fast_path(user_message)
+    shortcut = _fast_path(user_message) or _retry_fast_path(user_message, history)
     if shortcut:
         yield {"type": "sentence", "text": shortcut}
         yield {"type": "done", "full_text": shortcut}
         return
 
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    remembered = memory.context_for(user_message)
+    if remembered:
+        messages.append({"role": "system", "content": f"Relevantes lokales Gedächtnis:\n{remembered}"})
     if history:
         messages.extend(history)
     messages.append({"role": "user", "content": user_message})
@@ -472,6 +612,9 @@ def stream_reply(user_message: str, history: list | None = None):
             stream = _stream_chat(messages)
 
             for chunk in stream:
+                if not chunk.get("choices"):
+                    message = (chunk.get("error") or {}).get("message", "LM Studio-Stream ist ungültig.")
+                    raise ModelError(message)
                 choice = chunk["choices"][0]
                 delta = choice.get("delta", {})
 
@@ -498,8 +641,9 @@ def stream_reply(user_message: str, history: list | None = None):
                                     break
                                 clean = _strip_think_tags(s)
                                 if clean:
+                                    # Hold prose until the full turn is
+                                    # verified; never speak a fake success.
                                     full_text_parts.append(clean)
-                                    yield {"type": "sentence", "text": clean}
 
                 for tc in delta.get("tool_calls") or []:
                     idx = tc.get("index", 0)
@@ -530,8 +674,8 @@ def stream_reply(user_message: str, history: list | None = None):
         if tool_calls_acc:
             leftover = _strip_think_tags(buffer)
             if leftover:
-                full_text_parts.append(leftover)
-                yield {"type": "sentence", "text": leftover}
+                # Model chatter beside a real tool call is not an outcome.
+                pass
 
             ordered_calls = [tool_calls_acc[i] for i in sorted(tool_calls_acc)]
             messages.append(
@@ -628,35 +772,26 @@ def stream_reply(user_message: str, history: list | None = None):
             leftover_all = _strip_think_tags(content_acc)
             if leftover_all:
                 full_text_parts.append(leftover_all)
-                yield {"type": "sentence", "text": leftover_all}
             buffer = ""
 
         leftover = _strip_think_tags(buffer)
         if leftover:
             full_text_parts.append(leftover)
-            yield {"type": "sentence", "text": leftover}
 
         if not full_text_parts and last_tool_result:
-            yield {"type": "sentence", "text": last_tool_result}
             full_text_parts.append(last_tool_result)
         elif not full_text_parts:
             yield {"type": "sentence", "text": "Alles klar."}
             full_text_parts.append("Alles klar.")
 
-        # Last line of defence: the reply reports something as done, but not
-        # a single tool ran this turn — so nothing was done. The claim has
-        # already been spoken by now and can't be unsaid, so append an
-        # explicit retraction rather than let the lie stand.
+        # A tool-free success claim is never shown. The text stayed buffered,
+        # so the user hears only the truthful state.
         spoken = " ".join(full_text_parts)
-        if not tools_used and _claims_action(spoken):
-            correction = (
-                "Korrektur: das habe ich nicht wirklich ausgeführt. "
-                "Sag es nochmal, dann mache ich es richtig."
-            )
-            full_text_parts.append(correction)
-            yield {"type": "sentence", "text": correction}
+        if not tools_used and (_claims_action(spoken) or _looks_like_tool_text(spoken)):
+            spoken = "Das habe ich nicht ausgeführt."
 
-        yield {"type": "done", "full_text": " ".join(full_text_parts)}
+        yield {"type": "sentence", "text": spoken}
+        yield {"type": "done", "full_text": spoken}
         return
 
     yield {"type": "sentence", "text": "Das dauert mir gerade zu lange, frag mich das nochmal."}
@@ -664,7 +799,14 @@ def stream_reply(user_message: str, history: list | None = None):
 
 
 def get_reply(user_message: str, history: list | None = None) -> str:
+    shortcut = _fast_path(user_message) or _retry_fast_path(user_message, history)
+    if shortcut:
+        return shortcut
+
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    remembered = memory.context_for(user_message)
+    if remembered:
+        messages.append({"role": "system", "content": f"Relevantes lokales Gedächtnis:\n{remembered}"})
     if history:
         messages.extend(history)
     messages.append({"role": "user", "content": user_message})
@@ -690,6 +832,8 @@ def get_reply(user_message: str, history: list | None = None) -> str:
                 messages.append({"role": "user", "content": f"[Ergebnis von {name}: {result}]"})
                 continue
             if content:
+                if _claims_action(content) or _looks_like_tool_text(content):
+                    return "Das habe ich nicht ausgeführt."
                 return content
             # Model sometimes returns empty text right after a tool call —
             # fall back to the tool's own result instead of reading nothing.

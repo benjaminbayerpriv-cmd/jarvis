@@ -419,6 +419,19 @@ body[data-state="thinking"] .core { animation: breathe 1.5s ease-in-out infinite
 
 .card a:hover { text-decoration: underline; }
 
+.card .action {
+  display: grid;
+  gap: 6px;
+  padding: 13px 14px;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--dim);
+}
+.card .action strong { color: var(--text); text-transform: uppercase; letter-spacing: .06em; }
+.card .action-erfolgreich strong { color: var(--sig-out); }
+.card .action-fehlgeschlagen strong { color: #e77d7d; }
+
 /* ---------- responsive ---------- */
 
 @media (max-width: 900px) {

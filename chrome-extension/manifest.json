@@ -1,0 +1,10 @@
+{
+  "manifest_version": 3,
+  "name": "Jarvis Browser Agent",
+  "version": "1.0.0",
+  "description": "Connects Jarvis to the user's open Chrome tabs.",
+  "permissions": ["tabs", "scripting", "activeTab"],
+  "host_permissions": ["<all_urls>", "http://127.0.0.1:8000/*"],
+  "background": {"service_worker": "background.js"},
+  "action": {"default_title": "Jarvis Browser Agent"}
+}

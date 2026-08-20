@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import datetime
 import os
 import re
@@ -8,7 +10,7 @@ from pathlib import Path
 
 import requests
 
-from . import coder, config, keyboard, mouse, panel, platform_utils, vision
+from . import browser_agent, coder, config, keyboard, memory, mouse, panel, platform_utils, vision
 
 TOOL_SCHEMAS = [
     {
@@ -60,6 +62,30 @@ TOOL_SCHEMAS = [
                 "properties": {"url": {"type": "string", "description": "Vollständige URL oder Domain"}},
                 "required": ["url"],
             },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "youtube_search",
+            "description": "Öffnet die YouTube-Ergebnisliste für eine Suchanfrage im verbundenen Chrome.",
+            "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "web_search",
+            "description": "Öffnet eine Web-Ergebnisliste für eine Suchanfrage im verbundenen Chrome.",
+            "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "browser_tabs",
+            "description": "Listet die offenen Chrome-Tabs des verbundenen Browser-Agenten auf.",
+            "parameters": {"type": "object", "properties": {}},
         },
     },
     {
@@ -353,19 +379,31 @@ def _get_time() -> str:
 
 
 def _add_note(text: str) -> str:
-    config.NOTES_FILE.touch(exist_ok=True)
-    with config.NOTES_FILE.open("a", encoding="utf-8") as f:
-        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
-        f.write(f"- [{timestamp}] {text}\n")
-    return "Notiz gespeichert."
+    return memory.add_note(text)
 
 
 def _open_url(url: str) -> str:
     if not (url.startswith("http://") or url.startswith("https://")):
         url = "https://" + url
+    if browser_agent.agent.connected():
+        result = browser_agent.agent.command("open_url", {"url": url})
+        if not result.startswith("Browser-Agent nicht verbunden"):
+            return result
     webbrowser.open(url)
     panel.push("link", title="Geöffnet", url=url)
     return f"{url} geöffnet."
+
+
+def _youtube_search(query: str) -> str:
+    return browser_agent.agent.youtube_search(query)
+
+
+def _web_search(query: str) -> str:
+    return browser_agent.agent.web_search(query)
+
+
+def _browser_tabs() -> str:
+    return browser_agent.agent.command("list_tabs", {})
 
 
 def _resolve_app(name: str) -> str | None:
@@ -512,6 +550,9 @@ DISPATCH = {
     "get_time": lambda a: _get_time(),
     "add_note": lambda a: _add_note(a.get("text", "")),
     "open_url": lambda a: _open_url(a.get("url", "")),
+    "youtube_search": lambda a: _youtube_search(a.get("query", "")),
+    "web_search": lambda a: _web_search(a.get("query", "")),
+    "browser_tabs": lambda a: _browser_tabs(),
     "open_app": lambda a: _open_app(a.get("name", "")),
     "look_at_display": lambda a: vision.look_at_screen(a.get("question", "")),
     "run_shell": lambda a: _run_shell(a.get("command", "")),
@@ -531,7 +572,14 @@ def call_tool(name: str, arguments: dict) -> str:
     handler = DISPATCH.get(name)
     if handler is None:
         return f"Unbekanntes Tool: {name}"
+    action_id = f"tool-{datetime.datetime.now().strftime('%H%M%S%f')}"
+    panel.push("action", id=action_id, action=name, status="läuft", target=arguments)
     try:
-        return handler(arguments)
+        result = handler(arguments)
+        failed = result.lower().startswith(("fehler", "konnte", "unbekannt", "browser-aktion fehlgeschlagen", "screenshot fehlgeschlagen", "tastendruck fehlgeschlagen", "tippen fehlgeschlagen"))
+        panel.push("action", id=action_id, action=name, status="fehlgeschlagen" if failed else "erfolgreich", detail=result)
+        return result
     except Exception as exc:
-        return f"Fehler beim Ausführen von {name}: {exc}"
+        result = f"Fehler beim Ausführen von {name}: {exc}"
+        panel.push("action", id=action_id, action=name, status="fehlgeschlagen", detail=result)
+        return result

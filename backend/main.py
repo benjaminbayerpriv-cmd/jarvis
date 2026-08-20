@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import asyncio
 import base64
 import json
@@ -6,13 +8,20 @@ from pathlib import Path
 
 import requests
 from fastapi import FastAPI, Response, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import config, fillers, llm_client, panel, tts
+from . import browser_agent, config, fillers, llm_client, memory, panel, tts
 
 app = FastAPI(title="Jarvis")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # local Chrome extension uses a generated chrome-extension:// origin
+    allow_methods=["GET", "POST"],
+    allow_headers=["*"],
+)
 
 FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
 
@@ -50,6 +59,11 @@ async def on_startup():
     """Warm the filler clips (ElevenLabs is only hit for ones not already
     cached on disk) and start the panel pump."""
     global filler_urls
+    memory.initialize()
+    healthy, detail = llm_client.model_health()
+    print(f"[model] {detail}")
+    if not healthy:
+        panel.push("notify", text=detail)
 
     def _generate():
         global filler_urls
@@ -67,6 +81,14 @@ class ChatRequest(BaseModel):
 
 class ChatResponse(BaseModel):
     reply: str
+
+
+class BrowserResult(BaseModel):
+    id: str
+    ok: bool
+    message: str = ""
+    error: str = ""
+    data: dict = {}
 
 
 # The interface is edited constantly and served from disk; browser caching
@@ -100,7 +122,7 @@ app.mount("/static", NoCacheStatic(directory=FRONTEND_DIR), name="static")
 def chat(req: ChatRequest):
     try:
         reply = llm_client.get_reply(req.message, req.history)
-    except requests.RequestException:
+    except (requests.RequestException, llm_client.ModelError):
         reply = (
             "Ich komm gerade nicht an mein Sprachmodell ran. "
             "Läuft LM Studio und ist der Server dort gestartet?"
@@ -126,6 +148,7 @@ def chat_stream(req: ChatRequest):
     reply plus a single big TTS call."""
 
     def generate():
+        full_text = ""
         try:
             for event in llm_client.stream_reply(req.message, req.history):
                 if event["type"] == "sentence":
@@ -148,12 +171,16 @@ def chat_stream(req: ChatRequest):
                         {"type": "sentence", "text": text, "audio": audio_b64, "mime": mime}
                     ) + "\n"
                 elif event["type"] == "done":
+                    full_text = event["full_text"]
                     yield json.dumps({"type": "done", "full_text": event["full_text"]}) + "\n"
-        except requests.RequestException:
+            if full_text:
+                memory.log_summary(req.message, full_text)
+        except (requests.RequestException, llm_client.ModelError, KeyError, IndexError) as exc:
             fallback = (
-                "Ich komm gerade nicht an mein Sprachmodell ran. "
-                "Läuft LM Studio und ist der Server dort gestartet?"
+                "Ich komme gerade nicht an mein Sprachmodell ran. "
+                "Prüfe bitte, ob Gemma 4 E4B in LM Studio geladen ist."
             )
+            print(f"[model] Anfrage fehlgeschlagen: {exc}")
             try:
                 audio_b64 = base64.b64encode(tts.synthesize(fallback)).decode("ascii")
                 yield json.dumps({"type": "sentence", "text": fallback, "audio": audio_b64}) + "\n"
@@ -162,6 +189,23 @@ def chat_stream(req: ChatRequest):
             yield json.dumps({"type": "done", "full_text": fallback}) + "\n"
 
     return StreamingResponse(generate(), media_type="application/x-ndjson")
+
+
+@app.get("/browser/status")
+def browser_status():
+    return {"connected": browser_agent.agent.connected()}
+
+
+@app.get("/browser/poll")
+def browser_poll():
+    """Long-lived Chrome extension fetches its queued commands here."""
+    return {"commands": browser_agent.agent.poll()}
+
+
+@app.post("/browser/result")
+def browser_result(result: BrowserResult):
+    accepted = browser_agent.agent.resolve(result.id, result.model_dump())
+    return {"accepted": accepted}
 
 
 @app.get("/fillers")
@@ -186,6 +230,19 @@ async def ws_endpoint(websocket: WebSocket):
     except WebSocketDisconnect:
         if websocket in active_sockets:
             active_sockets.remove(websocket)
+
+
+@app.websocket("/browser/ws")
+async def browser_ws(websocket: WebSocket):
+    """Persistent command channel for the local Jarvis Chrome extension."""
+    await websocket.accept()
+    browser_agent.agent.connect(websocket, asyncio.get_running_loop())
+    try:
+        while True:
+            result = await websocket.receive_json()
+            browser_agent.agent.resolve(result.get("id", ""), result)
+    except WebSocketDisconnect:
+        browser_agent.agent.disconnect(websocket)
 
 
 if __name__ == "__main__":

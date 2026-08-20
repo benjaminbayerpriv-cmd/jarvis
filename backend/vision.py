@@ -18,7 +18,8 @@ from PIL import Image, ImageGrab
 
 from . import config, panel, platform_utils
 
-VISION_MODEL = "google/gemma-4-e2b"
+# Jarvis intentionally uses one local general multimodal model everywhere.
+VISION_MODEL = config.LM_STUDIO_MODEL
 
 
 def capture_screen() -> Path:

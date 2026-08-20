@@ -8,6 +8,8 @@ Homebrew Python never became AX-trusted here. So typing goes through
 
 from __future__ import annotations
 
+from __future__ import annotations
+
 import subprocess
 
 from . import platform_utils

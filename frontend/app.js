@@ -209,6 +209,18 @@ function addCard(title, bodyNode) {
 }
 
 function renderPanelItem(item) {
+  if (item.kind === "action") {
+    const div = document.createElement("div");
+    div.className = `action action-${item.status || "läuft"}`;
+    const label = document.createElement("strong");
+    label.textContent = `${item.status || "läuft"}: ${item.action || "Aktion"}`;
+    const detail = document.createElement("span");
+    detail.textContent = item.detail || "";
+    div.append(label, detail);
+    addCard("Aktionsprotokoll", div);
+    return;
+  }
+
   if (item.kind === "notify") {
     speakNotification(item.text);
     addTurn("jarvis", item.text);

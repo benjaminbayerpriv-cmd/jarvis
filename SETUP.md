@@ -64,7 +64,24 @@ Firewall-Dialoge bestätigen.
 Unter Windows startet [start_jarvis_windows.cmd](launcher/start_jarvis_windows.cmd)
 Server und Hotkey zusammen.
 
-## 5. Autostart beim Login einrichten (optional, macOS)
+## 5. Chrome-Browser-Agent einrichten (macOS und Windows)
+
+1. In Chrome `chrome://extensions` öffnen und den **Entwicklermodus** aktivieren.
+2. Auf **Entpackte Erweiterung laden** klicken.
+3. Den Ordner `chrome-extension` aus diesem Projekt auswählen.
+
+Die Erweiterung verbindet sich lokal mit Jarvis. Sie steuert deine bestehenden
+Chrome-Tabs für Suchen, Navigation und Seitenelemente. Das funktioniert auf
+macOS und Windows identisch.
+
+## 6. Obsidian-Gedächtnis
+
+Beim ersten Start legt Jarvis im Projektordner den Unterordner `Jarvis/` an.
+Öffne den Projektordner einmal als Vault in Obsidian. Darin liegen Profil,
+Aufgaben, Wissen, Notizen und tägliche Zusammenfassungen als normale Markdown-
+Dateien mit YAML-Metadaten und Wikilinks.
+
+## 7. Autostart beim Login einrichten (optional, macOS)
 
 ```bash
 cp launcher/com.jarvis.server.plist ~/Library/LaunchAgents/
