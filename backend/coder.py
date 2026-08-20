@@ -16,7 +16,7 @@ import subprocess
 import threading
 from pathlib import Path
 
-from . import panel
+from . import panel, platform_utils
 
 CLAUDE_BIN = shutil.which("claude") or str(Path.home() / ".local/bin/claude")
 BUILD_TIMEOUT_S = 1800  # 30 min
@@ -54,6 +54,8 @@ def open_path(path: Path) -> None:
     try:
         if shutil.which("code"):
             subprocess.run(["code", str(path)], timeout=30, capture_output=True)
+        elif platform_utils.is_windows():
+            os.startfile(str(path))
         else:
             subprocess.run(["open", str(path)], timeout=30, capture_output=True)
     except Exception:
@@ -62,7 +64,10 @@ def open_path(path: Path) -> None:
     index = path / "index.html"
     if index.exists():
         try:
-            subprocess.run(["open", str(index)], timeout=30, capture_output=True)
+            if platform_utils.is_windows():
+                os.startfile(str(index))
+            else:
+                subprocess.run(["open", str(index)], timeout=30, capture_output=True)
         except Exception:
             pass
 

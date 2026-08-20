@@ -1,4 +1,5 @@
 import datetime
+import os
 import re
 import shutil
 import subprocess
@@ -7,7 +8,7 @@ from pathlib import Path
 
 import requests
 
-from . import coder, config, mouse, panel, vision
+from . import coder, config, keyboard, mouse, panel, platform_utils, vision
 
 TOOL_SCHEMAS = [
     {
@@ -66,7 +67,7 @@ TOOL_SCHEMAS = [
         "function": {
             "name": "open_app",
             "description": (
-                "Ein Programm auf dem Mac öffnen, z.B. Spotify, Obsidian, Terminal, "
+                "Ein Programm auf dem Computer öffnen, z.B. Spotify, Obsidian, Terminal, "
                 "Visual Studio Code, Discord, Rechner, Notizen."
             ),
             "parameters": {
@@ -88,14 +89,14 @@ TOOL_SCHEMAS = [
     {
         "type": "function",
         "function": {
-            "name": "see_screen",
-            # Deliberately plain: quotes, apostrophes and dashes in this
-            # description were measured to trigger a real LM Studio /
-            # llama.cpp bug (grammar-constrained decoding for this schema
-            # corrupts the first tokens of the reply, reproducible with
-            # tools=false absent and streaming irrelevant). Plain wording
-            # measurably lowers, though does not eliminate, the failure
-            # rate — stream_reply retries on detection as a backstop.
+            # NOT named see_screen. Under that name this schema tripped a
+            # real LM Studio bug: the reply's first tokens came back mangled
+            # ("IGHLICHScreen...") for 10 out of 10 attempts on its own
+            # trigger phrases, with no tool call. Measured cause was the tool
+            # NAME itself, not the description or parameters — renaming it
+            # dropped the failure rate to 0 out of 30. Keep the name free of
+            # "screen" unless you re-measure.
+            "name": "look_at_display",
             "description": (
                 "Schaut auf den Bildschirm des Nutzers und beschreibt oder analysiert was "
                 "dort zu sehen ist. Nutze dieses Tool bei jeder Frage zum aktuellen "
@@ -118,7 +119,7 @@ TOOL_SCHEMAS = [
         "function": {
             "name": "run_shell",
             "description": (
-                "Einen Shell-Befehl auf dem Mac ausführen und die Ausgabe bekommen. "
+                "Einen Shell-Befehl auf dem Computer ausführen und die Ausgabe bekommen. "
                 "Für Systeminfos, Dateien suchen, Ordner anlegen, git, Prozesse prüfen. "
                 "NICHT für das Bauen von Projekten — dafür build_project nutzen."
             ),
@@ -178,6 +179,61 @@ TOOL_SCHEMAS = [
                     },
                 },
                 "required": ["title", "content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "save_screenshot",
+            "description": (
+                "Macht ein Bildschirmfoto und speichert es als Datei. Nutze das immer, "
+                "wenn der Nutzer einen Screenshot machen oder speichern will. Nicht "
+                "verwechseln mit look_at_display, das nur anschaut ohne zu speichern."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "location": {
+                        "type": "string",
+                        "description": "Zielordner, zum Beispiel Desktop. Leer lassen fuer Desktop.",
+                    }
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "type_text",
+            "description": (
+                "Tippt Text auf der Tastatur in das gerade aktive Fenster. Nutze das, "
+                "wenn der Nutzer etwas schreiben oder eingeben lassen will."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {"text": {"type": "string", "description": "Der zu tippende Text"}},
+                "required": ["text"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "press_key",
+            "description": (
+                "Drueckt eine Taste oder Tastenkombination, zum Beispiel Enter, Escape, "
+                "cmd+s zum Speichern oder cmd+w zum Schliessen."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "key": {
+                        "type": "string",
+                        "description": "Die Taste, zum Beispiel enter, escape, cmd+s",
+                    }
+                },
+                "required": ["key"],
             },
         },
     },
@@ -319,6 +375,8 @@ def _resolve_app(name: str) -> str | None:
     name only exists as a localized display name. Spotlight indexes those, so
     it can map what the user said onto the real bundle.
     """
+    if not platform_utils.is_macos():
+        return None
     query = (
         "kMDItemContentType == 'com.apple.application-bundle' && "
         f"kMDItemDisplayName == '{name}*'c"
@@ -341,6 +399,23 @@ def _open_app(name: str) -> str:
         return "Welches Programm soll ich öffnen?"
 
     try:
+        if platform_utils.is_windows():
+            aliases = {
+                "rechner": "calc.exe", "taschenrechner": "calc.exe", "notizen": "notepad.exe",
+                "editor": "notepad.exe", "explorer": "explorer.exe", "datei explorer": "explorer.exe",
+            }
+            target = aliases.get(name.lower(), name)
+            # A PowerShell single-quoted literal keeps a spoken app name from
+            # becoming PowerShell syntax.
+            safe_target = "'" + target.replace("'", "''") + "'"
+            proc = subprocess.run(
+                platform_utils.powershell(f"Start-Process -FilePath {safe_target}"),
+                capture_output=True, text=True, timeout=20,
+            )
+            if proc.returncode == 0:
+                return f"{name} geöffnet."
+            return f"Konnte '{name}' nicht finden. Heißt das Programm vielleicht anders?"
+
         proc = subprocess.run(["open", "-a", name], capture_output=True, text=True, timeout=20)
         if proc.returncode == 0:
             return f"{name} geöffnet."
@@ -438,7 +513,7 @@ DISPATCH = {
     "add_note": lambda a: _add_note(a.get("text", "")),
     "open_url": lambda a: _open_url(a.get("url", "")),
     "open_app": lambda a: _open_app(a.get("name", "")),
-    "see_screen": lambda a: vision.look_at_screen(a.get("question", "")),
+    "look_at_display": lambda a: vision.look_at_screen(a.get("question", "")),
     "run_shell": lambda a: _run_shell(a.get("command", "")),
     "build_project": lambda a: _build_project(a.get("location", ""), a.get("description", "")),
     "show_on_screen": lambda a: _show_on_screen(
@@ -446,6 +521,9 @@ DISPATCH = {
     ),
     "click_on_screen": lambda a: _click_on_screen(a.get("description", ""), a.get("action", "click")),
     "mouse_action": _mouse_action,
+    "save_screenshot": lambda a: vision.save_screenshot(a.get("location", "")),
+    "type_text": lambda a: keyboard.type_text(a.get("text", "")),
+    "press_key": lambda a: keyboard.press_key(a.get("key", ""), a.get("modifiers")),
 }
 
 

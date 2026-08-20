@@ -1,4 +1,4 @@
-# Jarvis — Setup & Start
+# Jarvis — Setup & Start (macOS und Windows)
 
 ## 1. Voraussetzungen
 
@@ -12,19 +12,29 @@
 
 ## 2. Installation
 
+macOS:
+
 ```bash
-cd /Users/benjaminbayer/Desktop/PROJEKTE/JARVIS
+cd /Pfad/zu/JARVIS
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
+Windows (PowerShell):
+
+```powershell
+cd C:\Pfad\zu\JARVIS
+py -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+```
+
 ## 3. Server starten
 
-```bash
-source .venv/bin/activate
-python3 -m backend.main
-```
+macOS: `source .venv/bin/activate && python3 -m backend.main`
+
+Windows: `.\.venv\Scripts\python.exe -m backend.main`
 
 Dann im Browser (Chrome empfohlen, wegen Web Speech API) öffnen:
 
@@ -40,16 +50,21 @@ auf den Hotkey.
 
 In einem zweiten Terminal (mit aktivierter venv):
 
-```bash
-python3 launcher/hotkey_listener.py
-```
+macOS: `python3 launcher/hotkey_listener.py`
+
+Windows: `.\.venv\Scripts\python.exe launcher\hotkey_listener.py`
 
 Beim ersten Start fragt macOS nach **Input Monitoring**-Berechtigung
 (Systemeinstellungen -> Datenschutz & Sicherheit -> Eingabeüberwachung) —
 das Terminal (oder python3) dort erlauben, sonst funktioniert der
-globale Hotkey `Cmd+Shift+J` nicht.
+globale Hotkey `Cmd+Shift+J` nicht. Unter Windows lautet der Hotkey
+`Ctrl+Shift+J`; beim ersten Zugriff eventuelle Berechtigungs- oder
+Firewall-Dialoge bestätigen.
 
-## 5. Autostart beim Login einrichten (optional)
+Unter Windows startet [start_jarvis_windows.cmd](launcher/start_jarvis_windows.cmd)
+Server und Hotkey zusammen.
+
+## 5. Autostart beim Login einrichten (optional, macOS)
 
 ```bash
 cp launcher/com.jarvis.server.plist ~/Library/LaunchAgents/
@@ -65,9 +80,10 @@ durchgelaufen sein.
 
 ## Was Jarvis kann
 
-- **Programme & Webseiten öffnen** — deutsche Namen ("Rechner", "Notizen")
-  werden über Spotlight auf das echte App-Bundle aufgelöst.
-- **Auf den Bildschirm schauen** — Screenshot via `screencapture`, Analyse
+- **Programme & Webseiten öffnen** — auf macOS über Spotlight/App-Bundles,
+  auf Windows über den Programmnamen (`Rechner`, `Notizen` etc.).
+- **Auf den Bildschirm schauen** — Screenshot via `screencapture` (macOS)
+  beziehungsweise Windows PowerShell, Analyse
   durch das lokale Vision-Modell `google/gemma-4-e2b`. Muss in LM Studio
   geladen sein, sonst schlägt nur dieses eine Tool fehl.
 - **Shell-Befehle ausführen** — Ausgaben über 400 Zeichen landen in der

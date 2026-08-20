@@ -114,7 +114,7 @@ def speak(req: ChatResponse):
         audio = tts.synthesize(req.reply)
     except Exception:
         return Response(status_code=502, content=b"")
-    mime = "audio/mp4" if tts.VoiceInfo.engine == "macos" else "audio/mpeg"
+    mime = "audio/mp4" if tts.VoiceInfo.engine == "macos" else "audio/wav" if tts.VoiceInfo.engine == "windows" else "audio/mpeg"
     return Response(content=audio, media_type=mime)
 
 
@@ -140,6 +140,8 @@ def chat_stream(req: ChatRequest):
                         audio_b64 = base64.b64encode(audio).decode("ascii")
                         if tts.VoiceInfo.engine == "macos":
                             mime = "audio/mp4"
+                        elif tts.VoiceInfo.engine == "windows":
+                            mime = "audio/wav"
                     except Exception as exc:  # noqa: BLE001 - never mute the reply
                         print(f"[tts] Sprachausgabe fehlgeschlagen: {exc}")
                     yield json.dumps(

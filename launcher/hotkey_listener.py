@@ -1,9 +1,8 @@
-"""Global hotkey listener: Cmd+Shift+J pings the Jarvis backend to wake up
+"""Global hotkey listener: Cmd/Ctrl+Shift+J pings the Jarvis backend to wake up
 the frontend (start listening) even when the browser tab is not focused.
 
-macOS note: this process needs "Input Monitoring" / "Accessibility" permission
-for whichever app runs it (Terminal, or python itself) under
-System Settings -> Privacy & Security.
+macOS needs Input Monitoring/Accessibility permission; Windows may show a
+firewall or input-permission prompt on first use.
 """
 
 import sys
@@ -13,11 +12,12 @@ import requests
 from pynput import keyboard
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from backend import config  # noqa: E402
+from backend import config, platform_utils  # noqa: E402
 
 TRIGGER_URL = f"http://{config.JARVIS_HOST}:{config.JARVIS_PORT}/trigger"
 
-COMBO = {keyboard.Key.cmd, keyboard.Key.shift, keyboard.KeyCode.from_char("j")}
+MODIFIER = keyboard.Key.ctrl if platform_utils.is_windows() else keyboard.Key.cmd
+COMBO = {MODIFIER, keyboard.Key.shift, keyboard.KeyCode.from_char("j")}
 current_keys = set()
 
 
@@ -42,7 +42,8 @@ def on_release(key):
 
 
 def main():
-    print(f"Hotkey-Listener aktiv: Cmd+Shift+J -> {TRIGGER_URL}")
+    hotkey = "Ctrl+Shift+J" if platform_utils.is_windows() else "Cmd+Shift+J"
+    print(f"Hotkey-Listener aktiv: {hotkey} -> {TRIGGER_URL}")
     with keyboard.Listener(on_press=on_press, on_release=on_release) as listener:
         listener.join()
 

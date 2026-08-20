@@ -3,7 +3,7 @@
 ElevenLabs sounds far better, but its free tier is 10k characters a month and
 runs dry without warning. A mute assistant is useless, so when ElevenLabs
 refuses (quota, bad key, no network) this falls back to the German voice
-built into macOS: worse sounding, but free, offline and unlimited.
+built into the operating system: worse sounding, but free, offline and unlimited.
 """
 
 import subprocess
@@ -12,7 +12,7 @@ from pathlib import Path
 
 import requests
 
-from . import config
+from . import config, platform_utils
 
 ELEVENLABS_URL = "https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
 
@@ -38,6 +38,25 @@ def _macos_say(text: str) -> bytes:
         capture_output=True,
         timeout=60,
     )
+    data = out.read_bytes()
+    try:
+        out.unlink()
+        out.parent.rmdir()
+    except OSError:
+        pass
+    return data
+
+
+def _windows_say(text: str) -> bytes:
+    out = Path(tempfile.mkdtemp()) / "jarvis.wav"
+    quoted_path = "'" + str(out).replace("'", "''") + "'"
+    quoted_text = "'" + text.replace("'", "''") + "'"
+    script = (
+        "Add-Type -AssemblyName System.Speech; "
+        "$s=New-Object System.Speech.Synthesis.SpeechSynthesizer; "
+        f"$s.SetOutputToWaveFile({quoted_path}); $s.Speak({quoted_text}); $s.Dispose()"
+    )
+    subprocess.run(platform_utils.powershell(script), check=True, capture_output=True, timeout=60)
     data = out.read_bytes()
     try:
         out.unlink()
@@ -92,5 +111,8 @@ def synthesize(text: str) -> bytes:
         except requests.RequestException as exc:
             print(f"[tts] ElevenLabs Netzwerkfehler, nutze macOS-Stimme: {exc}")
 
+    if platform_utils.is_windows():
+        VoiceInfo.engine = "windows"
+        return _windows_say(text)
     VoiceInfo.engine = "macos"
     return _macos_say(text)

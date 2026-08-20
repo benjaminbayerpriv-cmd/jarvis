@@ -87,7 +87,7 @@ def _pop_complete_sentences(buffer: str) -> tuple[list[str], str]:
 # Kept deliberately short: measured against this model, a long rule-list prompt
 # made it hallucinate tool results (inventing a time, claiming a note was saved)
 # where a compact one keeps it actually calling the functions.
-SYSTEM_PROMPT = """Du bist Jarvis, der Assistent des Nutzers auf seinem Mac. Du duzt
+SYSTEM_PROMPT = """Du bist Jarvis, der Assistent des Nutzers auf seinem Computer. Du duzt
 ihn, antwortest locker und in maximal drei Sätzen.
 
 Du kannst seinen Computer wirklich bedienen: Programme und Webseiten öffnen, auf
@@ -96,6 +96,10 @@ Inhalte im Interface anzeigen.
 
 Nutze dafür immer die bereitgestellten Funktionen. Erfinde niemals ein Ergebnis,
 das eine Funktion liefern würde, und schreibe einen Funktionsaufruf nie als Text.
+
+Ganz wichtig: Sage nur dann, dass etwas erledigt ist, wenn du wirklich eine
+Funktion aufgerufen hast. Erfinde keine Funktionsnamen. Wenn du etwas nicht
+kannst, sage das offen. Lieber ehrlich zugeben als Erfolg vortäuschen.
 
 Deine Antwort wird vorgelesen. Bei allem, was länger als drei Sätze wäre (Code,
 Listen, Erklärungen), nutze show_on_screen und sage nur einen kurzen Satz dazu.
@@ -182,6 +186,12 @@ _LEAKED_CALL_RE = re.compile(
     re.DOTALL,
 )
 
+# LM Studio sometimes puts an otherwise valid tool call into a fenced JSON
+# block instead of the OpenAI `tool_calls` field:
+#   Okay, hier geht es: ```json {"name":"open_url","arguments":{...}} ```
+# That must be executed, never read aloud.
+_FENCED_JSON_RE = re.compile(r"```(?:json)?\s*(?P<payload>\{.*?\})\s*```", re.IGNORECASE | re.DOTALL)
+
 
 def _first_param_name(tool_name: str) -> str | None:
     """The parameter a positional argument should fill for this tool."""
@@ -261,6 +271,43 @@ def _parse_object_ish(raw: str) -> dict | None:
         return None
 
 
+def _tool_from_json_payload(payload: object):
+    """Normalise LM Studio's text-embedded JSON tool-call shape."""
+    if not isinstance(payload, dict):
+        return None
+    name = payload.get("name") or payload.get("tool_name")
+    if not isinstance(name, str):
+        return None
+    name = name.lower()
+    if name not in tools.DISPATCH:
+        return None
+
+    args = payload.get("arguments", payload.get("args", {}))
+    if isinstance(args, str):
+        args = _parse_object_ish(args)
+    return (name, args) if isinstance(args, dict) else None
+
+
+def _recover_json_tool_call(content: str):
+    """Find a JSON tool call, including one wrapped in prose and a code fence."""
+    for match in _FENCED_JSON_RE.finditer(content or ""):
+        recovered = _tool_from_json_payload(_parse_object_ish(match.group("payload")))
+        if recovered:
+            return recovered
+
+    # Also accept raw JSON following a short natural-language lead-in.
+    brace = (content or "").find("{")
+    if brace < 0:
+        return None
+    try:
+        payload, end = json.JSONDecoder().raw_decode(content[brace:])
+    except json.JSONDecodeError:
+        return None
+    # Don't mistake an example embedded in a longer explanation for a call.
+    tail = content[brace + end:].strip().strip(".?!")
+    return _tool_from_json_payload(payload) if not tail else None
+
+
 def _recover_leaked_call(content: str):
     """Return (tool_name, args) if `content` is really a mis-emitted call.
 
@@ -271,7 +318,7 @@ def _recover_leaked_call(content: str):
     """
     m = _LEAKED_CALL_RE.match(content or "")
     if not m:
-        return None
+        return _recover_json_tool_call(content)
 
     name = m.group("name").lower()
     if name not in tools.DISPATCH:
@@ -303,6 +350,58 @@ def _recover_leaked_call(content: str):
         return name, {}
 
     return None
+
+
+# When the model wants to do something it has no tool for, it doesn't say
+# so — it invents a plausible function name (`prise_screenshot(...)`) or, worse,
+# skips the call entirely and just reports success. Both were observed live:
+# "Der Screenshot wurde auf deinem Desktop gespeichert" with nothing on disk.
+# Detecting an invented call lets us hand the real tool list back and let it
+# retry, instead of reading the made-up call aloud.
+def _leaked_unknown_tool(content: str) -> str | None:
+    m = _LEAKED_CALL_RE.match(content or "")
+    if not m:
+        # Also catch the no-parens form the model sometimes emits:
+        #   prise_screenshot {"location": "~/Desktop"}
+        m2 = re.match(r"^\s*(?P<name>[A-Za-z_][A-Za-z0-9_]{2,29})\s*\{", (content or "").strip())
+        if not m2:
+            return None
+        name = m2.group("name")
+    else:
+        name = m.group("name")
+    return None if name.lower() in tools.DISPATCH else name
+
+
+# Past-tense claims that an action was carried out. Used only to catch the
+# case where the model reports success without any tool having run — a
+# silent lie is the single worst failure mode for an assistant that is
+# supposed to actually operate the machine.
+_PARTICIPLE_RE = re.compile(
+    r"\b(?:geöffnet|gespeichert|erstellt|angelegt|ausgeführt|hinzugefügt|notiert|"
+    r"geklickt|gestartet|getippt|gedrückt|eingerichtet|installiert|verschoben|"
+    r"gelöscht|kopiert|aufgenommen|abgeschickt|gesendet)\b",
+    re.IGNORECASE,
+)
+
+# Phrasings that mention an action without asserting it already happened —
+# offers, questions and denials must not be mistaken for false claims.
+_NOT_A_CLAIM_RE = re.compile(
+    r"\b(?:möchtest du|willst du|soll ich|kann ich nicht|kann das nicht|"
+    r"nicht möglich|leider nicht|konnte nicht|fehlgeschlagen|"
+    r"habe ich nicht|nicht wirklich)\b",
+    re.IGNORECASE,
+)
+
+
+def _claims_action(text: str) -> bool:
+    text = text or ""
+    if not _PARTICIPLE_RE.search(text):
+        return False
+    if _NOT_A_CLAIM_RE.search(text):
+        return False
+    # A bare question ("Soll das gespeichert werden?") isn't a claim either.
+    stripped = text.strip()
+    return not (stripped.endswith("?") and stripped.count(".") == 0)
 
 
 def _fast_path(user_message: str) -> str | None:
@@ -338,12 +437,15 @@ def stream_reply(user_message: str, history: list | None = None):
 
     last_tool_result = None
     full_text_parts = []
+    # Every tool that actually ran this turn. Used to catch replies that
+    # claim an action was performed when nothing was.
+    tools_used: list[str] = []
 
     for _ in range(MAX_TOOL_ROUNDS):
         # A round is retried on its own (outside the tool-round budget above)
         # when the stream comes back corrupted — see _CORRUPT_PREFIX_RE.
         # Measured up to ~85% corruption for its worst-case trigger (a
-        # confirmed LM Studio/llama.cpp grammar bug tied to the see_screen
+        # confirmed LM Studio/llama.cpp grammar bug tied to the old screen
         # tool schema, present even non-streaming), so retrying needs real
         # headroom — at p=0.85, 10 attempts still fail ~20% of the time, but
         # each retry is a fast local call and failure only means "Alles
@@ -452,6 +554,7 @@ def stream_reply(user_message: str, history: list | None = None):
                 except json.JSONDecodeError:
                     args = {}
                 result = tools.call_tool(c["name"], args)
+                tools_used.append(c["name"])
                 last_tool_result = result
                 messages.append({"role": "tool", "tool_call_id": c["id"], "content": result})
             continue
@@ -465,6 +568,7 @@ def stream_reply(user_message: str, history: list | None = None):
             if recovered_trailing:
                 name, args = recovered_trailing
                 result = tools.call_tool(name, args)
+                tools_used.append(name)
                 last_tool_result = result
                 messages.append({"role": "assistant", "content": content_acc})
                 messages.append({"role": "user", "content": f"[Ergebnis von {name}: {result}]"})
@@ -473,13 +577,39 @@ def stream_reply(user_message: str, history: list | None = None):
             # Not recoverable — drop the garbled tail rather than speak it.
             buffer = ""
 
+        # The model invented a tool that doesn't exist. Tell it what it
+        # actually has and let it try again — reading "prise_screenshot(...)"
+        # aloud helps nobody, and claiming the job is done is worse.
+        if suspect and not tools_used:
+            invented = _leaked_unknown_tool(content_acc)
+            if invented:
+                available = ", ".join(sorted(tools.DISPATCH))
+                messages.append({"role": "assistant", "content": content_acc})
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            f"Die Funktion {invented} gibt es nicht. Verfügbar sind nur: "
+                            f"{available}. Nutze eine davon per Function-Call, oder sage "
+                            "ehrlich, dass du das nicht kannst. Behaupte niemals, etwas "
+                            "erledigt zu haben."
+                        ),
+                    }
+                )
+                buffer = ""
+                continue
+
         # Round produced no real tool call. If the whole reply was a call
         # written out as text, run it for real and let the model try again
         # with the result, instead of reading the call aloud.
-        recovered = _recover_leaked_call(content_acc) if suspect else None
+        # A JSON code fence often has ordinary prose before it ("Okay, hier
+        # geht es:"), so it does not look suspicious at the beginning of the
+        # stream. Always attempt recovery once the full response is present.
+        recovered = _recover_leaked_call(content_acc)
         if recovered:
             name, args = recovered
             result = tools.call_tool(name, args)
+            tools_used.append(name)
             last_tool_result = result
             messages.append({"role": "assistant", "content": content_acc})
             messages.append({"role": "user", "content": f"[Ergebnis von {name}: {result}]"})
@@ -490,7 +620,7 @@ def stream_reply(user_message: str, history: list | None = None):
             # All retries came back corrupted too — silently drop it rather
             # than read garbage aloud. Falls through to the "Alles klar."
             # fallback below, or to last_tool_result if a tool did run.
-            print("[llm] Streaming blieb nach 6 Versuchen korrupt, verwerfe den Rest.")
+            print("[llm] Streaming blieb nach 10 Versuchen korrupt, verwerfe den Rest.")
             buffer = ""
         elif suspect:
             # Suspected leaked call but not recoverable — flush it rather
@@ -512,6 +642,19 @@ def stream_reply(user_message: str, history: list | None = None):
         elif not full_text_parts:
             yield {"type": "sentence", "text": "Alles klar."}
             full_text_parts.append("Alles klar.")
+
+        # Last line of defence: the reply reports something as done, but not
+        # a single tool ran this turn — so nothing was done. The claim has
+        # already been spoken by now and can't be unsaid, so append an
+        # explicit retraction rather than let the lie stand.
+        spoken = " ".join(full_text_parts)
+        if not tools_used and _claims_action(spoken):
+            correction = (
+                "Korrektur: das habe ich nicht wirklich ausgeführt. "
+                "Sag es nochmal, dann mache ich es richtig."
+            )
+            full_text_parts.append(correction)
+            yield {"type": "sentence", "text": correction}
 
         yield {"type": "done", "full_text": " ".join(full_text_parts)}
         return
@@ -535,6 +678,17 @@ def get_reply(user_message: str, history: list | None = None) -> str:
 
         if not tool_calls:
             content = _strip_think_tags(choice.get("content", ""))
+            # Keep the legacy non-streaming endpoint as safe as the normal
+            # streaming path: LM Studio may put a call in a JSON code block
+            # here as well, rather than using `tool_calls`.
+            recovered = _recover_leaked_call(content)
+            if recovered:
+                name, args = recovered
+                result = tools.call_tool(name, args)
+                last_tool_result = result
+                messages.append({"role": "assistant", "content": content})
+                messages.append({"role": "user", "content": f"[Ergebnis von {name}: {result}]"})
+                continue
             if content:
                 return content
             # Model sometimes returns empty text right after a tool call —

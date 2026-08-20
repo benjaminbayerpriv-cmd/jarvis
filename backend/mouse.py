@@ -1,4 +1,4 @@
-"""Mouse control on macOS.
+"""Mouse control on macOS and Windows.
 
 The obvious approach is Quartz CGEvent — direct HID-level synthetic input,
 same mechanism macOS itself uses. It needs the calling process to be
@@ -24,16 +24,28 @@ import re
 import subprocess
 import time
 
-import Quartz
 import requests
 from PIL import Image
+from pynput import mouse as pynput_mouse
 
-from . import config, panel, vision
+from . import config, panel, platform_utils, vision
+
+if platform_utils.is_macos():
+    import Quartz
+else:
+    Quartz = None
 
 
 def screen_size() -> tuple[int, int]:
-    bounds = Quartz.CGDisplayBounds(Quartz.CGMainDisplayID())
-    return int(bounds.size.width), int(bounds.size.height)
+    if platform_utils.is_macos():
+        bounds = Quartz.CGDisplayBounds(Quartz.CGMainDisplayID())
+        return int(bounds.size.width), int(bounds.size.height)
+    if platform_utils.is_windows():
+        import ctypes
+
+        return ctypes.windll.user32.GetSystemMetrics(0), ctypes.windll.user32.GetSystemMetrics(1)
+    with Image.open(vision.capture_screen()) as shot:
+        return shot.size
 
 
 def _osascript(script: str) -> subprocess.CompletedProcess:
@@ -42,6 +54,11 @@ def _osascript(script: str) -> subprocess.CompletedProcess:
 
 def click(x: float, y: float, button: str = "left", count: int = 1) -> None:
     x, y = int(x), int(y)
+    if not platform_utils.is_macos():
+        controller = pynput_mouse.Controller()
+        controller.position = (x, y)
+        controller.click(pynput_mouse.Button.right if button == "right" else pynput_mouse.Button.left, count)
+        return
     if button == "right":
         script = f'''
         tell application "System Events"
@@ -60,6 +77,13 @@ def drag(x1: float, y1: float, x2: float, y2: float) -> None:
     """Best-effort — osascript has no drag primitive, so this needs the
     Quartz path to be trusted (see module docstring). No-ops silently if not."""
     x1, y1, x2, y2 = float(x1), float(y1), float(x2), float(y2)
+    if not platform_utils.is_macos():
+        controller = pynput_mouse.Controller()
+        controller.position = (x1, y1)
+        controller.press(pynput_mouse.Button.left)
+        controller.position = (x2, y2)
+        controller.release(pynput_mouse.Button.left)
+        return
     move = Quartz.CGEventCreateMouseEvent(None, Quartz.kCGEventMouseMoved, (x1, y1), Quartz.kCGMouseButtonLeft)
     Quartz.CGEventPost(Quartz.kCGHIDEventTap, move)
     time.sleep(0.05)
@@ -83,6 +107,9 @@ def drag(x1: float, y1: float, x2: float, y2: float) -> None:
 
 
 def scroll(dx: int = 0, dy: int = 0) -> None:
+    if not platform_utils.is_macos():
+        pynput_mouse.Controller().scroll(int(dx), int(dy))
+        return
     ev = Quartz.CGEventCreateScrollWheelEvent(None, Quartz.kCGScrollEventUnitLine, 2, int(dy), int(dx))
     Quartz.CGEventPost(Quartz.kCGHIDEventTap, ev)
 
