@@ -115,6 +115,28 @@ TOOL_SCHEMAS = [
     {
         "type": "function",
         "function": {
+            "name": "open_folder",
+            "description": (
+                "Öffnet einen Ordner im Finder/Explorer anhand seines Namens und "
+                "optional seines Ortes, z.B. 'Projekte auf dem Desktop' oder "
+                "'Rechnungen in den Dokumenten'. Nutze das für JEDEN Ordner — "
+                "niemals open_app oder click_on_screen für Ordner verwenden."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "description": {
+                        "type": "string",
+                        "description": "Ordnername und, falls genannt, sein Ort — genau wie der Nutzer es gesagt hat",
+                    }
+                },
+                "required": ["description"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             # NOT named see_screen. Under that name this schema tripped a
             # real LM Studio bug: the reply's first tokens came back mangled
             # ("IGHLICHScreen...") for 10 out of 10 attempts on its own
@@ -289,10 +311,11 @@ TOOL_SCHEMAS = [
             "name": "click_on_screen",
             "description": (
                 "Schaut auf den Bildschirm, findet ein sichtbares Element anhand seiner "
-                "Beschreibung und klickt darauf — z.B. 'den Speichern-Button', 'das "
-                "Suchfeld', 'den ersten Link'. Nutze das, wenn der Nutzer dich bittet, "
-                "etwas auf dem Bildschirm anzuklicken. Die Zielerkennung ist ungefähr, "
-                "nicht pixelgenau — bei kleinen oder dicht beieinanderliegenden "
+                "Beschreibung und interagiert damit: klicken (Standard), doppelklicken, "
+                "rechtsklicken, oder mit action='move' die Maus NUR dorthin bewegen ohne "
+                "zu klicken — echtes Hover, kein Klick-Ersatz. Nutze 'move' bei 'bewege die "
+                "Maus auf/zu X', 'zeig auf X', 'fahr über X'. Die Zielerkennung ist "
+                "ungefähr, nicht pixelgenau — bei kleinen oder dicht beieinanderliegenden "
                 "Elementen kann es danebengehen."
             ),
             "parameters": {
@@ -300,12 +323,12 @@ TOOL_SCHEMAS = [
                 "properties": {
                     "description": {
                         "type": "string",
-                        "description": "Was angeklickt werden soll, so wie der Nutzer es beschrieben hat",
+                        "description": "Womit interagiert werden soll, so wie der Nutzer es beschrieben hat",
                     },
                     "action": {
                         "type": "string",
                         "enum": ["click", "double_click", "right_click", "move"],
-                        "description": "Standardmäßig 'click'",
+                        "description": "Standardmäßig 'click'. 'move' bewegt nur die Maus, ohne zu klicken.",
                     },
                 },
                 "required": ["description"],
@@ -548,6 +571,68 @@ def _open_app(name: str) -> str:
         return f"Konnte '{name}' nicht öffnen: {exc}"
 
 
+# Common macOS home folders, keyed by every German/English word a spoken
+# request might use for them.
+_LOCATION_ALIASES = {
+    "desktop": "~/Desktop", "schreibtisch": "~/Desktop",
+    "dokumente": "~/Documents", "documents": "~/Documents", "papiere": "~/Documents",
+    "downloads": "~/Downloads",
+}
+
+# Filler words stripped out to isolate the actual folder name from a spoken
+# request like "den Ordner Projekte auf dem Desktop".
+_FOLDER_STOPWORDS = {
+    "den", "die", "das", "der", "dem", "einen", "ordner", "order", "verzeichnis",
+    "folder", "auf", "im", "in", "vom", "von", "meinem", "meiner", "mir",
+    *_LOCATION_ALIASES.keys(),
+}
+
+
+def _open_folder(description: str) -> str:
+    """Open a named folder deterministically via its real filesystem path.
+
+    Vision-based clicking is approximate and struggles with small desktop
+    icons; a named folder request ("Ordner Projekte auf dem Desktop") has an
+    exact answer on disk, so this resolves it directly instead of guessing
+    pixel coordinates.
+    """
+    text = (description or "").strip()
+    if not text:
+        return "Welchen Ordner soll ich öffnen?"
+
+    lowered = text.lower()
+    base = Path.home() / "Desktop"
+    for word, path in _LOCATION_ALIASES.items():
+        if re.search(rf"\b{re.escape(word)}\b", lowered):
+            base = Path(os.path.expanduser(path))
+            break
+
+    words = [w for w in re.findall(r"[\wÄÖÜäöüß-]+", text) if w.lower() not in _FOLDER_STOPWORDS]
+    name = " ".join(words).strip()
+
+    target = base if not name else base / name
+    if not target.exists() and base.is_dir():
+        matches = [p for p in base.iterdir() if p.name.lower() == name.lower()]
+        if matches:
+            target = matches[0]
+
+    if not target.exists():
+        return f"Konnte den Ordner '{name or base.name}' nicht finden."
+    if not target.is_dir():
+        return f"'{target.name}' ist kein Ordner."
+
+    try:
+        if platform_utils.is_windows():
+            subprocess.run(["explorer", str(target)], timeout=10)
+        elif platform_utils.is_macos():
+            subprocess.run(["open", str(target)], check=True, timeout=10)
+        else:
+            subprocess.run(["xdg-open", str(target)], timeout=10)
+    except Exception as exc:
+        return f"Konnte '{target.name}' nicht öffnen: {exc}"
+    return f"Ordner '{target.name}' geöffnet."
+
+
 def _run_shell(command: str) -> str:
     if _is_blocked(command):
         return "Diesen Befehl führe ich nicht aus, der könnte das System beschädigen."
@@ -630,11 +715,8 @@ def _mouse_action(a: dict) -> str:
     y = clamp(float(a.get("y", 0)), 0, h)
 
     if action == "move":
-        # osascript's "click at" is the only reliable primitive here (see
-        # mouse.py), so a bare hover-move isn't available — approximate
-        # with a click, which is what the user almost always actually wants.
-        ok = mouse.click(x, y)
-        return f"Bei ({int(x)}, {int(y)}) geklickt (reines Bewegen wird nicht unterstützt)." if ok else f"Klick fehlgeschlagen bei ({int(x)}, {int(y)})."
+        mouse._move_mouse(x, y)
+        return f"Maus zu ({int(x)}, {int(y)}) bewegt."
     if action == "click":
         ok = mouse.click(x, y, button=a.get("button", "left"))
         return f"Bei ({int(x)}, {int(y)}) geklickt." if ok else f"Klick fehlgeschlagen bei ({int(x)}, {int(y)})."
@@ -752,6 +834,7 @@ DISPATCH = {
     "web_search": lambda a: _web_search(a.get("query", "")),
     "browser_tabs": lambda a: _browser_tabs(),
     "open_app": lambda a: _open_app(a.get("name", "")),
+    "open_folder": lambda a: _open_folder(a.get("description", "")),
     "look_at_display": lambda a: vision.look_at_screen(a.get("question", "")),
     "run_shell": lambda a: _run_shell(a.get("command", "")),
     "build_project": lambda a: _build_project(a.get("location", ""), a.get("description", "")),

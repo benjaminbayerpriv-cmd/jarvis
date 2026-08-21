@@ -1,10 +1,14 @@
-"""Screen vision via a local multimodal model.
+"""Screen vision via a multimodal model.
 
-Takes a screenshot with macOS's `screencapture` and asks gemma-4-e2b about
-it. Gemma is a reasoning model like qwen3.5 — left to its own devices it
-spends its entire token budget in reasoning_content and returns an empty
-answer, so reasoning is switched off explicitly (verified: 7s and a correct
-German description with it off, empty string with it on).
+Takes a screenshot with macOS's `screencapture` and asks a vision model
+about it. When GEMINI_API_KEY is set, that's Gemini's free tier (Google's
+API is genuinely multimodal on the free tier; DeepSeek's public API rejects
+image content entirely — verified directly, not assumed). Without a Gemini
+key, this falls back to the local LM Studio model (gemma-4-e2b). Gemma is a
+reasoning model like qwen3.5 — left to its own devices it spends its entire
+token budget in reasoning_content and returns an empty answer, so reasoning
+is switched off explicitly for that path (verified: 7s and a correct German
+description with it off, empty string with it on).
 """
 
 import base64
@@ -18,8 +22,80 @@ from PIL import Image, ImageGrab
 
 from . import config, panel, platform_utils
 
-# Jarvis intentionally uses one local general multimodal model everywhere.
-VISION_MODEL = config.LM_STUDIO_MODEL
+VISION_MODEL = config.GEMINI_MODEL if config.GEMINI_API_KEY else config.LM_STUDIO_MODEL
+
+# The Gemini free tier caps at 20 requests/minute PER MODEL (measured
+# directly: a 429 names "limit: 20, model: gemini-2.5-flash"), which a
+# multi-turn screen-control conversation blows through fast. Each model on
+# this list draws from its own separate quota bucket, so a 429 on one is
+# retried against the next instead of failing the whole request — this is
+# what keeps click_on_screen answering honestly instead of silently going
+# quiet mid-conversation.
+_GEMINI_FALLBACK_MODELS = ["gemini-2.5-flash", "gemini-3-flash-preview", "gemini-2.5-flash-lite"]
+
+
+def _gemini_models_to_try() -> list[str]:
+    primary = config.GEMINI_MODEL
+    return [primary] + [m for m in _GEMINI_FALLBACK_MODELS if m != primary]
+
+
+def _ask_vision_model(prompt: str, png_bytes: bytes) -> str:
+    """One vision request against the active backend; returns the answer text
+    or raises requests.RequestException / ValueError on failure."""
+    b64 = base64.b64encode(png_bytes).decode("ascii")
+
+    if config.GEMINI_API_KEY:
+        last_error: Exception | None = None
+        for model in _gemini_models_to_try():
+            resp = requests.post(
+                f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+                headers={"x-goog-api-key": config.GEMINI_API_KEY, "Content-Type": "application/json"},
+                json={
+                    "contents": [
+                        {
+                            "parts": [
+                                {"text": prompt},
+                                {"inline_data": {"mime_type": "image/png", "data": b64}},
+                            ]
+                        }
+                    ]
+                },
+                timeout=60,
+            )
+            if resp.status_code == 429:
+                last_error = requests.HTTPError(f"{model} rate-limited (429)", response=resp)
+                continue
+            resp.raise_for_status()
+            data = resp.json()
+            candidates = data.get("candidates") or []
+            if not candidates:
+                raise ValueError(data.get("promptFeedback", "Gemini lieferte keine Antwort."))
+            parts = candidates[0].get("content", {}).get("parts") or []
+            return "".join(p.get("text", "") for p in parts).strip()
+        raise last_error or RuntimeError("Alle Gemini-Modelle sind gerade rate-limitiert.")
+
+    resp = requests.post(
+        f"{config.LM_STUDIO_BASE_URL}/chat/completions",
+        json={
+            "model": config.LM_STUDIO_MODEL,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
+                    ],
+                }
+            ],
+            "max_tokens": 400,
+            # Without this gemma burns the whole budget on hidden reasoning
+            # and returns "".
+            "reasoning_effort": "none",
+        },
+        timeout=180,
+    )
+    resp.raise_for_status()
+    return resp.json()["choices"][0]["message"].get("content", "").strip()
 
 
 def capture_screen() -> Path:
@@ -134,29 +210,9 @@ def look_at_screen(question: str = "") -> str:
     panel.push("image", title="Bildschirm", data_url=f"data:image/png;base64,{b64}")
 
     prompt = question.strip() or "Beschreibe kurz, was auf diesem Bildschirm zu sehen ist."
+    prompt += " Antworte auf Deutsch, kurz und konkret."
     try:
-        resp = requests.post(
-            f"{config.LM_STUDIO_BASE_URL}/chat/completions",
-            json={
-                "model": VISION_MODEL,
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": prompt + " Antworte auf Deutsch, kurz und konkret."},
-                            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
-                        ],
-                    }
-                ],
-                "max_tokens": 400,
-                # Without this gemma burns the whole budget on hidden
-                # reasoning and returns "".
-                "reasoning_effort": "none",
-            },
-            timeout=180,
-        )
-        resp.raise_for_status()
-        answer = resp.json()["choices"][0]["message"].get("content", "").strip()
+        answer = _ask_vision_model(prompt, raw)
         return answer or "Ich sehe den Bildschirm, kann ihn aber gerade nicht beschreiben."
-    except requests.RequestException as exc:
+    except (requests.RequestException, ValueError) as exc:
         return f"Bildanalyse fehlgeschlagen: {exc}"

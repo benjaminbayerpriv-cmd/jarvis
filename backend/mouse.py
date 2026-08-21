@@ -25,6 +25,7 @@ import io
 import re
 import subprocess
 import time
+from collections import Counter
 
 import requests
 from PIL import Image
@@ -151,11 +152,24 @@ def scroll(dx: int = 0, dy: int = 0) -> None:
 _COORD_RE = re.compile(r"(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)")
 
 
-def find_on_screen(description: str) -> tuple[float, float] | None:
-    """Find element coordinates without clicking. Returns (x, y) in screen pixels.
+def _ask_vision(prompt: str, png_bytes: bytes) -> str | None:
+    """One vision request against the active backend (Gemini or LM Studio);
+    returns the raw text answer, or None on failure."""
+    try:
+        return vision._ask_vision_model(prompt, png_bytes)
+    except Exception:
+        return None
 
-    Used internally by click_on_screen and exposed as a tool for multi-step
-    computer use workflows.
+
+def find_on_screen(description: str) -> tuple[float, float] | None:
+    """Locate an element by asking the vision model to pick a grid cell.
+
+    Small multimodal models (gemma-4-e4b) are unreliable at naming absolute
+    pixel coordinates — three runs on the same screenshot scatter hundreds of
+    pixels. A discrete "pick the grid cell" task is something they do far more
+    consistently, so this divides the screenshot into a grid, asks several
+    times, and takes the majority cell. Still approximate, but it no longer
+    teleports the click to a random corner of the screen.
     """
     try:
         shot_path = vision.capture_screen()
@@ -170,46 +184,47 @@ def find_on_screen(description: str) -> tuple[float, float] | None:
     b64 = base64.b64encode(raw).decode("ascii")
     panel.push("image", title="Bildschirm", data_url=f"data:image/png;base64,{b64}")
 
+    # Grid sized to the 2.4:1 aspect ratio; ~96 cells keeps each cell small
+    # enough to be useful but still recognisable to the model.
+    cols, rows = 16, 6
     prompt = (
-        f'Finde auf diesem Bild: "{description}". '
-        f"Das Bild ist {shot_w}x{shot_h} Pixel groß. "
-        "Antworte NUR mit den Pixel-Koordinaten der Mitte dieses Elements im Format "
-        '"x,y". Keine Erklärung, kein anderer Text.'
+        f'Dieses Bild ist in ein Raster von {cols} Spalten (0 bis {cols - 1}, links nach rechts) '
+        f'und {rows} Zeilen (0 bis {rows - 1}, oben nach unten) aufgeteilt. '
+        f'In welcher Zelle befindet sich "{description}"? '
+        f'Antworte NUR mit "spalte,zeile", zum Beispiel "7,3".'
     )
-    try:
-        resp = requests.post(
-            f"{config.LM_STUDIO_BASE_URL}/chat/completions",
-            json={
-                "model": vision.VISION_MODEL,
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": prompt},
-                            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
-                        ],
-                    }
-                ],
-                "max_tokens": 40,
-                "reasoning_effort": "none",
-            },
-            timeout=180,
-        )
-        resp.raise_for_status()
-        answer = resp.json()["choices"][0]["message"].get("content", "").strip()
-    except Exception:
+
+    # A single request, not three: the free-tier vision quota is only 20
+    # requests/minute per model (measured directly against a real 429), and
+    # a multi-turn screen-control conversation burns through that fast. The
+    # majority-vote scaffolding stays in place — Gemini is precise enough in
+    # one shot to make this safe, but bumping the range back up costs only a
+    # number if that ever stops being true.
+    cells: list[tuple[int, int]] = []
+    for _ in range(1):
+        answer = _ask_vision(prompt, raw)
+        if not answer:
+            continue
+        m = re.search(r"(\d+)\s*[,;]\s*(\d+)", answer)
+        if not m:
+            continue
+        col, row = int(m.group(1)), int(m.group(2))
+        if 0 <= col < cols and 0 <= row < rows:
+            cells.append((col, row))
+
+    if not cells:
         return None
 
-    m = _COORD_RE.search(answer)
-    if not m:
-        return None
+    # Majority cell, else the median — both are robust against the one-off
+    # wild guess the model sometimes throws in.
+    ((col, row), count), = Counter(cells).most_common(1)
+    if count < 2:
+        col = sorted(c[0] for c in cells)[len(cells) // 2]
+        row = sorted(c[1] for c in cells)[len(cells) // 2]
 
-    ix, iy = float(m.group(1)), float(m.group(2))
-    # The small vision model sometimes returns coordinates outside the image
-    # (e.g. 4051 on a 1400-wide shot). Clamp to the image first, then scale.
-    ix = max(0.0, min(ix, shot_w))
-    iy = max(0.0, min(iy, shot_h))
-    # Scale from the (possibly downscaled) screenshot back to real screen pixels
+    # Cell centre in the downscaled image, then scaled back to real pixels.
+    ix = (col + 0.5) * shot_w / cols
+    iy = (row + 0.5) * shot_h / rows
     x = ix * real_w / shot_w
     y = iy * real_h / shot_h
     return (x, y)
@@ -231,9 +246,11 @@ def click_on_screen(description: str, action: str = "click") -> str:
         ok = click(x, y, button="right")
         return f"'{description}' rechtsgeklickt bei ({int(x)}, {int(y)})." if ok else f"Klick fehlgeschlagen: System Events konnte bei ({int(x)}, {int(y)}) nicht klicken."
     if action == "move":
-        # No pure-hover primitive via osascript; approximate with a click.
-        click(x, y)
-        return f"Bei '{description}' geklickt ({int(x)}, {int(y)}) — reines Bewegen ohne Klick wird gerade nicht unterstützt."
+        # Genuine hover, no click: _move_mouse uses CGWarpMouseCursorPosition
+        # (see its docstring), which repositions the cursor without needing
+        # the Accessibility trust a real click does.
+        _move_mouse(x, y)
+        return f"Maus zu '{description}' bewegt ({int(x)}, {int(y)})."
 
     ok = click(x, y)
     return f"'{description}' angeklickt bei ({int(x)}, {int(y)})." if ok else f"Klick fehlgeschlagen: System Events konnte bei ({int(x)}, {int(y)}) nicht klicken."

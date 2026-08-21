@@ -90,11 +90,23 @@ def _pop_complete_sentences(buffer: str) -> tuple[list[str], str]:
 
     return sentences, buffer[start:]
 
+# Which text model is actually answering — without this, a model asked "welches
+# Modell bist du" just guesses, and guesses wrong (observed: DeepSeek claiming
+# to be GPT-4, a known distillation artifact in models partly trained on GPT-4
+# outputs). Built once at import time since the active backend doesn't change
+# at runtime.
+_ACTIVE_MODEL_NAME = config.DEEPSEEK_MODEL if config.DEEPSEEK_API_KEY else config.LM_STUDIO_MODEL
+_ACTIVE_MODEL_PROVIDER = "DeepSeek" if config.DEEPSEEK_API_KEY else "ein lokales Modell über LM Studio"
+
 # Kept deliberately short: measured against this model, a long rule-list prompt
 # made it hallucinate tool results (inventing a time, claiming a note was saved)
 # where a compact one keeps it actually calling the functions.
-SYSTEM_PROMPT = """Du bist Jarvis, der Assistent des Nutzers auf seinem Computer. Du duzt
+SYSTEM_PROMPT = f"""Du bist Jarvis, der Assistent des Nutzers auf seinem Computer. Du duzt
 ihn, antwortest locker und in maximal drei Sätzen.
+
+Falls gefragt wird, welches Modell oder welche KI du bist: Du heißt Jarvis, das
+Sprachmodell dahinter ist {_ACTIVE_MODEL_NAME} ({_ACTIVE_MODEL_PROVIDER}). Sag
+das ehrlich und genau so — erfinde niemals einen anderen Namen wie "GPT-4".
 
 Du kannst seinen Computer wirklich bedienen: Programme und Webseiten öffnen, auf
 den Bildschirm schauen, Shell-Befehle ausführen, Projekte programmieren und
@@ -102,7 +114,9 @@ Inhalte im Interface anzeigen.
 
 Zum Steuern des Bildschirms nutze die passende Funktion: click_on_screen zum
 direkten Anklicken, find_coordinates um nur die Position zu nennen,
-look_at_display zum Beschreiben, mouse_action für bekannte Koordinaten.
+look_at_display zum Beschreiben, mouse_action für bekannte Koordinaten. Für
+einen Ordner (z.B. "Ordner Projekte auf dem Desktop") immer open_folder
+nutzen, niemals click_on_screen oder open_app dafür.
 
 Für Chrome gibt es einen Browser-Agenten: Nutze youtube_search oder web_search
 für Suchen, browser_tabs für offene Tabs und open_url für konkrete Seiten. Eine
@@ -123,28 +137,55 @@ Wenn er etwas programmiert haben will, frage zuerst, in welchen Ordner es soll."
 MAX_TOOL_ROUNDS = 4
 
 
+def _llm_target() -> tuple[str, str, dict, dict]:
+    """Resolve the active text-LLM endpoint.
+
+    Returns (base_url, model, headers, extra_body). DeepSeek is used when a
+    key is configured; otherwise text falls back to LM Studio. DeepSeek's API
+    is OpenAI-compatible but needs an Authorization header and does not accept
+    the `reasoning_effort` field that LM Studio expects.
+    """
+    if config.DEEPSEEK_API_KEY:
+        headers = {"Authorization": f"Bearer {config.DEEPSEEK_API_KEY}"}
+        return config.DEEPSEEK_BASE_URL, config.DEEPSEEK_MODEL, headers, {}
+    return config.LM_STUDIO_BASE_URL, config.LM_STUDIO_MODEL, {}, {"reasoning_effort": "none"}
+
+
 def _post_chat(messages: list) -> dict:
+    base_url, model, headers, extra = _llm_target()
     resp = requests.post(
-        f"{config.LM_STUDIO_BASE_URL}/chat/completions",
+        f"{base_url}/chat/completions",
         json={
-            "model": config.LM_STUDIO_MODEL,
+            "model": model,
             "messages": messages,
             "tools": tools.TOOL_SCHEMAS,
             "tool_choice": "auto",
             "temperature": 0.2,
-            "reasoning_effort": "none",
+            **extra,
         },
+        headers=headers,
         timeout=60,
     )
     resp.raise_for_status()
     data = resp.json()
     if not data.get("choices"):
-        raise ModelError(data.get("error", {}).get("message", "LM Studio lieferte keine Antwort."))
+        raise ModelError(data.get("error", {}).get("message", "Das Modell lieferte keine Antwort."))
     return data
 
 
 def model_health() -> tuple[bool, str]:
-    """Check that the configured single Jarvis model is loaded in LM Studio."""
+    """Report whether the active text model is reachable."""
+    if config.DEEPSEEK_API_KEY:
+        try:
+            resp = requests.get(
+                f"{config.DEEPSEEK_BASE_URL}/models",
+                headers={"Authorization": f"Bearer {config.DEEPSEEK_API_KEY}"},
+                timeout=5,
+            )
+            resp.raise_for_status()
+        except requests.RequestException as exc:
+            return False, f"DeepSeek nicht erreichbar: {exc}"
+        return True, f"Modell bereit: {config.DEEPSEEK_MODEL} (DeepSeek)"
     try:
         response = requests.get(f"{config.LM_STUDIO_BASE_URL}/models", timeout=5)
         response.raise_for_status()
@@ -166,17 +207,19 @@ def _clean_assistant_message(choice: dict) -> dict:
 
 def _stream_chat(messages: list):
     """Yields raw SSE JSON chunks from a streaming chat/completions call."""
+    base_url, model, headers, extra = _llm_target()
     resp = requests.post(
-        f"{config.LM_STUDIO_BASE_URL}/chat/completions",
+        f"{base_url}/chat/completions",
         json={
-            "model": config.LM_STUDIO_MODEL,
+            "model": model,
             "messages": messages,
             "tools": tools.TOOL_SCHEMAS,
             "tool_choice": "auto",
             "temperature": 0.2,
-            "reasoning_effort": "none",
+            **extra,
             "stream": True,
         },
+        headers=headers,
         timeout=60,
         stream=True,
     )
@@ -228,43 +271,22 @@ _PRESS_CMD_RE = re.compile(
     r"^\s*(?:drück(?:e)?|drueck(?:e)?)\s+(?:bitte\s+|mal\s+)?(?P<key>[A-Za-z0-9+ ]+)\s*[.!]?\s*$",
     re.IGNORECASE,
 )
-_CLICK_CMD_RE = re.compile(
-    r"^\s*klick(?:e)?\s+(?:bitte\s+|mal\s+)?(?:auf\s+)?(?P<target>.+?)\s*[.!]?\s*$",
-    re.IGNORECASE | re.DOTALL,
-)
-_DISPLAY_CMD_RE = re.compile(
-    r"\b(?:was siehst du|was zeigt (?:mein |der )?(?:bildschirm|screen)|schau(?:e)? (?:mal )?(?:auf )?(?:meinen |den )?(?:bildschirm|screen)|guck(?:e)? (?:mal )?(?:auf )?(?:meinen |den )?(?:bildschirm|screen))\b",
-    re.IGNORECASE,
-)
-_OPEN_CMD_RE = re.compile(
-    r"^\s*(?:öffne|oeffne|mach(?:e)?\s+(?:mir\s+|mal\s+)?auf|starte)\s+(?P<target>.+?)\s*[.!]?\s*$",
-    re.IGNORECASE | re.DOTALL,
-)
-# "Wo ist der Button?" — return coordinates without clicking, so the user (or
-# a follow-up command) can act on them.
-_FIND_COORD_RE = re.compile(
-    r"^\s*(?:wo\s+ist|wo\s+finde\s+ich|wo\s+liegt|finde)\s+(?:mir\s+|mal\s+)?\s*(?P<target>.+?)\s*[.!]?\s*$",
-    re.IGNORECASE | re.DOTALL,
-)
-# "Was ist auf dem Bildschirm klickbar?" — list interactive elements.
-_LIST_ELEMENTS_RE = re.compile(
-    r"^\s*(?:was\s+ist\s+(?:auf\s+dem\s+(?:bildschirm|screen)\s+)?klickbar"
-    r"|liste\s+(?:mir\s+|mal\s+)?(?:alle\s+)?(?:klickbaren\s+)?elemente(?:\s+auf\s+dem\s+(?:bildschirm|screen))?)\s*[.!]?\s*$",
-    re.IGNORECASE,
-)
-# "Verschiebe die Datei nach Dokumente" / "in die Dokumente verschieben".
-_MOVE_CMD_RE = re.compile(
-    r"^\s*(?:verschiebe|verschieb|bewege|move)\s+(?P<source>.+?)\s+(?:nach|in|zu)\s+(?P<dest>.+?)\s*[.!]?\s*$",
-    re.IGNORECASE | re.DOTALL,
-)
+# Click, open, move, find-coordinates, list-elements and "what's on screen"
+# used to have their own regexes here, routing straight to one tool before
+# the model ever saw the message. That looked efficient but was actually a
+# decision the model should be making: "bewege" is both "move the mouse" and
+# "move this file", "öffne X" is an app, a folder, a URL, or (with a pronoun)
+# something from earlier in the conversation — a regex can't tell those
+# apart, so it silently picked wrong (routed a folder request through
+# open_app, treated "öffne es mit Maussteuerung" as an app name). The model
+# has the full tool list, the conversation history, and can call whichever
+# of click_on_screen / open_app / open_folder / open_url / move_file /
+# find_coordinates / get_screen_elements / look_at_display actually fits.
+# Removing the shortcut means every one of those requests goes through real
+# tool-calling instead of pattern-matching.
 _YOUTUBE_SEARCH_RE = re.compile(r"\b(?:suche|such)\s+(?:auf\s+)?youtube\s+(?:nach\s+)?(?P<query>.+)$", re.IGNORECASE)
 _WEB_SEARCH_RE = re.compile(r"^\s*(?:suche|such)\s+(?:im\s+web|bei\s+google|im\s+internet)?\s*(?:nach\s+)?(?P<query>.+)$", re.IGNORECASE)
 _RETRY_CMD_RE = re.compile(r"^\s*(?:mach(?:e)?(?:\s+es)?\s+richtig|versuch(?:e)?\s+(?:es\s+)?nochmal|nochmal)\s*[.!]?\s*$", re.IGNORECASE)
-_WEB_ALIASES = {
-    "youtube": "https://www.youtube.com",
-    "google": "https://www.google.com",
-    "github": "https://github.com",
-}
 
 
 # This model intermittently writes a function call into its reply as plain
@@ -500,6 +522,23 @@ def _looks_like_tool_text(text: str) -> bool:
     return bool(re.search(rf"\b(?:{names})\s*\(", text or "", re.IGNORECASE))
 
 
+# A model that ran a real tool this turn is exempt from _claims_action below
+# (a tool DID run, so it isn't lying about nothing happening) — but that
+# leaves a narrower, observed failure open: it can still claim a BIGGER
+# action than the one that actually ran, e.g. calling mouse_action(move)
+# — result "Maus zu (x,y) bewegt." — and then telling the user "doppelt
+# angeklickt". Both regexes share the same click vocabulary; a claim is only
+# trusted when at least one of this turn's actual tool results uses the same
+# words, i.e. a click tool genuinely reported success.
+_CLICK_WORDS_RE = re.compile(r"\b(?:klick|geklickt|angeklickt|klicke)\w*", re.IGNORECASE)
+
+
+def _click_claim_unsupported(spoken: str, tool_results: list) -> bool:
+    if not _CLICK_WORDS_RE.search(spoken or ""):
+        return False
+    return not any(_CLICK_WORDS_RE.search(r or "") for r in tool_results)
+
+
 def _fast_path(user_message: str) -> str | None:
     message = user_message.strip()
 
@@ -537,46 +576,6 @@ def _fast_path(user_message: str) -> str | None:
     if m:
         key = re.split(r"\s+(?:zum|für|um)\b", m.group("key"), maxsplit=1, flags=re.IGNORECASE)[0]
         return tools.call_tool("press_key", {"key": key.strip().rstrip(".")})
-
-    m = _CLICK_CMD_RE.match(message)
-    if m:
-        return tools.call_tool("click_on_screen", {"description": m.group("target").strip().rstrip(".")})
-
-    if _DISPLAY_CMD_RE.search(message):
-        return tools.call_tool("look_at_display", {"question": message})
-
-    m = _FIND_COORD_RE.match(message)
-    if m:
-        return tools.call_tool("find_coordinates", {"description": m.group("target").strip().rstrip(".?!")})
-
-    if _LIST_ELEMENTS_RE.match(message):
-        return tools.call_tool("get_screen_elements", {})
-
-    m = _MOVE_CMD_RE.match(message)
-    if m:
-        source = m.group("source").strip().rstrip(".?!")
-        dest = m.group("dest").strip().rstrip(".?!")
-        dest = dest.lower().removeprefix("die ").removeprefix("den ").removeprefix("das ")
-        # Resolve the German names of the standard home folders.
-        if dest in ("dokumente", "documents", "papiere"):
-            dest = "~/Documents"
-        elif dest in ("desktop", "schreibtisch"):
-            dest = "~/Desktop"
-        elif dest == "downloads":
-            dest = "~/Downloads"
-        return tools.call_tool("move_file", {"source": source, "destination": dest})
-
-    m = _OPEN_CMD_RE.match(message)
-    if m:
-        target = m.group("target").strip().rstrip(".")
-        lowered = target.lower().removeprefix("die ").removeprefix("den ").removeprefix("das ")
-        if lowered in _WEB_ALIASES:
-            return tools.call_tool("open_url", {"url": _WEB_ALIASES[lowered]})
-        if re.fullmatch(r"(?:https?://)?(?:www\.)?[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+(?:/\S*)?", target):
-            return tools.call_tool("open_url", {"url": target})
-        # A direct "öffne Spotify" is equally unambiguous. If the app does
-        # not exist, open_app returns an honest error instead of a claim.
-        return tools.call_tool("open_app", {"name": target})
 
     return None
 
@@ -622,6 +621,13 @@ def stream_reply(user_message: str, history: list | None = None):
     # Every tool that actually ran this turn. Used to catch replies that
     # claim an action was performed when nothing was.
     tools_used: list[str] = []
+    # Every tool's raw result text this turn — used to catch a narrower and
+    # more dangerous lie than "no tool ran at all": a tool DID run (so the
+    # not-tools_used check below never fires) but the model still claims a
+    # different, bigger action than what actually happened, e.g. calling
+    # mouse_action(move) — result "Maus zu (x,y) bewegt." — and then telling
+    # the user "doppelt angeklickt". See _click_claim_unsupported below.
+    tool_results: list[str] = []
 
     for _ in range(MAX_TOOL_ROUNDS):
         # A round is retried on its own (outside the tool-round budget above)
@@ -741,6 +747,7 @@ def stream_reply(user_message: str, history: list | None = None):
                     args = {}
                 result = tools.call_tool(c["name"], args)
                 tools_used.append(c["name"])
+                tool_results.append(result)
                 last_tool_result = result
                 messages.append({"role": "tool", "tool_call_id": c["id"], "content": result})
             continue
@@ -755,6 +762,7 @@ def stream_reply(user_message: str, history: list | None = None):
                 name, args = recovered_trailing
                 result = tools.call_tool(name, args)
                 tools_used.append(name)
+                tool_results.append(result)
                 last_tool_result = result
                 messages.append({"role": "assistant", "content": content_acc})
                 messages.append({"role": "user", "content": f"[Ergebnis von {name}: {result}]"})
@@ -796,6 +804,7 @@ def stream_reply(user_message: str, history: list | None = None):
             name, args = recovered
             result = tools.call_tool(name, args)
             tools_used.append(name)
+            tool_results.append(result)
             last_tool_result = result
             messages.append({"role": "assistant", "content": content_acc})
             messages.append({"role": "user", "content": f"[Ergebnis von {name}: {result}]"})
@@ -831,6 +840,11 @@ def stream_reply(user_message: str, history: list | None = None):
         spoken = " ".join(full_text_parts)
         if not tools_used and (_claims_action(spoken) or _looks_like_tool_text(spoken)):
             spoken = "Das habe ich nicht ausgeführt."
+        elif _click_claim_unsupported(spoken, tool_results):
+            # A tool DID run, so the check above never fires — but nothing
+            # this turn actually reported a click. Speak what really
+            # happened instead of the model's inflated claim.
+            spoken = last_tool_result or "Das habe ich nicht geklickt."
 
         yield {"type": "sentence", "text": spoken}
         yield {"type": "done", "full_text": spoken}

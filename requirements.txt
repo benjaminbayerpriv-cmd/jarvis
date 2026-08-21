@@ -5,3 +5,9 @@ requests==2.32.3
 pynput==1.7.7
 pillow==12.3.0
 pyobjc-framework-Quartz==11.0; sys_platform == "darwin"
+
+# Only used by backend/live_voice_test.py (Gemini Live speech-to-speech
+# proof-of-concept, not part of the normal Jarvis pipeline).
+sounddevice==0.5.6
+numpy==2.5.2
+websockets==17.0.1
