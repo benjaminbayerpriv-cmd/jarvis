@@ -2,10 +2,13 @@
 
 ElevenLabs sounds far better, but its free tier is 10k characters a month and
 runs dry without warning. A mute assistant is useless, so when ElevenLabs
-refuses (quota, bad key, no network) this falls back to the German voice
-built into macOS: worse sounding, but free, offline and unlimited.
+refuses (quota, bad key, no network) this falls back to the operating
+system's own voice: worse sounding, but free, offline and unlimited —
+macOS's built-in `say` on macOS, the SAPI synthesizer (via PowerShell, no
+extra dependency needed) on Windows.
 """
 
+import platform
 import subprocess
 import tempfile
 from pathlib import Path
@@ -18,9 +21,19 @@ ELEVENLABS_URL = "https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
 
 MACOS_VOICE = "Anna"
 
+IS_WINDOWS = platform.system() == "Windows"
+
 # Set once ElevenLabs reports quota exhaustion, so we stop paying the
 # latency of a doomed request on every single sentence.
 _elevenlabs_blocked = False
+
+# File extension + mime type produced by each engine, so callers (the /tts
+# route, the filler cache) don't need their own platform checks.
+ENGINE_MEDIA = {
+    "elevenlabs": ("mp3", "audio/mpeg"),
+    "macos": ("m4a", "audio/mp4"),
+    "windows": ("wav", "audio/wav"),
+}
 
 
 class VoiceInfo:
@@ -45,6 +58,43 @@ def _macos_say(text: str) -> bytes:
     except OSError:
         pass
     return data
+
+
+def _windows_say(text: str) -> bytes:
+    """Render text via the SAPI synthesizer built into Windows. The text is
+    piped over stdin (rather than interpolated into the script) so quotes
+    and special characters in it can't break out of the PowerShell command."""
+    out = Path(tempfile.mkdtemp()) / "say.wav"
+    script = (
+        "Add-Type -AssemblyName System.Speech; "
+        "$s = New-Object System.Speech.Synthesis.SpeechSynthesizer; "
+        f"$s.SetOutputToWaveFile('{out}'); "
+        "$s.Speak([Console]::In.ReadToEnd()); "
+        "$s.Dispose()"
+    )
+    subprocess.run(
+        ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+        input=text,
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    data = out.read_bytes()
+    try:
+        out.unlink()
+        out.parent.rmdir()
+    except OSError:
+        pass
+    return data
+
+
+def _local_say(text: str) -> bytes:
+    if IS_WINDOWS:
+        VoiceInfo.engine = "windows"
+        return _windows_say(text)
+    VoiceInfo.engine = "macos"
+    return _macos_say(text)
 
 
 def _elevenlabs(text: str) -> bytes:
@@ -88,9 +138,8 @@ def synthesize(text: str) -> bytes:
             # a 401 with quota_exceeded in the body.
             if status in (401, 402, 429) or "quota" in body.lower():
                 _elevenlabs_blocked = True
-                print(f"[tts] ElevenLabs nicht verfügbar ({status}), nutze macOS-Stimme. {body}")
+                print(f"[tts] ElevenLabs nicht verfügbar ({status}), nutze lokale Stimme. {body}")
         except requests.RequestException as exc:
-            print(f"[tts] ElevenLabs Netzwerkfehler, nutze macOS-Stimme: {exc}")
+            print(f"[tts] ElevenLabs Netzwerkfehler, nutze lokale Stimme: {exc}")
 
-    VoiceInfo.engine = "macos"
-    return _macos_say(text)
+    return _local_say(text)

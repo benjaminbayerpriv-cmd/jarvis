@@ -23,13 +23,18 @@ def ensure_fillers() -> list[str]:
     FILLER_DIR.mkdir(parents=True, exist_ok=True)
     urls = []
     for i, phrase in enumerate(PHRASES):
-        path = FILLER_DIR / f"filler_{i}.mp3"
-        if not path.exists():
+        # The extension depends on which engine produced the clip (mp3 for
+        # ElevenLabs, m4a on macOS's fallback, wav on Windows's), so look for
+        # any cached file for this index regardless of extension.
+        path = next(FILLER_DIR.glob(f"filler_{i}.*"), None)
+        if path is None:
             try:
                 audio = tts.synthesize(phrase)
+                ext, _ = tts.ENGINE_MEDIA.get(tts.VoiceInfo.engine, ("mp3", "audio/mpeg"))
+                path = FILLER_DIR / f"filler_{i}.{ext}"
                 path.write_bytes(audio)
             except Exception:
                 continue
-        if path.exists():
+        if path and path.exists():
             urls.append(f"/static/fillers/{path.name}")
     return urls
