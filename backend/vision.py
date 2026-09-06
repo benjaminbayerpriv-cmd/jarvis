@@ -1,18 +1,20 @@
 """Screen vision via a local multimodal model.
 
-Takes a screenshot with macOS's `screencapture` and asks gemma-4-e2b about
-it. Gemma is a reasoning model like qwen3.5 — left to its own devices it
-spends its entire token budget in reasoning_content and returns an empty
-answer, so reasoning is switched off explicitly (verified: 7s and a correct
-German description with it off, empty string with it on).
+Takes a screenshot with Pillow's `ImageGrab`, which works natively on both
+macOS and Windows, and asks gemma-4-e2b about it. Gemma is a reasoning
+model like qwen3.5 — left to its own devices it spends its entire token
+budget in reasoning_content and returns an empty answer, so reasoning is
+switched off explicitly (verified: 7s and a correct German description
+with it off, empty string with it on).
 """
 
 import base64
-import subprocess
+import io
 import tempfile
 from pathlib import Path
 
 import requests
+from PIL import Image, ImageGrab
 
 from . import config, panel
 
@@ -21,25 +23,21 @@ VISION_MODEL = "google/gemma-4-e2b"
 
 def capture_screen() -> Path:
     path = Path(tempfile.gettempdir()) / "jarvis_screen.png"
-    # -x silences the shutter sound, -C includes the cursor.
-    subprocess.run(["screencapture", "-x", str(path)], check=True, timeout=20)
+    img = ImageGrab.grab()
+    img.save(path, "PNG")
     return path
 
 
 def downscale(path: Path, max_width: int = 1400) -> bytes:
-    """Shrink with macOS's built-in sips so a Retina screenshot doesn't blow
-    up the request (and the model's image budget)."""
-    out = Path(tempfile.gettempdir()) / "jarvis_screen_small.png"
-    try:
-        subprocess.run(
-            ["sips", "-Z", str(max_width), str(path), "--out", str(out)],
-            check=True,
-            capture_output=True,
-            timeout=20,
-        )
-        return out.read_bytes()
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
-        return path.read_bytes()
+    """Shrink so a high-DPI screenshot doesn't blow up the request (and the
+    model's image budget)."""
+    img = Image.open(path)
+    if img.width > max_width:
+        ratio = max_width / img.width
+        img = img.resize((max_width, int(img.height * ratio)), Image.LANCZOS)
+    buf = io.BytesIO()
+    img.save(buf, "PNG")
+    return buf.getvalue()
 
 
 def look_at_screen(question: str = "") -> str:

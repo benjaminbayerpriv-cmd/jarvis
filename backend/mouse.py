@@ -1,90 +1,71 @@
-"""Mouse control on macOS.
+"""Cross-platform mouse control via pynput.
 
-The obvious approach is Quartz CGEvent — direct HID-level synthetic input,
-same mechanism macOS itself uses. It needs the calling process to be
-Accessibility-trusted, though, and Homebrew's Python.app is only ad-hoc
-signed (no Team ID, a hash-based identity). In practice that made TCC's
-grant unreliable here: the toggle in System Settings showed on, but
-AXIsProcessTrusted() kept coming back false — the registered entry never
-matched the running binary's identity.
+pynput drives the OS input stack directly on both platforms (Quartz on
+macOS, the Win32 API on Windows), so click/move/drag/scroll all go through
+one code path instead of separate macOS/Windows branches.
 
-`osascript` (System Events) doesn't have that problem — it's a stable,
-Apple-signed binary, and Terminal.app already carried Accessibility trust
-that flows through to it. `click at {x,y}` is a private but working System
-Events verb; that's the one avenue confirmed to actually move a real click
-here, so it's the primary path for anything that matters (an actual click).
-Quartz stays in for scrolling and drag, which osascript has no equivalent
-for — those work once/if the Python binary itself gets trusted, and no-op
-harmlessly otherwise.
+macOS still requires the process running this (Terminal, or python itself)
+to be Accessibility-trusted (System Settings -> Privacy & Security ->
+Accessibility), same as before — pynput's synthetic events are subject to
+the same TCC check osascript/Quartz were. Windows needs no extra
+permission for synthetic mouse input.
 """
 
 import base64
 import io
 import re
-import subprocess
 import time
 
-import Quartz
 import requests
 from PIL import Image
+from pynput.mouse import Button, Controller
 
 from . import config, panel, vision
 
+_mouse = Controller()
+
 
 def screen_size() -> tuple[int, int]:
-    bounds = Quartz.CGDisplayBounds(Quartz.CGMainDisplayID())
-    return int(bounds.size.width), int(bounds.size.height)
+    try:
+        import tkinter
+
+        root = tkinter.Tk()
+        root.withdraw()
+        w, h = root.winfo_screenwidth(), root.winfo_screenheight()
+        root.destroy()
+        return w, h
+    except Exception:
+        from PIL import ImageGrab
+
+        return ImageGrab.grab().size
 
 
-def _osascript(script: str) -> subprocess.CompletedProcess:
-    return subprocess.run(["osascript", "-e", script], capture_output=True, text=True, timeout=15)
+def move(x: float, y: float) -> None:
+    _mouse.position = (int(x), int(y))
 
 
 def click(x: float, y: float, button: str = "left", count: int = 1) -> None:
     x, y = int(x), int(y)
-    if button == "right":
-        script = f'''
-        tell application "System Events"
-            key down control
-            click at {{{x}, {y}}}
-            key up control
-        end tell'''
-        _osascript(script)
-        return
-
-    clicks = "\n            delay 0.05\n            ".join([f"click at {{{x}, {y}}}"] * max(count, 1))
-    _osascript(f'tell application "System Events"\n            {clicks}\n        end tell')
+    _mouse.position = (x, y)
+    btn = Button.right if button == "right" else Button.left
+    _mouse.click(btn, max(count, 1))
 
 
 def drag(x1: float, y1: float, x2: float, y2: float) -> None:
-    """Best-effort — osascript has no drag primitive, so this needs the
-    Quartz path to be trusted (see module docstring). No-ops silently if not."""
     x1, y1, x2, y2 = float(x1), float(y1), float(x2), float(y2)
-    move = Quartz.CGEventCreateMouseEvent(None, Quartz.kCGEventMouseMoved, (x1, y1), Quartz.kCGMouseButtonLeft)
-    Quartz.CGEventPost(Quartz.kCGHIDEventTap, move)
-    time.sleep(0.05)
-    Quartz.CGEventPost(
-        Quartz.kCGHIDEventTap,
-        Quartz.CGEventCreateMouseEvent(None, Quartz.kCGEventLeftMouseDown, (x1, y1), Quartz.kCGMouseButtonLeft),
-    )
+    _mouse.position = (x1, y1)
+    _mouse.press(Button.left)
     steps = 12
     for i in range(1, steps + 1):
         ix = x1 + (x2 - x1) * i / steps
         iy = y1 + (y2 - y1) * i / steps
-        Quartz.CGEventPost(
-            Quartz.kCGHIDEventTap,
-            Quartz.CGEventCreateMouseEvent(None, Quartz.kCGEventLeftMouseDragged, (ix, iy), Quartz.kCGMouseButtonLeft),
-        )
+        _mouse.position = (ix, iy)
         time.sleep(0.012)
-    Quartz.CGEventPost(
-        Quartz.kCGHIDEventTap,
-        Quartz.CGEventCreateMouseEvent(None, Quartz.kCGEventLeftMouseUp, (x2, y2), Quartz.kCGMouseButtonLeft),
-    )
+    _mouse.release(Button.left)
 
 
 def scroll(dx: int = 0, dy: int = 0) -> None:
-    ev = Quartz.CGEventCreateScrollWheelEvent(None, Quartz.kCGScrollEventUnitLine, 2, int(dy), int(dx))
-    Quartz.CGEventPost(Quartz.kCGHIDEventTap, ev)
+    _mouse.scroll(dx, dy)
 
 
 # ---------------------------------------------------------------------------
@@ -156,9 +137,8 @@ def click_on_screen(description: str, action: str = "click") -> str:
         click(x, y, button="right")
         return f"'{description}' rechtsgeklickt."
     if action == "move":
-        # No pure-hover primitive via osascript; approximate with a click.
-        click(x, y)
-        return f"Bei '{description}' geklickt (reines Bewegen ohne Klick wird gerade nicht unterstützt)."
+        move(x, y)
+        return f"Zu '{description}' bewegt."
 
     click(x, y)
     return f"'{description}' angeklickt."

@@ -11,6 +11,7 @@ voice loop that long would make Jarvis feel dead.
 """
 
 import os
+import platform
 import shutil
 import subprocess
 import threading
@@ -18,7 +19,11 @@ from pathlib import Path
 
 from . import panel
 
-CLAUDE_BIN = shutil.which("claude") or str(Path.home() / ".local/bin/claude")
+IS_WINDOWS = platform.system() == "Windows"
+
+CLAUDE_BIN = shutil.which("claude") or str(
+    (Path.home() / "AppData/Roaming/npm/claude.cmd") if IS_WINDOWS else (Path.home() / ".local/bin/claude")
+)
 BUILD_TIMEOUT_S = 1800  # 30 min
 
 # Interesting files to surface in the panel once a build finishes.
@@ -49,20 +54,27 @@ def expand(location: str) -> Path:
     return Path.home() / "Desktop" / p
 
 
+def _open_native(target: Path) -> None:
+    if IS_WINDOWS:
+        os.startfile(str(target))  # noqa: S606 - target is a path we just built/checked, not user shell input
+    else:
+        subprocess.run(["open", str(target)], timeout=30, capture_output=True)
+
+
 def open_path(path: Path) -> None:
     """Show the result: editor for the folder, browser for a web page."""
     try:
         if shutil.which("code"):
             subprocess.run(["code", str(path)], timeout=30, capture_output=True)
         else:
-            subprocess.run(["open", str(path)], timeout=30, capture_output=True)
+            _open_native(path)
     except Exception:
         pass
 
     index = path / "index.html"
     if index.exists():
         try:
-            subprocess.run(["open", str(index)], timeout=30, capture_output=True)
+            _open_native(index)
         except Exception:
             pass
 

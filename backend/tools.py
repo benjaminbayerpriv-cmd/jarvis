@@ -1,4 +1,6 @@
 import datetime
+import os
+import platform
 import re
 import shutil
 import subprocess
@@ -8,6 +10,8 @@ from pathlib import Path
 import requests
 
 from . import coder, config, mouse, panel, vision
+
+IS_WINDOWS = platform.system() == "Windows"
 
 TOOL_SCHEMAS = [
     {
@@ -66,7 +70,7 @@ TOOL_SCHEMAS = [
         "function": {
             "name": "open_app",
             "description": (
-                "Ein Programm auf dem Mac öffnen, z.B. Spotify, Obsidian, Terminal, "
+                "Ein Programm auf dem Computer öffnen, z.B. Spotify, Obsidian, Terminal, "
                 "Visual Studio Code, Discord, Rechner, Notizen."
             ),
             "parameters": {
@@ -118,7 +122,7 @@ TOOL_SCHEMAS = [
         "function": {
             "name": "run_shell",
             "description": (
-                "Einen Shell-Befehl auf dem Mac ausführen und die Ausgabe bekommen. "
+                "Einen Shell-Befehl auf dem Computer ausführen und die Ausgabe bekommen. "
                 "Für Systeminfos, Dateien suchen, Ordner anlegen, git, Prozesse prüfen. "
                 "NICHT für das Bauen von Projekten — dafür build_project nutzen."
             ),
@@ -252,6 +256,11 @@ _BLOCKED = [
     r">\s*/dev/(disk|sd)",
     r"\bdiskutil\s+(erase|reformat)",
     r"\bchmod\s+-R\s+777\s+/(\s|$)",
+    # Windows equivalents of the above.
+    r"\bformat\s+[a-z]:",
+    r"\bdel\s+/[a-z]*\s+.*[a-z]:\\\\?\s*$",
+    r"remove-item\s+.*-recurse\b.*[a-z]:\\\\?\s*$",
+    r"\bvssadmin\s+delete\b",
 ]
 
 
@@ -312,7 +321,7 @@ def _open_url(url: str) -> str:
     return f"{url} geöffnet."
 
 
-def _resolve_app(name: str) -> str | None:
+def _resolve_app_macos(name: str) -> str | None:
     """Find an app bundle by the name a German speaker would actually say.
 
     `open -a Rechner` fails because the bundle is Calculator.app — the German
@@ -335,22 +344,70 @@ def _resolve_app(name: str) -> str | None:
         return None
 
 
-def _open_app(name: str) -> str:
-    name = name.strip()
-    if not name:
-        return "Welches Programm soll ich öffnen?"
-
+def _open_app_macos(name: str) -> str:
     try:
         proc = subprocess.run(["open", "-a", name], capture_output=True, text=True, timeout=20)
         if proc.returncode == 0:
             return f"{name} geöffnet."
 
-        resolved = _resolve_app(name)
+        resolved = _resolve_app_macos(name)
         if resolved:
             proc = subprocess.run(["open", resolved], capture_output=True, text=True, timeout=20)
             if proc.returncode == 0:
                 return f"{name} geöffnet."
         return f"Konnte '{name}' nicht finden. Heißt das Programm vielleicht anders?"
+    except Exception as exc:
+        return f"Konnte '{name}' nicht öffnen: {exc}"
+
+
+def _find_start_menu_shortcut(name: str) -> str | None:
+    """Windows has no Spotlight, but every installed program gets a .lnk
+    shortcut in one of the (per-user or all-users) Start Menu folders —
+    close enough to a name lookup."""
+    roots = [
+        Path(os.environ.get("ProgramData", "")) / "Microsoft/Windows/Start Menu/Programs",
+        Path(os.environ.get("APPDATA", "")) / "Microsoft/Windows/Start Menu/Programs",
+    ]
+    name_lower = name.lower()
+    hits = []
+    for root in roots:
+        if not root.is_dir():
+            continue
+        for f in root.rglob("*.lnk"):
+            if name_lower in f.stem.lower():
+                hits.append(f)
+    if not hits:
+        return None
+    hits.sort(key=lambda p: len(p.stem))
+    return str(hits[0])
+
+
+def _open_app_windows(name: str) -> str:
+    # os.startfile resolves anything Windows itself would know how to run:
+    # an exe on PATH, a registered "App Path", a URL, a document.
+    try:
+        os.startfile(name)  # noqa: S606 - name comes from the LLM's tool call, not raw shell input
+        return f"{name} geöffnet."
+    except OSError:
+        pass
+
+    resolved = _find_start_menu_shortcut(name)
+    if resolved:
+        try:
+            os.startfile(resolved)
+            return f"{name} geöffnet."
+        except OSError:
+            pass
+
+    return f"Konnte '{name}' nicht finden. Heißt das Programm vielleicht anders?"
+
+
+def _open_app(name: str) -> str:
+    name = name.strip()
+    if not name:
+        return "Welches Programm soll ich öffnen?"
+    try:
+        return _open_app_windows(name) if IS_WINDOWS else _open_app_macos(name)
     except Exception as exc:
         return f"Konnte '{name}' nicht öffnen: {exc}"
 
@@ -413,11 +470,8 @@ def _mouse_action(a: dict) -> str:
     y = clamp(float(a.get("y", 0)), 0, h)
 
     if action == "move":
-        # osascript's "click at" is the only reliable primitive here (see
-        # mouse.py), so a bare hover-move isn't available — approximate
-        # with a click, which is what the user almost always actually wants.
-        mouse.click(x, y)
-        return f"Bei ({int(x)}, {int(y)}) geklickt (reines Bewegen wird nicht unterstützt)."
+        mouse.move(x, y)
+        return f"Maus zu ({int(x)}, {int(y)}) bewegt."
     if action == "click":
         mouse.click(x, y, button=a.get("button", "left"))
         return f"Bei ({int(x)}, {int(y)}) geklickt."
