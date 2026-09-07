@@ -1291,38 +1291,9 @@ camToggleBtn.addEventListener("click", () => {
   }
 });
 
-// COCO-SSD's 80 classes, in the order the model was trained on — kept as
-// a plain array so a detection's numeric classId (not exposed by the JS
-// API, which only gives the already-English `class` name) isn't needed;
-// translating by name instead.
-const COCO_LABELS_DE = {
-  person: "Person", bicycle: "Fahrrad", car: "Auto", motorcycle: "Motorrad",
-  airplane: "Flugzeug", bus: "Bus", train: "Zug", truck: "Lkw", boat: "Boot",
-  "traffic light": "Ampel", "fire hydrant": "Hydrant", "stop sign": "Stoppschild",
-  "parking meter": "Parkuhr", bench: "Bank", bird: "Vogel", cat: "Katze",
-  dog: "Hund", horse: "Pferd", sheep: "Schaf", cow: "Kuh", elephant: "Elefant",
-  bear: "Bär", zebra: "Zebra", giraffe: "Giraffe", backpack: "Rucksack",
-  umbrella: "Regenschirm", handbag: "Handtasche", tie: "Krawatte",
-  suitcase: "Koffer", frisbee: "Frisbee", skis: "Skier", snowboard: "Snowboard",
-  "sports ball": "Ball", kite: "Drachen", "baseball bat": "Baseballschläger",
-  "baseball glove": "Baseballhandschuh", skateboard: "Skateboard",
-  surfboard: "Surfbrett", "tennis racket": "Tennisschläger", bottle: "Flasche",
-  "wine glass": "Weinglas", cup: "Tasse", fork: "Gabel", knife: "Messer",
-  spoon: "Löffel", bowl: "Schüssel", banana: "Banane", apple: "Apfel",
-  sandwich: "Sandwich", orange: "Orange", broccoli: "Brokkoli",
-  carrot: "Karotte", "hot dog": "Hotdog", pizza: "Pizza", donut: "Donut",
-  cake: "Kuchen", chair: "Stuhl", couch: "Sofa", "potted plant": "Topfpflanze",
-  bed: "Bett", "dining table": "Tisch", toilet: "Toilette", tv: "Fernseher",
-  laptop: "Laptop", mouse: "Maus", remote: "Fernbedienung",
-  keyboard: "Tastatur", "cell phone": "Handy", microwave: "Mikrowelle",
-  oven: "Backofen", toaster: "Toaster", sink: "Spüle",
-  refrigerator: "Kühlschrank", book: "Buch", clock: "Uhr", vase: "Vase",
-  scissors: "Schere", "teddy bear": "Teddybär", "hair drier": "Föhn",
-  toothbrush: "Zahnbürste",
-};
-
 // MediaPipe's 21 hand landmarks, connected into the standard skeleton —
-// index numbering per the official hand-landmark model (0 = wrist).
+// index numbering per the official hand-landmark model (0 = wrist). Used
+// for both the left and right hand.
 const HAND_CONNECTIONS = [
   [0, 1], [1, 2], [2, 3], [3, 4],
   [0, 5], [5, 6], [6, 7], [7, 8],
@@ -1332,13 +1303,73 @@ const HAND_CONNECTIONS = [
   [0, 17],
 ];
 
+// The 33-point BlazePose body skeleton, restricted to shoulders/arms/hips/
+// legs/feet only — indices 0-10 (nose, eyes, ears, mouth) are the face
+// landmarks and are deliberately left out of both this list and anywhere
+// it's drawn, since a face overlay was never wanted here.
+const POSE_CONNECTIONS = [
+  [11, 12],
+  [11, 13], [13, 15],
+  [12, 14], [14, 16],
+  [11, 23], [12, 24], [23, 24],
+  [23, 25], [25, 27],
+  [24, 26], [26, 28],
+  [27, 29], [29, 31], [27, 31],
+  [28, 30], [30, 32], [28, 32],
+];
+
 let camStream = null;
-let handsModel = null;
-let cocoModel = null;
 let camLoopRunning = false;
-let latestHandLandmarks = null; // MediaPipe's raw landmark list, or null
-let latestDetections = [];      // COCO-SSD's last result
-let detectingObjects = false;
+let latestPose = null;      // {x,y,z}[33] normalized, or null
+let latestLeftHand = null;  // {x,y,z}[21] normalized, or null
+let latestRightHand = null; // {x,y,z}[21] normalized, or null
+
+// Body/hand tracking (MediaPipe Tasks HolisticLandmarker) in its own
+// worker — see the long comment at the top of tracking-worker.js for why
+// this has to be a classic worker (no { type: "module" }) despite the
+// underlying package being ESM-only upstream.
+let trackingWorker = null;
+let trackingReady = false;
+let trackingReadyResolve;
+const trackingReadyPromise = new Promise((resolve) => { trackingReadyResolve = resolve; });
+let trackingRequestId = 0;
+const pendingTrackingResolvers = new Map();
+let trackingBusy = false;
+let trackingFrameCount = 0;
+let trackingMsTotal = 0;
+
+function ensureTrackingWorker() {
+  if (trackingWorker) return;
+  trackingWorker = new Worker("/static/tracking-worker.js");
+  trackingWorker.onmessage = (e) => {
+    const { type, id } = e.data;
+    if (type === "ready") {
+      trackingReady = true;
+      // GPU vs. CPU delegate is a 10-20x speed difference for this model —
+      // if tracking feels slow/laggy, check this line first.
+      console.log(`[tracking-worker] ready, delegate: ${e.data.delegate}`);
+      trackingReadyResolve();
+      return;
+    }
+    const resolve = pendingTrackingResolvers.get(id);
+    if (!resolve) return;
+    pendingTrackingResolvers.delete(id);
+    if (type === "error") {
+      console.error("[tracking-worker]", e.data.error);
+      resolve(null);
+    } else {
+      trackingFrameCount++;
+      trackingMsTotal += e.data.ms || 0;
+      if (trackingFrameCount % 30 === 0) {
+        console.log(
+          `[tracking-worker] avg ${(trackingMsTotal / trackingFrameCount).toFixed(1)}ms/frame ` +
+          `over ${trackingFrameCount} frames (last: ${(e.data.ms || 0).toFixed(1)}ms)`
+        );
+      }
+      resolve(e.data);
+    }
+  };
+}
 
 function resizeCamCanvas() {
   const rect = camCanvas.getBoundingClientRect();
@@ -1364,38 +1395,13 @@ async function startCamera() {
     resizeCamCanvas();
     camHint.textContent = "Lade Modelle …";
 
-    if (!handsModel) {
-      handsModel = new Hands({
-        locateFile: (file) =>
-          `https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/${file}`,
-      });
-      handsModel.setOptions({
-        maxNumHands: 1,
-        modelComplexity: 0,
-        minDetectionConfidence: 0.6,
-        minTrackingConfidence: 0.5,
-      });
-      handsModel.onResults((results) => {
-        latestHandLandmarks =
-          (results.multiHandLandmarks && results.multiHandLandmarks[0]) || null;
-      });
-    }
-    if (!cocoModel) {
-      // mobilenet_v2 over the lighter lite_mobilenet_v2 — noticeably more
-      // accurate at recognizing what's actually in frame, still fast
-      // enough to run on the slower interval this checks on (see
-      // runObjectDetection / setInterval below). Still limited to
-      // COCO's fixed 80 classes either way — no COCO-SSD accuracy tuning
-      // fixes that, only a different (much heavier, not browser-viable —
-      // see SAM 3, ~3.4GB) open-vocabulary model would.
-      cocoModel = await cocoSsd.load({ base: "mobilenet_v2" });
-    }
+    ensureTrackingWorker();
+    await trackingReadyPromise;
 
     camHint.textContent = "";
     camLoopRunning = true;
     requestAnimationFrame(drawLoop);
-    requestAnimationFrame(handsLoop);
-    setInterval(runObjectDetection, 700);
+    trackingLoop();
   } catch (err) {
     console.error(err);
     camHint.textContent = "Kamera abgelehnt oder Modelle nicht ladbar.";
@@ -1412,8 +1418,9 @@ function stopCamera() {
   camStream.getTracks().forEach((track) => track.stop());
   camStream = null;
   camVideo.srcObject = null;
-  latestHandLandmarks = null;
-  latestDetections = [];
+  latestPose = null;
+  latestLeftHand = null;
+  latestRightHand = null;
   camHint.textContent = "";
 }
 
@@ -1428,43 +1435,68 @@ function drawLoop() {
   requestAnimationFrame(drawLoop);
 }
 
-// Hand tracking self-throttles to whatever rate MediaPipe can actually
-// sustain: a new send() only starts once the previous one's promise has
-// resolved, so on a slow machine this naturally runs at, say, 12fps while
-// drawLoop above keeps drawing the video at the full 30/60fps the camera
-// and display can do — the skeleton overlay just updates less often, it
-// never holds the video itself back.
-let handsBusy = false;
-
-async function handsLoop() {
+// Body/hand tracking self-throttles to whatever rate the worker can
+// actually sustain: a new request only starts once the previous one's
+// response has arrived, so on a slow machine this naturally runs slower
+// while drawLoop above keeps drawing the video at the full 30/60fps the
+// camera and display can do — the skeleton overlay just updates less
+// often, it never holds the video itself back (and, since this runs in a
+// Worker, it doesn't hold the rest of the page's main thread back either).
+function trackingLoop() {
   if (!camLoopRunning) return;
-  if (handsModel && !handsBusy && camVideo.readyState >= 2) {
-    handsBusy = true;
-    try {
-      await handsModel.send({ image: camVideo });
-    } finally {
-      handsBusy = false;
-    }
+  if (trackingReady && !trackingBusy && camVideo.readyState >= 2) {
+    trackingBusy = true;
+    detectTracking().finally(() => {
+      trackingBusy = false;
+    });
   }
-  requestAnimationFrame(handsLoop);
+  setTimeout(trackingLoop, 15);
 }
 
-async function runObjectDetection() {
-  if (!camLoopRunning || !cocoModel || detectingObjects || camVideo.readyState < 2) return;
-  detectingObjects = true;
-  try {
-    latestDetections = await cocoModel.detect(camVideo);
-  } catch (_) {
-    // Transient (e.g. a frame mid-resize) — the next interval tick retries.
-  } finally {
-    detectingObjects = false;
+async function detectTracking() {
+  if (!camVideo.videoWidth || !camVideo.videoHeight) return;
+  const bitmap = await createImageBitmap(camVideo);
+  const id = ++trackingRequestId;
+  const data = await new Promise((resolve) => {
+    pendingTrackingResolvers.set(id, resolve);
+    trackingWorker.postMessage(
+      { type: "detect", id, bitmap, timestamp: Math.trunc(performance.now()) },
+      [bitmap]
+    );
+  });
+  latestPose = data && data.pose;
+  latestLeftHand = data && data.leftHand;
+  latestRightHand = data && data.rightHand;
+}
+
+// `skipBelow` drops landmark indices below it entirely (dots included, not
+// just the connection lines) — used to keep the pose skeleton's face
+// points (indices 0-10) off screen, since a face overlay was never wanted.
+function drawSkeleton(points, connections, w, h, skipBelow = 0) {
+  camCtx.strokeStyle = "#2be2e2";
+  camCtx.fillStyle = "#2be2e2";
+  camCtx.lineWidth = 2;
+  for (const [a, b] of connections) {
+    const pa = points[a], pb = points[b];
+    if (!pa || !pb) continue;
+    camCtx.beginPath();
+    camCtx.moveTo(pa.x * w, pa.y * h);
+    camCtx.lineTo(pb.x * w, pb.y * h);
+    camCtx.stroke();
+  }
+  for (let i = skipBelow; i < points.length; i++) {
+    const p = points[i];
+    camCtx.beginPath();
+    camCtx.arc(p.x * w, p.y * h, 3, 0, Math.PI * 2);
+    camCtx.fill();
   }
 }
 
-// Everything drawn on the canvas — video, hand skeleton, detection boxes —
-// shares one mirrored transform (front-camera convention) so a hand
+// Everything drawn on the canvas — video, body and both hand skeletons —
+// shares one mirrored transform (front-camera convention) so an arm
 // reaching from the right of the *frame* still appears to reach from the
-// right on screen, matching what looking at your own hand feels like.
+// right on screen, matching what looking at yourself in a mirror feels
+// like.
 function drawCamOverlay() {
   const w = camCanvas.clientWidth, h = camCanvas.clientHeight;
   if (!w || !h || !camVideo.videoWidth) return;
@@ -1475,61 +1507,10 @@ function drawCamOverlay() {
   camCtx.scale(-1, 1);
   camCtx.drawImage(camVideo, 0, 0, w, h);
 
-  // Every object COCO-SSD currently sees anywhere in the frame — not just
-  // whatever's closest to the hand — each with its own box and label.
-  if (latestDetections.length && camVideo.videoWidth) {
-    const vw = camVideo.videoWidth, vh = camVideo.videoHeight;
-    for (const det of latestDetections) {
-      drawDetectionBox(det, vw, vh, w, h);
-    }
-  }
+  if (latestPose) drawSkeleton(latestPose, POSE_CONNECTIONS, w, h, 11);
+  if (latestLeftHand) drawSkeleton(latestLeftHand, HAND_CONNECTIONS, w, h);
+  if (latestRightHand) drawSkeleton(latestRightHand, HAND_CONNECTIONS, w, h);
 
-  if (latestHandLandmarks) {
-    camCtx.strokeStyle = "#2be2e2";
-    camCtx.fillStyle = "#2be2e2";
-    camCtx.lineWidth = 2;
-    for (const [a, b] of HAND_CONNECTIONS) {
-      const pa = latestHandLandmarks[a], pb = latestHandLandmarks[b];
-      camCtx.beginPath();
-      camCtx.moveTo(pa.x * w, pa.y * h);
-      camCtx.lineTo(pb.x * w, pb.y * h);
-      camCtx.stroke();
-    }
-    for (const p of latestHandLandmarks) {
-      camCtx.beginPath();
-      camCtx.arc(p.x * w, p.y * h, 3, 0, Math.PI * 2);
-      camCtx.fill();
-    }
-  }
-
-  camCtx.restore();
-}
-
-// Draws one COCO-SSD detection's box plus its (German) label. `det.bbox` is
-// in the video's native pixel size, so it's scaled into the canvas's own
-// (possibly different) pixel size first.
-function drawDetectionBox(det, vw, vh, w, h) {
-  const [x, y, bw, bh] = det.bbox;
-  const scaleX = w / vw, scaleY = h / vh;
-  const bx = x * scaleX, by = y * scaleY, bwPx = bw * scaleX, bhPx = bh * scaleY;
-  const label = COCO_LABELS_DE[det.class] || det.class;
-
-  camCtx.strokeStyle = "#2be2e2";
-  camCtx.lineWidth = 2;
-  camCtx.strokeRect(bx, by, bwPx, bhPx);
-
-  // Text needs to read left-to-right — undo the mirroring just for the
-  // label itself, translating first so it still lands at the box.
-  camCtx.save();
-  camCtx.translate(bx + bwPx, by);
-  camCtx.scale(-1, 1);
-  camCtx.font = "600 13px " + getComputedStyle(document.body).fontFamily;
-  camCtx.textAlign = "left";
-  const textWidth = camCtx.measureText(label).width;
-  camCtx.fillStyle = "rgba(18, 18, 15, 0.85)";
-  camCtx.fillRect(0, -20, textWidth + 12, 20);
-  camCtx.fillStyle = "#2be2e2";
-  camCtx.fillText(label, 6, -5);
   camCtx.restore();
 }
 
