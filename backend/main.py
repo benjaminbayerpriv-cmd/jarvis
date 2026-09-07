@@ -83,6 +83,11 @@ async def on_startup():
 class ChatRequest(BaseModel):
     message: str
     history: list[dict] | None = None
+    turn_id: str | None = None
+
+
+class CancelRequest(BaseModel):
+    turn_id: str
 
 
 class ChatResponse(BaseModel):
@@ -202,7 +207,7 @@ def chat_stream(req: ChatRequest):
     def generate():
         full_text = ""
         try:
-            for event in llm_client.stream_reply(req.message, req.history):
+            for event in llm_client.stream_reply(req.message, req.history, turn_id=req.turn_id):
                 if event["type"] == "sentence":
                     text = event["text"]
                     # Speech is optional; the words are not. If synthesis
@@ -239,6 +244,19 @@ def chat_stream(req: ChatRequest):
             yield json.dumps({"type": "done", "full_text": fallback}) + "\n"
 
     return StreamingResponse(generate(), media_type="application/x-ndjson")
+
+
+@app.post("/chat/cancel")
+def chat_cancel(req: CancelRequest):
+    """Called by the frontend's stop button. A tool call (open_url and
+    friends) runs synchronously inside stream_reply with no yield point in
+    between — the HTTP connection dropping when the browser aborts its
+    fetch is invisible to that running generator, so without this a click
+    on Stop could never actually stop an action already underway, only
+    silence the reply once it came back. This flags the turn so
+    stream_reply can check it right before the next tool actually runs."""
+    llm_client.cancel_turn(req.turn_id)
+    return {"ok": True}
 
 
 @app.get("/browser/status")
