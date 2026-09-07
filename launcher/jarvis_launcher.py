@@ -187,7 +187,22 @@ def main() -> None:
             js_api=api,
         )
         api.window = window
-        webview.start()
+        # Windows only: forces pywebview's Qt backend (PyQt6 + QtWebEngine,
+        # installed via `pip install pywebview[qt6]`) instead of letting it
+        # default to edgechromium/WinForms. WinForms' transparent=True only
+        # makes the WebView2 *control's* background see-through, never the
+        # containing Form itself — real desktop transparency needs
+        # Form.AllowTransparency, which that backend never sets (confirmed
+        # by reading webview/platforms/winforms.py directly). Patching that
+        # in was tried and reverted: it does make the window transparent,
+        # but also breaks Windows' accessibility Bounds lookup on the Form
+        # ("maximum recursion depth exceeded", observed live). Qt's own
+        # QWidget.setAttribute(Qt.WA_TranslucentBackground) — what
+        # webview/platforms/qt.py actually uses — is the standard,
+        # well-tested mechanism real transparent Qt windows use; no patching
+        # needed. macOS already gets proper transparency from the cocoa
+        # backend, so this is Windows-only.
+        webview.start(gui="qt" if IS_WINDOWS else None)
     finally:
         # The window closing is the signal to shut everything down — a
         # server left running invisibly in the background, un-killable
