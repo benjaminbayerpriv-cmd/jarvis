@@ -6,6 +6,19 @@ const inputEl = document.getElementById("input");
 const startBtn = document.getElementById("startBtn");
 const muteBtn = document.getElementById("muteBtn");
 const stopBtn = document.getElementById("stopBtn");
+const quitBtn = document.getElementById("quitBtn");
+
+// Ends the whole backend process (see /shutdown in backend/main.py), not
+// just this browser tab — window.close() is a best-effort extra for the
+// packaged desktop app's webview window, which normally treats it like
+// its own native close button; in a plain browser tab it's usually a
+// no-op (browsers only allow closing script-opened windows), which is
+// fine since the page going dead once the backend is gone already reads
+// as "the program quit" either way.
+quitBtn.addEventListener("click", () => {
+  fetch("/shutdown", { method: "POST" }).catch(() => {});
+  window.close();
+});
 
 // #log/#input/composer are the small chat panel (id="debugPanel", see
 // index.html) — collapsed by default, toggled open by chatToggleBtn below.
@@ -364,7 +377,12 @@ function renderOrb(level, stateName) {
 
   // Outer dust ring and segmented scanner ring first (furthest back) — both
   // flat 2D circles, independent of the sphere's own 3D tilt/spin below.
-  drawDustRing(cx, cy, outerR, orbSpin, ringColor, 0.55 * listenPulse);
+  // The dust ring's own jagged-boundary distortion (boundaryRadiusFactor)
+  // plus per-particle jitter can push individual dust motes up to ~14%
+  // past their nominal radius — at a base of outerR that overshoots the
+  // canvas edge and gets clipped at the sides, so it's drawn at 0.85x
+  // outerR instead of the full radius to leave room for that swing.
+  drawDustRing(cx, cy, outerR * 0.85, orbSpin, ringColor, 0.55 * listenPulse);
   drawSegmentRing(cx, cy, outerR * 0.82, orbSpin, ringColor, level, 0.75 * listenPulse);
 
   const projected = orbVerts.map((v) => {
@@ -1249,14 +1267,14 @@ setState("idle");
 const camVideo = document.getElementById("camVideo");
 const camCanvas = document.getElementById("camOverlay");
 const camCtx = camCanvas.getContext("2d");
-const camStartBtn = document.getElementById("camStartBtn");
 const camHint = document.getElementById("camHint");
 const camColumn = document.getElementById("camColumn");
 const camToggleBtn = document.getElementById("camToggleBtn");
 
-// Collapsed by default (see index.html) — toggling just flips the CSS
-// class; camStartBtn/camStream/the tracking loop are untouched, so a
-// camera already running keeps running quietly behind a collapsed column.
+// Collapsed by default (see index.html) — expanding starts the camera
+// right away (startCamera no-ops if already running), collapsing stops
+// it outright (see stopCamera) instead of leaving it running behind a
+// hidden panel.
 camToggleBtn.addEventListener("click", () => {
   const collapsed = camColumn.classList.toggle("collapsed");
   document.body.classList.toggle("cam-expanded", !collapsed);
@@ -1265,7 +1283,12 @@ camToggleBtn.addEventListener("click", () => {
   camToggleBtn.classList.toggle("open", !collapsed);
   camToggleBtn.title = camToggleBtn.ariaLabel =
     collapsed ? "Kamerafenster ausklappen" : "Kamerafenster einklappen";
-  if (!collapsed) resizeCamCanvas();
+  if (collapsed) {
+    stopCamera();
+  } else {
+    resizeCamCanvas();
+    startCamera();
+  }
 });
 
 // COCO-SSD's 80 classes, in the order the model was trained on — kept as
@@ -1326,8 +1349,6 @@ function resizeCamCanvas() {
 }
 window.addEventListener("resize", resizeCamCanvas);
 
-camStartBtn.addEventListener("click", startCamera);
-
 async function startCamera() {
   if (camStream) return;
   camHint.textContent = "Starte Kamera …";
@@ -1341,7 +1362,6 @@ async function startCamera() {
     camVideo.srcObject = camStream;
     await camVideo.play();
     resizeCamCanvas();
-    camStartBtn.hidden = true;
     camHint.textContent = "Lade Modelle …";
 
     if (!handsModel) {
@@ -1379,9 +1399,22 @@ async function startCamera() {
   } catch (err) {
     console.error(err);
     camHint.textContent = "Kamera abgelehnt oder Modelle nicht ladbar.";
-    camStartBtn.hidden = false;
     camStream = null;
   }
+}
+
+// Called when the camera column collapses — releases the actual hardware
+// (a stopped MediaStreamTrack turns off the OS-level camera light, not
+// just this tab's use of it) instead of leaving it running invisibly.
+function stopCamera() {
+  if (!camStream) return;
+  camLoopRunning = false;
+  camStream.getTracks().forEach((track) => track.stop());
+  camStream = null;
+  camVideo.srcObject = null;
+  latestHandLandmarks = null;
+  latestDetections = [];
+  camHint.textContent = "";
 }
 
 // Drawing the video frame is its own loop, uncoupled from hand tracking —
@@ -1417,7 +1450,7 @@ async function handsLoop() {
 }
 
 async function runObjectDetection() {
-  if (!cocoModel || detectingObjects || camVideo.readyState < 2) return;
+  if (!camLoopRunning || !cocoModel || detectingObjects || camVideo.readyState < 2) return;
   detectingObjects = true;
   try {
     latestDetections = await cocoModel.detect(camVideo);
