@@ -53,14 +53,98 @@ button { font-family: var(--mono); cursor: pointer; }
 }
 
 .jarvis-column {
-  flex: 0 0 auto;
-  width: 300px;
+  /* Centered across the whole stage by default (the cam column is
+     collapsed to 0 width then) — only pinned back to a fixed-width left
+     column, divider line included, once the camera panel is actually
+     expanded (see body.cam-expanded below). Border stays 1px solid
+     transparent rather than `none` so the color transition has something
+     to animate without a layout jump. */
+  flex: 1;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   gap: 16px;
-  border-right: 1px solid var(--line);
+  border-right: 1px solid transparent;
+  transition: flex-basis 220ms ease, border-color 220ms ease;
+}
+
+body.cam-expanded .jarvis-column {
+  flex: 0 0 300px;
+  border-right-color: var(--line);
+}
+
+/* Same collapse mechanic as .cam-column, mirrored on the left: 0 width by
+   default, an eighth of the stage once expanded — this was asked to stay
+   a small chat strip, not a full sidebar, so it's capped with vw rather
+   than left to grow with a wide window. min-width keeps the composer's
+   input actually usable on a narrow one. */
+.chat-column {
+  flex: 0 0 0;
+  width: 0;
+  min-width: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 0;
+  background: var(--housing);
+  border-right: 1px solid transparent;
+  transition: flex-basis 220ms ease, width 220ms ease, border-color 220ms ease;
+}
+
+/* Padding only applies once expanded — border-box can't shrink a box
+   below its own padding, so a "0 width" panel that still carried
+   left/right padding rendered at that padding's width instead of
+   actually vanishing. */
+.chat-column:not(.collapsed) {
+  flex: 0 0 12.5vw;
+  width: 12.5vw;
+  min-width: 200px;
+  padding: 20px 16px 16px;
+  border-right-color: var(--line);
+}
+
+.chat-toggle-btn {
+  position: absolute;
+  top: 14px;
+  left: 14px;
+  z-index: 5;
+}
+
+.deck-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 0 0 12px;
+  padding-left: 38px; /* clears the fixed chat-toggle-btn sitting on top */
+}
+
+.wordmark {
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+
+.state-pill {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: .06em;
+  color: var(--faint);
+}
+
+.state-pill .dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--sig-active);
 }
 
 .cam-column {
@@ -68,6 +152,24 @@ button { font-family: var(--mono); cursor: pointer; }
   position: relative;
   min-width: 0;
   background: #000;
+  overflow: hidden;
+  transition: flex-basis 220ms ease, width 220ms ease;
+}
+
+/* Collapsed to nothing rather than just hidden — flex:1 would otherwise
+   still claim the leftover space next to a width:0 box. Video/canvas keep
+   existing in the DOM (camStartBtn's own state — started or not — survives
+   a collapse/expand round trip untouched). */
+.cam-column.collapsed {
+  flex: 0 0 0;
+  width: 0;
+}
+
+.cam-toggle-btn {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  z-index: 5;
 }
 
 #camVideo { display: none; }
@@ -80,7 +182,9 @@ button { font-family: var(--mono); cursor: pointer; }
 
 #camStartBtn {
   position: absolute;
-  top: 14px;
+  /* Below the collapse toggle (top:14px, 30px tall) — they'd otherwise sit
+     in exactly the same corner once the column is expanded. */
+  top: 54px;
   right: 14px;
 }
 
@@ -137,6 +241,24 @@ button { font-family: var(--mono); cursor: pointer; }
 
 .icon-btn:hover { opacity: 1; color: var(--text); border-color: var(--dim); }
 .icon-btn[hidden] { display: none; }
+.icon-btn svg { display: block; }
+
+/* Mic icon: plain (unmuted) by default, a diagonal slash fades in only
+   while actually muted (see setMuted's .off toggle on #muteBtn). */
+.mic-slash { opacity: 0; transition: opacity 160ms; }
+.icon-btn#muteBtn.off .mic-slash { opacity: 1; }
+
+/* Chat bubble: the opposite default — crossed out while the chat panel is
+   collapsed (the normal starting state), plain once chatToggleBtn.open is
+   set by app.js on expand. */
+.chat-slash { opacity: 1; transition: opacity 160ms; }
+.chat-toggle-btn.open .chat-slash { opacity: 0; }
+
+/* Camera icon: same pattern as the chat bubble — crossed out while the
+   camera panel is collapsed (the default), plain once camToggleBtn.open
+   is set by app.js on expand. */
+.cam-slash { opacity: 1; transition: opacity 160ms; }
+.cam-toggle-btn.open .cam-slash { opacity: 0; }
 
 .icon-btn#muteBtn.off { color: var(--muted); border-color: color-mix(in srgb, var(--muted) 45%, var(--line)); opacity: 1; }
 
@@ -147,41 +269,6 @@ button { font-family: var(--mono); cursor: pointer; }
 .control-row {
   display: flex;
   gap: 8px;
-}
-
-/* Debug sidebar: the full transcript plus verbose tool-call log — the same
-   #log the orb view otherwise hides. Docked right, off-screen by default,
-   slid in via .open (toggled by the button above or Cmd/Ctrl+Shift+J).
-   Kept in normal flow (not display:none) so the input stays focusable even
-   while closed. */
-.hidden-chat {
-  position: fixed;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  width: min(420px, 92vw);
-  z-index: 6;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  padding: 20px 20px 16px;
-  background: var(--housing);
-  border-left: 1px solid var(--line);
-  transform: translateX(100%);
-  transition: transform 220ms cubic-bezier(.22, .61, .36, 1);
-}
-
-/* Shadow only while actually open — while closed, translateX(100%) only
-   moves the panel's own box off past the right edge, but a box-shadow
-   extends *beyond* that box, so the closed panel was still casting this
-   shadow back ~24-48px into view the whole time. Invisible in a normal
-   wide browser tab, but the floating widget's window is only a few
-   hundred px wide, so that leftover sliver became a permanent dark line
-   hugging the right edge — reported live as "a weird black glow where you
-   can see the window edge." */
-.hidden-chat.open {
-  transform: translateX(0);
-  box-shadow: -24px 0 48px -24px rgba(0, 0, 0, .5);
 }
 
 .hint {
