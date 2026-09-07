@@ -43,19 +43,62 @@ button { font-family: var(--mono); cursor: pointer; }
   outline-offset: 2px;
 }
 
-/* ---------- shell: just the orb and a mute button ---------- */
+/* ---------- shell: orb on the left, webcam/hand-tracking on the right ---------- */
 
 .stage {
   height: 100vh;
-  display: grid;
-  place-items: center;
+  display: flex;
+  align-items: stretch;
   position: relative;
+}
+
+.jarvis-column {
+  flex: 0 0 auto;
+  width: 300px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  border-right: 1px solid var(--line);
+}
+
+.cam-column {
+  flex: 1;
+  position: relative;
+  min-width: 0;
+  background: #000;
+}
+
+#camVideo { display: none; }
+
+#camOverlay {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+#camStartBtn {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+}
+
+.cam-hint {
+  position: absolute;
+  left: 14px;
+  bottom: 12px;
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  letter-spacing: .04em;
+  color: var(--dim);
 }
 
 .orb-wrap {
   position: relative;
-  width: min(74vh, 74vw, 460px);
-  height: min(74vh, 74vw, 460px);
+  width: min(50vh, 220px);
+  height: min(50vh, 220px);
 }
 
 #orb {
@@ -97,14 +140,9 @@ button { font-family: var(--mono); cursor: pointer; }
 
 .icon-btn#muteBtn.off { color: var(--muted); border-color: color-mix(in srgb, var(--muted) 45%, var(--line)); opacity: 1; }
 
-/* Sits right under the orb — offset scales with the orb's own min(vh,vw)
-   sizing so the gap stays proportional instead of colliding on a very
-   short window. */
+/* Just a normal flex child under the orb now — .jarvis-column centers both
+   with its own `gap`, no more absolute positioning needed. */
 .control-row {
-  position: absolute;
-  left: 50%;
-  top: calc(50% + min(37vh, 37vw, 230px) + 14px);
-  transform: translateX(-50%);
   display: flex;
   gap: 8px;
 }

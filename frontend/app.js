@@ -1204,3 +1204,252 @@ function connectWs() {
 
 connectWs();
 setState("idle");
+
+/* ---------- camera: hand tracking + naming the object near the hand ---------- */
+//
+// MediaPipe Hands finds the 21-point hand skeleton every frame (cheap
+// enough to run at full framerate); COCO-SSD's object detector is much
+// heavier, so it only runs on its own slower interval and its last result
+// is reused for every frame in between — objects near a hand don't
+// teleport, so a few hundred ms of staleness is invisible in practice.
+// Both models run entirely in the browser (no data leaves the machine),
+// same as the rest of Jarvis.
+
+const camVideo = document.getElementById("camVideo");
+const camCanvas = document.getElementById("camOverlay");
+const camCtx = camCanvas.getContext("2d");
+const camStartBtn = document.getElementById("camStartBtn");
+const camHint = document.getElementById("camHint");
+
+// COCO-SSD's 80 classes, in the order the model was trained on — kept as
+// a plain array so a detection's numeric classId (not exposed by the JS
+// API, which only gives the already-English `class` name) isn't needed;
+// translating by name instead.
+const COCO_LABELS_DE = {
+  person: "Person", bicycle: "Fahrrad", car: "Auto", motorcycle: "Motorrad",
+  airplane: "Flugzeug", bus: "Bus", train: "Zug", truck: "Lkw", boat: "Boot",
+  "traffic light": "Ampel", "fire hydrant": "Hydrant", "stop sign": "Stoppschild",
+  "parking meter": "Parkuhr", bench: "Bank", bird: "Vogel", cat: "Katze",
+  dog: "Hund", horse: "Pferd", sheep: "Schaf", cow: "Kuh", elephant: "Elefant",
+  bear: "Bär", zebra: "Zebra", giraffe: "Giraffe", backpack: "Rucksack",
+  umbrella: "Regenschirm", handbag: "Handtasche", tie: "Krawatte",
+  suitcase: "Koffer", frisbee: "Frisbee", skis: "Skier", snowboard: "Snowboard",
+  "sports ball": "Ball", kite: "Drachen", "baseball bat": "Baseballschläger",
+  "baseball glove": "Baseballhandschuh", skateboard: "Skateboard",
+  surfboard: "Surfbrett", "tennis racket": "Tennisschläger", bottle: "Flasche",
+  "wine glass": "Weinglas", cup: "Tasse", fork: "Gabel", knife: "Messer",
+  spoon: "Löffel", bowl: "Schüssel", banana: "Banane", apple: "Apfel",
+  sandwich: "Sandwich", orange: "Orange", broccoli: "Brokkoli",
+  carrot: "Karotte", "hot dog": "Hotdog", pizza: "Pizza", donut: "Donut",
+  cake: "Kuchen", chair: "Stuhl", couch: "Sofa", "potted plant": "Topfpflanze",
+  bed: "Bett", "dining table": "Tisch", toilet: "Toilette", tv: "Fernseher",
+  laptop: "Laptop", mouse: "Maus", remote: "Fernbedienung",
+  keyboard: "Tastatur", "cell phone": "Handy", microwave: "Mikrowelle",
+  oven: "Backofen", toaster: "Toaster", sink: "Spüle",
+  refrigerator: "Kühlschrank", book: "Buch", clock: "Uhr", vase: "Vase",
+  scissors: "Schere", "teddy bear": "Teddybär", "hair drier": "Föhn",
+  toothbrush: "Zahnbürste",
+};
+
+// MediaPipe's 21 hand landmarks, connected into the standard skeleton —
+// index numbering per the official hand-landmark model (0 = wrist).
+const HAND_CONNECTIONS = [
+  [0, 1], [1, 2], [2, 3], [3, 4],
+  [0, 5], [5, 6], [6, 7], [7, 8],
+  [5, 9], [9, 10], [10, 11], [11, 12],
+  [9, 13], [13, 14], [14, 15], [15, 16],
+  [13, 17], [17, 18], [18, 19], [19, 20],
+  [0, 17],
+];
+
+let camStream = null;
+let handsModel = null;
+let cocoModel = null;
+let camLoopRunning = false;
+let latestHandLandmarks = null; // MediaPipe's raw landmark list, or null
+let latestDetections = [];      // COCO-SSD's last result
+let detectingObjects = false;
+
+function resizeCamCanvas() {
+  const rect = camCanvas.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  camCanvas.width = Math.max(1, rect.width * dpr);
+  camCanvas.height = Math.max(1, rect.height * dpr);
+  camCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+window.addEventListener("resize", resizeCamCanvas);
+
+camStartBtn.addEventListener("click", startCamera);
+
+async function startCamera() {
+  if (camStream) return;
+  camHint.textContent = "Starte Kamera …";
+  try {
+    camStream = await navigator.mediaDevices.getUserMedia({
+      // frameRate is a request, not a guarantee — the camera/browser still
+      // picks whatever it can actually sustain — but leaving it unset
+      // tends to default lower than the hardware can really do.
+      video: { width: 1280, height: 720, frameRate: { ideal: 60 } },
+    });
+    camVideo.srcObject = camStream;
+    await camVideo.play();
+    resizeCamCanvas();
+    camStartBtn.hidden = true;
+    camHint.textContent = "Lade Modelle …";
+
+    if (!handsModel) {
+      handsModel = new Hands({
+        locateFile: (file) =>
+          `https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/${file}`,
+      });
+      handsModel.setOptions({
+        maxNumHands: 1,
+        modelComplexity: 0,
+        minDetectionConfidence: 0.6,
+        minTrackingConfidence: 0.5,
+      });
+      handsModel.onResults((results) => {
+        latestHandLandmarks =
+          (results.multiHandLandmarks && results.multiHandLandmarks[0]) || null;
+      });
+    }
+    if (!cocoModel) {
+      // mobilenet_v2 over the lighter lite_mobilenet_v2 — noticeably more
+      // accurate at recognizing what's actually in frame, still fast
+      // enough to run on the slower interval this checks on (see
+      // runObjectDetection / setInterval below). Still limited to
+      // COCO's fixed 80 classes either way — no COCO-SSD accuracy tuning
+      // fixes that, only a different (much heavier, not browser-viable —
+      // see SAM 3, ~3.4GB) open-vocabulary model would.
+      cocoModel = await cocoSsd.load({ base: "mobilenet_v2" });
+    }
+
+    camHint.textContent = "";
+    camLoopRunning = true;
+    requestAnimationFrame(drawLoop);
+    requestAnimationFrame(handsLoop);
+    setInterval(runObjectDetection, 700);
+  } catch (err) {
+    console.error(err);
+    camHint.textContent = "Kamera abgelehnt oder Modelle nicht ladbar.";
+    camStartBtn.hidden = false;
+    camStream = null;
+  }
+}
+
+// Drawing the video frame is its own loop, uncoupled from hand tracking —
+// it redraws every rAF tick (the display's own full refresh rate) no
+// matter how slow MediaPipe is running, instead of waiting on it each
+// frame like the old single combined loop did. The webcam feed itself
+// should never look choppier than the model behind it can keep up with.
+function drawLoop() {
+  if (!camLoopRunning) return;
+  drawCamOverlay();
+  requestAnimationFrame(drawLoop);
+}
+
+// Hand tracking self-throttles to whatever rate MediaPipe can actually
+// sustain: a new send() only starts once the previous one's promise has
+// resolved, so on a slow machine this naturally runs at, say, 12fps while
+// drawLoop above keeps drawing the video at the full 30/60fps the camera
+// and display can do — the skeleton overlay just updates less often, it
+// never holds the video itself back.
+let handsBusy = false;
+
+async function handsLoop() {
+  if (!camLoopRunning) return;
+  if (handsModel && !handsBusy && camVideo.readyState >= 2) {
+    handsBusy = true;
+    try {
+      await handsModel.send({ image: camVideo });
+    } finally {
+      handsBusy = false;
+    }
+  }
+  requestAnimationFrame(handsLoop);
+}
+
+async function runObjectDetection() {
+  if (!cocoModel || detectingObjects || camVideo.readyState < 2) return;
+  detectingObjects = true;
+  try {
+    latestDetections = await cocoModel.detect(camVideo);
+  } catch (_) {
+    // Transient (e.g. a frame mid-resize) — the next interval tick retries.
+  } finally {
+    detectingObjects = false;
+  }
+}
+
+// Everything drawn on the canvas — video, hand skeleton, detection boxes —
+// shares one mirrored transform (front-camera convention) so a hand
+// reaching from the right of the *frame* still appears to reach from the
+// right on screen, matching what looking at your own hand feels like.
+function drawCamOverlay() {
+  const w = camCanvas.clientWidth, h = camCanvas.clientHeight;
+  if (!w || !h || !camVideo.videoWidth) return;
+
+  camCtx.save();
+  camCtx.clearRect(0, 0, w, h);
+  camCtx.translate(w, 0);
+  camCtx.scale(-1, 1);
+  camCtx.drawImage(camVideo, 0, 0, w, h);
+
+  // Every object COCO-SSD currently sees anywhere in the frame — not just
+  // whatever's closest to the hand — each with its own box and label.
+  if (latestDetections.length && camVideo.videoWidth) {
+    const vw = camVideo.videoWidth, vh = camVideo.videoHeight;
+    for (const det of latestDetections) {
+      drawDetectionBox(det, vw, vh, w, h);
+    }
+  }
+
+  if (latestHandLandmarks) {
+    camCtx.strokeStyle = "#2be2e2";
+    camCtx.fillStyle = "#2be2e2";
+    camCtx.lineWidth = 2;
+    for (const [a, b] of HAND_CONNECTIONS) {
+      const pa = latestHandLandmarks[a], pb = latestHandLandmarks[b];
+      camCtx.beginPath();
+      camCtx.moveTo(pa.x * w, pa.y * h);
+      camCtx.lineTo(pb.x * w, pb.y * h);
+      camCtx.stroke();
+    }
+    for (const p of latestHandLandmarks) {
+      camCtx.beginPath();
+      camCtx.arc(p.x * w, p.y * h, 3, 0, Math.PI * 2);
+      camCtx.fill();
+    }
+  }
+
+  camCtx.restore();
+}
+
+// Draws one COCO-SSD detection's box plus its (German) label. `det.bbox` is
+// in the video's native pixel size, so it's scaled into the canvas's own
+// (possibly different) pixel size first.
+function drawDetectionBox(det, vw, vh, w, h) {
+  const [x, y, bw, bh] = det.bbox;
+  const scaleX = w / vw, scaleY = h / vh;
+  const bx = x * scaleX, by = y * scaleY, bwPx = bw * scaleX, bhPx = bh * scaleY;
+  const label = COCO_LABELS_DE[det.class] || det.class;
+
+  camCtx.strokeStyle = "#2be2e2";
+  camCtx.lineWidth = 2;
+  camCtx.strokeRect(bx, by, bwPx, bhPx);
+
+  // Text needs to read left-to-right — undo the mirroring just for the
+  // label itself, translating first so it still lands at the box.
+  camCtx.save();
+  camCtx.translate(bx + bwPx, by);
+  camCtx.scale(-1, 1);
+  camCtx.font = "600 13px " + getComputedStyle(document.body).fontFamily;
+  camCtx.textAlign = "left";
+  const textWidth = camCtx.measureText(label).width;
+  camCtx.fillStyle = "rgba(18, 18, 15, 0.85)";
+  camCtx.fillRect(0, -20, textWidth + 12, 20);
+  camCtx.fillStyle = "#2be2e2";
+  camCtx.fillText(label, 6, -5);
+  camCtx.restore();
+}
+

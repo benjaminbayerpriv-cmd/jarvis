@@ -33,8 +33,9 @@ URL = "http://127.0.0.1:8000"
 
 # A normal, opaque app window — its own title bar (with the OS's native
 # close/minimize controls) is how you close it, no custom frameless/
-# transparent/always-on-top widget behaviour.
-WINDOW_WIDTH = 480
+# transparent/always-on-top widget behaviour. Wider than before to fit the
+# orb column plus a real webcam view side by side (see frontend/index.html).
+WINDOW_WIDTH = 960
 WINDOW_HEIGHT = 640
 
 
@@ -149,7 +150,7 @@ def main() -> None:
             URL,
             width=WINDOW_WIDTH,
             height=WINDOW_HEIGHT,
-            min_size=(360, 480),
+            min_size=(640, 480),
         )
         webview.start()
     finally:
