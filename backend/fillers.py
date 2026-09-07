@@ -13,6 +13,16 @@ PHRASES = [
     "Ich bin gleich so weit.",
     "Einen Augenblick.",
     "Lass mich kurz checken.",
+    "Hmm, lass mich überlegen.",
+    "Ich bin dran, kurz Geduld.",
+    "Gib mir zwei Sekunden.",
+    "Ich schau grad nach.",
+    "Bin gleich fertig damit.",
+    "Kurzer Moment noch.",
+    "Ich denk kurz nach.",
+    "Sekunde, ich klär das.",
+    "Moment, das prüf ich eben.",
+    "Bleib kurz dran.",
 ]
 
 
