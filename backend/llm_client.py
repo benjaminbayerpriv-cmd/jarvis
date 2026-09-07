@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime
 import json
 import re
 from pathlib import Path
@@ -156,13 +157,15 @@ ist?" oder "soll ich nachschauen?", wenn du es einfach selbst nachschauen
 kannst, statt eine Gesprächsrunde zu verschwenden. Antworte erst, wenn du
 die eigentliche Frage wirklich beantworten kannst.
 
-Nenne NIEMALS ein Datum, eine Uhrzeit oder einen Wochentag aus eigenem
-Wissen — dein Training hat einen Stichtag in der Vergangenheit, du weißt
-nicht, welcher Tag heute wirklich ist. Sobald das aktuelle Datum, die
-Uhrzeit oder der Wochentag für die Antwort relevant sind (auch beiläufig,
+Für das aktuelle Datum, die Uhrzeit oder den Wochentag (auch beiläufig,
 z.B. "welches Jahr haben wir" oder eine Berechnung wie "wie alt ist
-jemand, der 1990 geboren ist"), ruf ZUERST get_time auf und nutze nur das
-Ergebnis — nie eine geratene oder aus dem Training erinnerte Zahl.
+jemand, der 1990 geboren ist") nutze IMMER exakt die Angabe aus "Gerade
+jetzt ist es: ..." oben — das ist der einzige echte Zeitpunkt, den du
+kennst. Nenne niemals ein Datum oder eine Uhrzeit aus eigenem Training
+(dessen Stichtag in der Vergangenheit liegt) oder aus einer früheren
+Erwähnung weiter oben im Gespräch, selbst wenn seither einige Nachrichten
+vergangen sind — diese Angabe wird bei jeder neuen Nachricht frisch
+aktualisiert, eine ältere Erwähnung im Verlauf ist es nicht.
 
 Ein run_shell-Befehl ohne Ausgabe ist KEIN Beweis für Erfolg — Befehle wie
 killall geben bei Erfolg und bei Misserfolg oft gar nichts aus. Behaupte
@@ -230,7 +233,17 @@ def _build_messages(user_message: str, history: list | None) -> list:
     # of that is folded into exactly one leading system message instead;
     # any system-role entry surviving in `history` (the summary) is merged
     # in here rather than passed through as its own message.
-    system_parts = [_system_prompt()]
+    # Injected as ground truth on every turn rather than left to the
+    # get_time tool alone: telling the model to "always call get_time
+    # first" (below in _system_prompt) still isn't reliable on its own — a
+    # long conversation that mentioned the time once earlier gave the
+    # model something to anchor on, and it estimated forward from that
+    # instead of calling the tool again (observed live: reported 13:45
+    # against an actual 14:12, 27 minutes stale). A fact stated fresh
+    # right here can't go stale the same way; get_time still exists for
+    # when the model wants to name it as an explicit action.
+    now = datetime.datetime.now().strftime("%A, %d.%m.%Y %H:%M")
+    system_parts = [_system_prompt(), f"Gerade jetzt ist es: {now}."]
     remembered = memory.context_for(user_message)
     if remembered:
         system_parts.append(f"Relevantes lokales Gedächtnis:\n{remembered}")
