@@ -14,19 +14,26 @@
       <canvas id="subOrb" aria-hidden="true" hidden></canvas>
     </div>
 
-    <div class="mic-dock">
-      <button class="mic-btn" id="startBtn">Mikrofon freigeben</button>
-      <button class="mic-btn" id="muteBtn" hidden>Mikro aus</button>
+    <!-- Icon-only, no labels — this row sits right under the orb, which
+         carries all the state a glance needs (colour = mic/speaking state).
+         Only one of startBtn/muteBtn is ever visible at a time. -->
+    <div class="control-row">
+      <button class="icon-btn" id="startBtn" aria-label="Mikrofon freigeben" title="Mikrofon freigeben">●</button>
+      <button class="icon-btn" id="muteBtn" aria-label="Mikro stumm/aktiv" title="Mikro stumm/aktiv" hidden>●</button>
+      <!-- Only does anything inside the packaged desktop app (see app.js) —
+           a plain browser tab has no window to close, so this stays hidden
+           there instead of showing a button that does nothing. -->
+      <button class="icon-btn" id="quitBtn" aria-label="Jarvis beenden" title="Beenden" hidden>×</button>
     </div>
 
-    <!-- title is set at runtime (app.js) to the platform's actual
-         modifier key — Cmd on macOS, Ctrl on Windows — instead of showing
-         both here unconditionally. -->
-    <button class="debug-toggle" id="debugToggle" aria-label="Debug-Ansicht ein/aus" title="Debug">≡</button>
-
-    <!-- Debug sidebar: full transcript + verbose tool-call log. Hidden by
-         default — the orb alone carries state for normal use — toggled via
-         the button above or the platform hotkey (see app.js). -->
+    <!-- No visible transcript/chat panel anymore — the orb + the two
+         small controls above are the entire UI. The turn-by-turn record
+         that used to live in a toggleable sidebar here now goes to
+         backend/transcript.log instead (see backend/transcript_log.py) —
+         a floating-widget-sized window has no room for a real chat view,
+         and this DOM is kept only because #log/#input are still written
+         to internally (tool-call/block rendering, text fallback input)
+         even with nothing on screen ever revealing them. -->
     <aside class="hidden-chat" id="debugPanel" hidden>
       <header class="deck-head">
         <span class="wordmark">Jarvis</span>

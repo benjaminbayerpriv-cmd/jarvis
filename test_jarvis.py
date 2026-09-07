@@ -54,7 +54,10 @@ CASES = [
     ("Ist irgendwo ein Virus in meinem Dokumente-Ordner?", "ANY"),
     ("Wie viel RAM hat dieser Mac?", "run_shell"),
     ("Wie viel freier Speicherplatz ist noch da?", "run_shell"),
-    ("Erklär mir ausführlich wie Docker funktioniert", "show_on_screen"),
+    # show_on_screen was removed along with the chat/debug panel it rendered
+    # into (the packaged app is now just a floating orb) — a long
+    # explanation has nowhere to go but speech, so no tool call is expected.
+    ("Erklär mir ausführlich wie Docker funktioniert", None),
     # Must ask where to build before doing anything.
     ("Bau mir einen Taschenrechner", None),
     # Pure knowledge — no tool should fire.
@@ -71,7 +74,6 @@ STUBS = {
     "write_file": "Datei geschrieben: notiz.txt (10 Zeichen).",
     "web_search": "Hamburg: rund 1,9 Millionen Einwohner (de.wikipedia.org)",
     "run_shell": "16 GB",
-    "show_on_screen": "Angezeigt.",
     "build_project": "Baue das Projekt.",
     "list_folder": "Inhalt von 'Dokumente': rechnung.pdf, urlaub/",
 }
