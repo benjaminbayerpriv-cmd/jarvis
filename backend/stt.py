@@ -8,13 +8,42 @@ transcription never leaves the machine.
 
 from __future__ import annotations
 
+import os
 import re
+import sys
 import tempfile
 import threading
+from pathlib import Path
 
-from faster_whisper import WhisperModel
 
-from . import config
+def _add_nvidia_dll_dirs() -> None:
+    """Make the cuBLAS/cuDNN DLLs from the `nvidia-*-cu12` pip packages
+    loadable on Windows.
+
+    Those packages ship the DLLs under site-packages/nvidia/<name>/bin, but
+    pip install alone doesn't put that on PATH and ctranslate2 has no
+    knowledge of it (unlike PyTorch, which patches its own DLL search path
+    for exactly this) — without this, WhisperModel(device="cuda") loads
+    fine but the first real transcribe() fails with "Library cublas64_12.dll
+    is not found or cannot be loaded", silently returning empty text.
+    """
+    if os.name != "nt":
+        return
+    nvidia_root = Path(sys.prefix) / "Lib" / "site-packages" / "nvidia"
+    if not nvidia_root.is_dir():
+        return
+    for bin_dir in nvidia_root.glob("*/bin"):
+        try:
+            os.add_dll_directory(str(bin_dir))
+        except OSError:
+            pass
+
+
+_add_nvidia_dll_dirs()
+
+from faster_whisper import WhisperModel  # noqa: E402
+
+from . import config  # noqa: E402
 
 _lock = threading.Lock()
 _model: WhisperModel | None = None
@@ -58,7 +87,14 @@ def _get_model() -> WhisperModel:
     if _model is None:
         with _lock:
             if _model is None:
-                _model = WhisperModel(config.WHISPER_MODEL, device="cpu", compute_type="int8")
+                try:
+                    # float16 on GPU: several times faster than CPU int8,
+                    # and this model is reloaded only once per process, so
+                    # the one-time GPU init cost is irrelevant afterwards.
+                    _model = WhisperModel(config.WHISPER_MODEL, device="cuda", compute_type="float16")
+                except Exception as exc:
+                    print(f"[stt] CUDA nicht verfügbar, falle auf CPU zurück: {exc}")
+                    _model = WhisperModel(config.WHISPER_MODEL, device="cpu", compute_type="int8")
     return _model
 
 
@@ -72,12 +108,18 @@ def transcribe(audio_bytes: bytes) -> str:
     utterance at a time anyway.
     """
     model = _get_model()
-    with tempfile.NamedTemporaryFile(suffix=".wav") as f:
-        f.write(audio_bytes)
-        f.flush()
+    # delete=False + a manual close before transcribe: on Windows, a file
+    # opened via NamedTemporaryFile is held exclusively, so passing its name
+    # to model.transcribe() while the handle is still open fails with
+    # PermissionError (WinError 13) — reproducible every time, invisible on
+    # macOS/Linux since those allow a second open on an already-open file.
+    fd, path = tempfile.mkstemp(suffix=".wav")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(audio_bytes)
         with _lock:
             segments, _info = model.transcribe(
-                f.name,
+                path,
                 language="de",
                 vad_filter=True,
                 # A hallucinated segment tends to seed the next one with the
@@ -87,6 +129,8 @@ def transcribe(audio_bytes: bytes) -> str:
             )
             kept = [seg.text.strip() for seg in segments if seg.no_speech_prob < _NO_SPEECH_THRESHOLD]
         text = " ".join(kept).strip()
+    finally:
+        os.remove(path)
 
     normalized = re.sub(r"[.!?]+$", "", text.strip().lower())
     if normalized in _HALLUCINATION_PHRASES:

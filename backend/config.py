@@ -16,11 +16,10 @@ SUPERTONIC_VOICE = os.environ.get("SUPERTONIC_VOICE", "M1")
 SUPERTONIC_LANG = os.environ.get("SUPERTONIC_LANG", "de")
 
 # Local speech-to-text (backend/stt.py) — replaces the browser's Web Speech
-# API, whose German recognition was complained about repeatedly. "medium"
-# costs ~2.7s per utterance on CPU (int8) vs. "small"'s ~1s, but German
-# accuracy is the actual bottleneck here, not the extra couple seconds —
-# especially next to the LLM's own 15-25s reply time. "small" remains
-# available via WHISPER_MODEL=small if responsiveness matters more.
+# API, whose German recognition was complained about repeatedly. Runs on the
+# GPU (float16) when CUDA is available, falling back to CPU (int8) only if
+# not — "medium" on CPU cost ~2.7s per utterance, which is why "small"
+# remains available via WHISPER_MODEL=small for a CPU-only machine.
 WHISPER_MODEL = os.environ.get("WHISPER_MODEL", "medium")
 
 LM_STUDIO_BASE_URL = os.environ.get("LM_STUDIO_BASE_URL", "http://localhost:1234/v1")
