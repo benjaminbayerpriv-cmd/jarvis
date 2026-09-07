@@ -1254,15 +1254,12 @@ function connectWs() {
 connectWs();
 setState("idle");
 
-/* ---------- camera: hand tracking + naming the object near the hand ---------- */
+/* ---------- camera: hand tracking ---------- */
 //
-// MediaPipe Hands finds the 21-point hand skeleton every frame (cheap
-// enough to run at full framerate); COCO-SSD's object detector is much
-// heavier, so it only runs on its own slower interval and its last result
-// is reused for every frame in between — objects near a hand don't
-// teleport, so a few hundred ms of staleness is invisible in practice.
-// Both models run entirely in the browser (no data leaves the machine),
-// same as the rest of Jarvis.
+// Classical OpenCV.js (skin-color segmentation + contours) finds up to two
+// hand-shaped regions per frame — see frontend/tracking-worker.js. Runs
+// entirely in the browser (no data leaves the machine), same as the rest
+// of Jarvis.
 
 const camVideo = document.getElementById("camVideo");
 const camCanvas = document.getElementById("camOverlay");
@@ -1291,43 +1288,14 @@ camToggleBtn.addEventListener("click", () => {
   }
 });
 
-// MediaPipe's 21 hand landmarks, connected into the standard skeleton —
-// index numbering per the official hand-landmark model (0 = wrist). Used
-// for both the left and right hand.
-const HAND_CONNECTIONS = [
-  [0, 1], [1, 2], [2, 3], [3, 4],
-  [0, 5], [5, 6], [6, 7], [7, 8],
-  [5, 9], [9, 10], [10, 11], [11, 12],
-  [9, 13], [13, 14], [14, 15], [15, 16],
-  [13, 17], [17, 18], [18, 19], [19, 20],
-  [0, 17],
-];
-
-// The 33-point BlazePose body skeleton, restricted to shoulders/arms/hips/
-// legs/feet only — indices 0-10 (nose, eyes, ears, mouth) are the face
-// landmarks and are deliberately left out of both this list and anywhere
-// it's drawn, since a face overlay was never wanted here.
-const POSE_CONNECTIONS = [
-  [11, 12],
-  [11, 13], [13, 15],
-  [12, 14], [14, 16],
-  [11, 23], [12, 24], [23, 24],
-  [23, 25], [25, 27],
-  [24, 26], [26, 28],
-  [27, 29], [29, 31], [27, 31],
-  [28, 30], [30, 32], [28, 32],
-];
-
 let camStream = null;
 let camLoopRunning = false;
-let latestPose = null;      // {x,y,z}[33] normalized, or null
-let latestLeftHand = null;  // {x,y,z}[21] normalized, or null
-let latestRightHand = null; // {x,y,z}[21] normalized, or null
+let latestHands = []; // {x,y,w,h}[] normalized bounding boxes, up to 2
 
-// Body/hand tracking (MediaPipe Tasks HolisticLandmarker) in its own
-// worker — see the long comment at the top of tracking-worker.js for why
-// this has to be a classic worker (no { type: "module" }) despite the
-// underlying package being ESM-only upstream.
+// Hand tracking (classical OpenCV.js: skin-color segmentation + contours,
+// not a neural network) in its own worker — see the comment at the top of
+// tracking-worker.js for why, and for the tradeoffs versus the MediaPipe
+// approach this replaced.
 let trackingWorker = null;
 let trackingReady = false;
 let trackingReadyResolve;
@@ -1345,9 +1313,6 @@ function ensureTrackingWorker() {
     const { type, id } = e.data;
     if (type === "ready") {
       trackingReady = true;
-      // GPU vs. CPU delegate is a 10-20x speed difference for this model —
-      // if tracking feels slow/laggy, check this line first.
-      console.log(`[tracking-worker] ready, delegate: ${e.data.delegate}`);
       trackingReadyResolve();
       return;
     }
@@ -1418,30 +1383,28 @@ function stopCamera() {
   camStream.getTracks().forEach((track) => track.stop());
   camStream = null;
   camVideo.srcObject = null;
-  latestPose = null;
-  latestLeftHand = null;
-  latestRightHand = null;
+  latestHands = [];
   camHint.textContent = "";
 }
 
 // Drawing the video frame is its own loop, uncoupled from hand tracking —
 // it redraws every rAF tick (the display's own full refresh rate) no
-// matter how slow MediaPipe is running, instead of waiting on it each
+// matter how slow tracking is running, instead of waiting on it each
 // frame like the old single combined loop did. The webcam feed itself
-// should never look choppier than the model behind it can keep up with.
+// should never look choppier than the detection behind it can keep up with.
 function drawLoop() {
   if (!camLoopRunning) return;
   drawCamOverlay();
   requestAnimationFrame(drawLoop);
 }
 
-// Body/hand tracking self-throttles to whatever rate the worker can
-// actually sustain: a new request only starts once the previous one's
-// response has arrived, so on a slow machine this naturally runs slower
-// while drawLoop above keeps drawing the video at the full 30/60fps the
-// camera and display can do — the skeleton overlay just updates less
-// often, it never holds the video itself back (and, since this runs in a
-// Worker, it doesn't hold the rest of the page's main thread back either).
+// Hand tracking self-throttles to whatever rate the worker can actually
+// sustain: a new request only starts once the previous one's response has
+// arrived, so on a slow machine this naturally runs slower while drawLoop
+// above keeps drawing the video at the full 30/60fps the camera and
+// display can do — the hand boxes just update less often, they never hold
+// the video itself back (and, since this runs in a Worker, it doesn't hold
+// the rest of the page's main thread back either).
 function trackingLoop() {
   if (!camLoopRunning) return;
   if (trackingReady && !trackingBusy && camVideo.readyState >= 2) {
@@ -1459,44 +1422,15 @@ async function detectTracking() {
   const id = ++trackingRequestId;
   const data = await new Promise((resolve) => {
     pendingTrackingResolvers.set(id, resolve);
-    trackingWorker.postMessage(
-      { type: "detect", id, bitmap, timestamp: Math.trunc(performance.now()) },
-      [bitmap]
-    );
+    trackingWorker.postMessage({ type: "detect", id, bitmap }, [bitmap]);
   });
-  latestPose = data && data.pose;
-  latestLeftHand = data && data.leftHand;
-  latestRightHand = data && data.rightHand;
+  latestHands = (data && data.hands) || [];
 }
 
-// `skipBelow` drops landmark indices below it entirely (dots included, not
-// just the connection lines) — used to keep the pose skeleton's face
-// points (indices 0-10) off screen, since a face overlay was never wanted.
-function drawSkeleton(points, connections, w, h, skipBelow = 0) {
-  camCtx.strokeStyle = "#2be2e2";
-  camCtx.fillStyle = "#2be2e2";
-  camCtx.lineWidth = 2;
-  for (const [a, b] of connections) {
-    const pa = points[a], pb = points[b];
-    if (!pa || !pb) continue;
-    camCtx.beginPath();
-    camCtx.moveTo(pa.x * w, pa.y * h);
-    camCtx.lineTo(pb.x * w, pb.y * h);
-    camCtx.stroke();
-  }
-  for (let i = skipBelow; i < points.length; i++) {
-    const p = points[i];
-    camCtx.beginPath();
-    camCtx.arc(p.x * w, p.y * h, 3, 0, Math.PI * 2);
-    camCtx.fill();
-  }
-}
-
-// Everything drawn on the canvas — video, body and both hand skeletons —
-// shares one mirrored transform (front-camera convention) so an arm
-// reaching from the right of the *frame* still appears to reach from the
-// right on screen, matching what looking at yourself in a mirror feels
-// like.
+// Everything drawn on the canvas — video and hand boxes — shares one
+// mirrored transform (front-camera convention) so a hand reaching from the
+// right of the *frame* still appears to reach from the right on screen,
+// matching what looking at yourself in a mirror feels like.
 function drawCamOverlay() {
   const w = camCanvas.clientWidth, h = camCanvas.clientHeight;
   if (!w || !h || !camVideo.videoWidth) return;
@@ -1507,9 +1441,11 @@ function drawCamOverlay() {
   camCtx.scale(-1, 1);
   camCtx.drawImage(camVideo, 0, 0, w, h);
 
-  if (latestPose) drawSkeleton(latestPose, POSE_CONNECTIONS, w, h, 11);
-  if (latestLeftHand) drawSkeleton(latestLeftHand, HAND_CONNECTIONS, w, h);
-  if (latestRightHand) drawSkeleton(latestRightHand, HAND_CONNECTIONS, w, h);
+  camCtx.strokeStyle = "#2be2e2";
+  camCtx.lineWidth = 2;
+  for (const hand of latestHands) {
+    camCtx.strokeRect(hand.x * w, hand.y * h, hand.w * w, hand.h * h);
+  }
 
   camCtx.restore();
 }

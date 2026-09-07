@@ -1,149 +1,163 @@
-// Runs body/hand landmark tracking off the main thread. MediaPipe's own
-// docs confirm both the old solutions API (Hands.send()) and the current
-// Tasks API's detect()/detectForVideo() run *synchronously and block the
-// main thread* — every tracking pass would otherwise freeze the whole page
-// (orb, audio meter, the video draw loop) for however long it takes. See:
-// https://developers.google.com/mediapipe/solutions/vision/hand_landmarker/web_js
+// Runs hand tracking off the main thread using classical (non-ML) OpenCV.js
+// — skin-color segmentation + contours, not a neural network. Two earlier
+// versions of this file used MediaPipe's deep-learning landmark models
+// (first Holistic, then a lighter Pose+Hand split); both worked but never
+// got past ~15-25fps in a browser, since WASM/WebGL ML inference is nowhere
+// near a native mobile ML framework (CoreML/Metal, NNAPI). Classical CV
+// trades the precise 21-point finger skeleton for much less precision (a
+// bounding box around "this looks like a skin-colored blob roughly here")
+// in exchange for genuinely fast, simple pixel processing with no neural
+// net at all.
 //
-// Runs PoseLandmarker (the "lite" model, body only) and HandLandmarker
-// (numHands: 2) as two separate models rather than one combined
-// HolisticLandmarker — measured ~30% faster per frame, since Holistic also
-// runs a face-detection sub-model on every frame that this code never
-// draws anyway. Real-time full-body-plus-both-hands tracking in a browser
-// (WASM/WebGL) is still nowhere near what a native mobile ML framework
-// (CoreML/Metal, NNAPI) can do — expect roughly 15-20fps for this, not 60.
+// This still has to run in a Worker: even without ML, a synchronous
+// multi-step OpenCV pipeline on every frame would otherwise block the main
+// thread (orb, audio meter, video draw loop) for its own duration.
 //
-// This has to be a *classic* worker, not a module one, even though
-// @mediapipe/tasks-vision is published ESM-only: the library's own runtime
-// calls importScripts() internally (to load its WASM glue code), and
-// importScripts() throws inside a module worker ("Module scripts don't
-// support importScripts()"). So instead of `import ... from ".../tasks-
-// vision"`, this loads a vendored, pre-patched copy of the same package —
-// frontend/mediapipe-tasks-vision.js is jsdelivr's `+esm` bundle for
-// @mediapipe/tasks-vision@0.10.17 with its trailing `export{...}`
-// statement (invalid in a classic script) replaced by a plain
-// `self.$mediapipe = {...}` assignment using the same (minified) names.
-// See https://ankdev.me/blog/how-to-run-mediapipe-task-vision-in-a-web-worker
-// for the reference writeup of this exact workaround.
-importScripts("/static/mediapipe-tasks-vision.js");
-const { PoseLandmarker, HandLandmarker, FilesetResolver } = self.$mediapipe;
+// No body/pose tracking here (a prior version had that via MediaPipe) —
+// classical background-subtraction-based body silhouette tracking needs
+// *motion* to tell foreground from background, so it fades away whenever
+// someone just sits still in front of the camera, which is the normal case
+// for a voice assistant. Not worth shipping something that flickers away
+// on its own. Hands are tracked instead via skin color, which works
+// regardless of motion.
+importScripts("https://docs.opencv.org/4.9.0/opencv.js");
 
-const POSE_MODEL_URL =
-  "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task";
-const HAND_MODEL_URL =
-  "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task";
-const WASM_ROOT = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.17/wasm";
+const CASCADE_URL =
+  "https://cdn.jsdelivr.net/gh/opencv/opencv@4.9.0/data/haarcascades/haarcascade_frontalface_default.xml";
 
-// A real photo (a person with both hands raised) used only to warm the
-// models up before the caller ever gets a "ready" message — see warmUp()
-// below for why this matters. MediaPipe's own public hand_landmarker demo
-// asset, fetched the same way the .task model files above are.
-const WARMUP_IMAGE_URL = "https://storage.googleapis.com/mediapipe-tasks/hand_landmarker/woman_hands.jpg";
-
-let poseLandmarker = null;
-let handLandmarker = null;
+let faceCascade = null;
 let readyPromise = null;
-let activeDelegate = null; // "GPU" or "CPU" — whichever actually initialized
 
-async function createLandmarkers(delegate) {
-  const vision = await FilesetResolver.forVisionTasks(WASM_ROOT);
-  return Promise.all([
-    PoseLandmarker.createFromOptions(vision, {
-      baseOptions: { modelAssetPath: POSE_MODEL_URL, delegate },
-      runningMode: "VIDEO",
-      minPoseDetectionConfidence: 0.5,
-    }),
-    HandLandmarker.createFromOptions(vision, {
-      baseOptions: { modelAssetPath: HAND_MODEL_URL, delegate },
-      runningMode: "VIDEO",
-      numHands: 2,
-      minHandDetectionConfidence: 0.6,
-      minTrackingConfidence: 0.5,
-    }),
-  ]);
-}
-
-// MediaPipe/TFLite's GPU delegate compiles its shaders lazily, per code
-// path, the first time that path actually runs — not once at model-load
-// time. "Pose detected", "hand detected", "hand tracked from last frame"
-// are each a different path. A blank/synthetic warmup image never
-// triggers most of these (there's nothing in it to detect), so the *real*
-// first-ever frame with an actual hand/body in it is the one that pays
-// the compile cost — measured live at over a second for that single
-// frame, vs. ~70-100ms once warm. Running a few passes over a real photo
-// with a visible hand and body *before* signaling ready moves that one-
-// time cost out of the user's first few seconds of actually using the
-// camera.
-async function warmUp() {
-  try {
-    const blob = await fetch(WARMUP_IMAGE_URL).then((r) => r.blob());
-    for (let i = 0; i < 3; i++) {
-      const bitmap = await createImageBitmap(blob);
-      poseLandmarker.detectForVideo(bitmap, i + 1);
-      handLandmarker.detectForVideo(bitmap, i + 1);
-      bitmap.close();
+function waitForOpenCv() {
+  return new Promise((resolve) => {
+    if (typeof cv !== "undefined" && cv.Mat) {
+      resolve();
+      return;
     }
-  } catch (err) {
-    // Not fatal — worst case the first real frame just pays the cost this
-    // was meant to avoid.
-    console.warn("[tracking-worker] warmup pass failed (non-fatal):", err);
-  }
+    cv["onRuntimeInitialized"] = () => resolve();
+  });
 }
 
 function ensureReady() {
   if (!readyPromise) {
     readyPromise = (async () => {
-      // GPU vs. CPU delegate is a 10-20x difference for these models —
-      // logged clearly since a silent fallback here is exactly what makes
-      // tracking feel broken/laggy for no visible reason.
-      try {
-        [poseLandmarker, handLandmarker] = await createLandmarkers("GPU");
-        activeDelegate = "GPU";
-      } catch (err) {
-        console.warn("[tracking-worker] GPU delegate failed, falling back to CPU (10-20x slower):", err);
-        [poseLandmarker, handLandmarker] = await createLandmarkers("CPU");
-        activeDelegate = "CPU";
-      }
-      await warmUp();
-      console.log(`[tracking-worker] ready, using ${activeDelegate} delegate`);
-      self.postMessage({ type: "ready", delegate: activeDelegate });
+      await waitForOpenCv();
+      const xml = await fetch(CASCADE_URL).then((r) => r.text());
+      cv.FS_createDataFile("/", "face.xml", xml, true, false, false);
+      faceCascade = new cv.CascadeClassifier();
+      faceCascade.load("/face.xml");
+      self.postMessage({ type: "ready" });
     })();
   }
   return readyPromise;
 }
 ensureReady();
 
+// All the classical-CV ops below (Haar cascade, color conversion,
+// morphology) scale with pixel count, and the public opencv.js WASM build
+// has zero SIMD (per cv.getBuildInformation(): "CPU/HW features: Baseline:"
+// empty — no accelerated kernels at all). At the camera's native 1280x720
+// that measured 400-900ms/frame; downscaling the frame before processing
+// is what actually gets this fast, since detection only needs to know
+// *roughly* where a hand is, not per-pixel precision. Measured ~45-65ms/
+// frame at this size, versus ~130-150ms at 320px wide and 400-900ms at
+// full camera resolution.
+const PROC_WIDTH = 160;
+
+function detectFrame(bitmap) {
+  const vw = bitmap.width, vh = bitmap.height;
+  const scale = PROC_WIDTH / vw;
+  const pw = PROC_WIDTH, ph = Math.round(vh * scale);
+  const canvas = new OffscreenCanvas(pw, ph);
+  const ctx = canvas.getContext("2d");
+  ctx.drawImage(bitmap, 0, 0, pw, ph);
+  bitmap.close();
+  const imgData = ctx.getImageData(0, 0, pw, ph);
+
+  const mat = cv.matFromImageData(imgData);
+  const gray = new cv.Mat();
+  cv.cvtColor(mat, gray, cv.COLOR_RGBA2GRAY);
+
+  const faces = new cv.RectVector();
+  const minFaceSize = new cv.Size(Math.round(pw * 0.15), Math.round(ph * 0.15));
+  faceCascade.detectMultiScale(gray, faces, 1.1, 4, 0, minFaceSize);
+
+  const matC3 = new cv.Mat();
+  cv.cvtColor(mat, matC3, cv.COLOR_RGBA2RGB);
+  const ycrcb = new cv.Mat();
+  cv.cvtColor(matC3, ycrcb, cv.COLOR_RGB2YCrCb);
+
+  // YCrCb skin range (Cr/Cb stay stable across lighting changes, unlike
+  // HSV's hue at low saturation) — the standard Chai & Ngan range. Much
+  // less prone to picking up cream/beige fabric than a naive HSV threshold.
+  const low = new cv.Mat(ycrcb.rows, ycrcb.cols, ycrcb.type(), new cv.Scalar(0, 133, 77, 0));
+  const high = new cv.Mat(ycrcb.rows, ycrcb.cols, ycrcb.type(), new cv.Scalar(255, 173, 127, 255));
+  const skinMask = new cv.Mat();
+  cv.inRange(ycrcb, low, high, skinMask);
+
+  // Exclude detected face regions from the skin mask so a face isn't
+  // mistaken for a third "hand". Skin-color segmentation genuinely can't
+  // tell hand-shaped skin from face-shaped skin — if a hand overlaps or
+  // touches the face in frame, they'll still merge into one blob; this
+  // only helps when they're apart, which is the normal case for gesturing
+  // at a camera.
+  for (let i = 0; i < faces.size(); i++) {
+    const f = faces.get(i);
+    const pad = Math.round(f.width * 0.15);
+    const x0 = Math.max(0, f.x - pad), y0 = Math.max(0, f.y - pad);
+    const x1 = Math.min(pw, f.x + f.width + pad), y1 = Math.min(ph, f.y + f.height + pad);
+    cv.rectangle(skinMask, new cv.Point(x0, y0), new cv.Point(x1, y1), new cv.Scalar(0), -1);
+  }
+
+  const kernel = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(7, 7));
+  cv.morphologyEx(skinMask, skinMask, cv.MORPH_OPEN, kernel);
+  cv.morphologyEx(skinMask, skinMask, cv.MORPH_CLOSE, kernel);
+
+  const contours = new cv.MatVector();
+  const hierarchy = new cv.Mat();
+  cv.findContours(skinMask, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+
+  const minArea = pw * ph * 0.01; // ignore tiny noise blobs
+  const candidates = [];
+  for (let i = 0; i < contours.size(); i++) {
+    const c = contours.get(i);
+    const area = cv.contourArea(c);
+    if (area >= minArea) candidates.push({ area, rect: cv.boundingRect(c) });
+    c.delete();
+  }
+  candidates.sort((a, b) => b.area - a.area);
+  const hands = candidates.slice(0, 2).map((c) => ({
+    x: c.rect.x / pw,
+    y: c.rect.y / ph,
+    w: c.rect.width / pw,
+    h: c.rect.height / ph,
+  }));
+
+  mat.delete();
+  gray.delete();
+  matC3.delete();
+  ycrcb.delete();
+  low.delete();
+  high.delete();
+  skinMask.delete();
+  kernel.delete();
+  contours.delete();
+  hierarchy.delete();
+  faces.delete();
+
+  return { hands };
+}
+
 self.onmessage = async (e) => {
-  const { type, id, bitmap, timestamp } = e.data;
+  const { type, id, bitmap } = e.data;
   if (type !== "detect") return;
   try {
     await ensureReady();
     const t0 = performance.now();
-    const poseResult = poseLandmarker.detectForVideo(bitmap, timestamp);
-    const handResult = handLandmarker.detectForVideo(bitmap, timestamp);
+    const result = detectFrame(bitmap);
     const ms = performance.now() - t0;
-    bitmap.close();
-
-    let leftHand = null;
-    let rightHand = null;
-    if (handResult.landmarks) {
-      for (let i = 0; i < handResult.landmarks.length; i++) {
-        const label = handResult.handedness?.[i]?.[0]?.categoryName;
-        if (label === "Left") leftHand = handResult.landmarks[i];
-        else if (label === "Right") rightHand = handResult.landmarks[i];
-      }
-    }
-
-    self.postMessage({
-      type: "result",
-      id,
-      ms,
-      pose: (poseResult.landmarks && poseResult.landmarks[0]) || null,
-      leftHand,
-      rightHand,
-    });
+    self.postMessage({ type: "result", id, ms, ...result });
   } catch (err) {
-    bitmap.close();
     self.postMessage({ type: "error", id, error: String((err && err.stack) || err) });
   }
 };
