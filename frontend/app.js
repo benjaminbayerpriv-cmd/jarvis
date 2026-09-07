@@ -111,29 +111,37 @@ const orbCtx = orbCanvas.getContext("2d");
 // in. Rendered at native (devicePixelRatio-aware) resolution — a flat,
 // pixel-textured "cloud" version was tried and just looked blurry.
 //
-// One blue for every active state — a green/amber/red code barely showed
-// up floating over an arbitrary desktop background, and needing to
-// recognize a *hue* at a glance to know what's happening was the wrong
-// idea for a widget you mostly see out of the corner of your eye anyway.
-// States are told apart by motion instead: listening blinks (see
-// LISTEN_PULSE below), thinking sweeps top-to-bottom, speaking ripples
-// with the actual audio level. Grey is the one deliberate exception.
+// A cyan HUD-readout look instead of a plain rotating ball — reference:
+// a wireframe "flower of life" sphere at the centre, a segmented scanner
+// ring around it, and an uneven dust ring at the outer edge. One cyan for
+// every active state, same reasoning as before: a colour code barely
+// showed up floating over an arbitrary desktop background anyway. States
+// are told apart by motion instead: listening blinks (see LISTEN_PULSE
+// below), thinking sweeps top-to-bottom, speaking ripples with the actual
+// audio level. Grey is the one deliberate exception.
 const ORB_COLORS = {
-  idle: "#4a9eff",
-  listening: "#4a9eff",
-  thinking: "#4a9eff",
-  speaking: "#4a9eff",
+  idle: "#2be2e2",
+  listening: "#2be2e2",
+  thinking: "#2be2e2",
+  speaking: "#2be2e2",
   off: "#9a9aa2",
 };
 
 const ORB_SWEEP_PERIOD = 1.6; // seconds per top-to-bottom pass while thinking
-const ORB_SUBDIVISIONS = 3; // denser point cloud now that there's no wireframe to keep legible
+// Lower than the old dot-cloud's 3 — this sphere is now only the inner HUD
+// element (the rings around it carry most of the screen area), and every
+// edge gets its own stroke() call for per-edge depth shading, so a finer
+// subdivision would cost real frame time for detail nobody sees at this size.
+const ORB_SUBDIVISIONS = 2;
 
 function normalize3([x, y, z]) {
   const len = Math.hypot(x, y, z) || 1;
   return [x / len, y / len, z / len];
 }
 
+// Returns { verts, edges }: edges is the deduplicated edge list of the
+// final subdivided mesh, needed to draw the sphere as a wireframe grid (the
+// "flower of life" look) instead of a plain dot cloud.
 function buildIcosphere(subdivisions) {
   const PHI = (1 + Math.sqrt(5)) / 2;
   let verts = [
@@ -169,10 +177,105 @@ function buildIcosphere(subdivisions) {
     faces = nextFaces;
   }
 
-  return verts;
+  const edgeSet = new Set();
+  const edges = [];
+  for (const [a, b, c] of faces) {
+    for (const [i, j] of [[a, b], [b, c], [c, a]]) {
+      const key = i < j ? `${i}_${j}` : `${j}_${i}`;
+      if (!edgeSet.has(key)) {
+        edgeSet.add(key);
+        edges.push([i, j]);
+      }
+    }
+  }
+
+  return { verts, edges };
 }
 
-const orbVerts = buildIcosphere(ORB_SUBDIVISIONS).map(([x, y, z]) => ({ x, y, z }));
+const orbMesh = buildIcosphere(ORB_SUBDIVISIONS);
+const orbVerts = orbMesh.verts.map(([x, y, z]) => ({ x, y, z }));
+const orbEdges = orbMesh.edges;
+
+// ---------- outer HUD rings: segmented scanner band + uneven dust ring ----
+//
+// Both flat 2D circles around the wireframe sphere, matching the reference
+// this was styled after — only the sphere itself uses the 3D tilt/spin
+// projection below.
+
+const RING_SEGMENTS = 56;
+const RING_GAP_DEG = 46; // open gap at the top, like a loading-ring readout
+// Fixed per-segment "brightness/length" seed, generated once — animated by
+// rotating the whole ring each frame rather than re-randomizing it, so
+// individual segments don't flicker in and out.
+const ringSegmentSeeds = Array.from({ length: RING_SEGMENTS }, () => 0.35 + Math.random() * 0.65);
+
+const DUST_COUNT = 220;
+// Same idea for the outer dust ring: fixed per-particle angle/size/twinkle
+// phase, so the jagged boundary holds its shape and only rotates/twinkles
+// rather than reshuffling every frame.
+const dustParticles = Array.from({ length: DUST_COUNT }, () => ({
+  angle: Math.random() * Math.PI * 2,
+  jitter: (Math.random() - 0.5) * 2,
+  size: 0.6 + Math.random() * 1.6,
+  twinklePhase: Math.random() * Math.PI * 2,
+}));
+// A few sine harmonics with fixed random phases give the dust ring's
+// silhouette organic, uneven "lobes" instead of a perfect circle or
+// uniformly random noise.
+const boundaryHarmonics = [3, 5, 8].map((freq) => ({
+  freq,
+  phase: Math.random() * Math.PI * 2,
+  amp: 0.5 + Math.random() * 0.5,
+}));
+
+function boundaryRadiusFactor(angle) {
+  let n = 0;
+  for (const h of boundaryHarmonics) n += Math.sin(angle * h.freq + h.phase) * h.amp;
+  return 1 + (n / boundaryHarmonics.length) * 0.09;
+}
+
+function drawDustRing(cx, cy, ringR, spin, color, alpha) {
+  const t = Date.now() / 1000;
+  orbCtx.save();
+  orbCtx.fillStyle = color;
+  orbCtx.shadowColor = color;
+  orbCtx.shadowBlur = 4;
+  for (const p of dustParticles) {
+    const angle = p.angle + spin * 0.4;
+    const r = ringR * boundaryRadiusFactor(angle) * (1 + p.jitter * 0.05);
+    const twinkle = 0.5 + 0.5 * Math.sin(t * 1.5 + p.twinklePhase);
+    orbCtx.globalAlpha = alpha * (0.3 + twinkle * 0.7);
+    orbCtx.beginPath();
+    orbCtx.arc(cx + Math.cos(angle) * r, cy + Math.sin(angle) * r, p.size, 0, Math.PI * 2);
+    orbCtx.fill();
+  }
+  orbCtx.restore();
+}
+
+function drawSegmentRing(cx, cy, ringR, spin, color, level, alpha) {
+  const t = Date.now() / 1000;
+  const startAngle = -Math.PI / 2 + (RING_GAP_DEG * Math.PI) / 360; // gap centred at top
+  const sweep = Math.PI * 2 - (RING_GAP_DEG * Math.PI) / 180;
+  orbCtx.save();
+  orbCtx.strokeStyle = color;
+  orbCtx.shadowColor = color;
+  orbCtx.shadowBlur = 5;
+  orbCtx.lineWidth = Math.max(1.5, ringR * 0.02);
+  orbCtx.lineCap = "round";
+  for (let i = 0; i < RING_SEGMENTS; i++) {
+    const angle = startAngle + (sweep * i) / RING_SEGMENTS + spin * 0.6;
+    const seed = ringSegmentSeeds[i];
+    const reactive = 0.5 + level * 1.2 * (0.4 + 0.6 * Math.sin(i * 1.7 + t * 3));
+    const len = ringR * 0.11 * seed * Math.max(0.4, reactive);
+    const rInner = ringR * 0.92;
+    orbCtx.globalAlpha = alpha * (0.4 + seed * 0.6);
+    orbCtx.beginPath();
+    orbCtx.moveTo(cx + Math.cos(angle) * rInner, cy + Math.sin(angle) * rInner);
+    orbCtx.lineTo(cx + Math.cos(angle) * (rInner + len), cy + Math.sin(angle) * (rInner + len));
+    orbCtx.stroke();
+  }
+  orbCtx.restore();
+}
 
 // Muted state: a smooth noise field of grey shades flows across the sphere
 // instead of one flat color — evaluated in object-space (x,y,z before
@@ -214,8 +317,13 @@ function renderOrb(level, stateName) {
   orbCtx.clearRect(0, 0, w, h);
 
   const cx = w / 2, cy = h / 2;
-  const baseR = Math.min(w, h) * 0.4;
+  // outerR is the full HUD radius (dust ring); the wireframe sphere itself
+  // is a smaller element inside it, same proportions as the reference this
+  // was styled after.
+  const outerR = Math.min(w, h) * 0.48;
+  const baseR = outerR * 0.55;
   const color = ORB_COLORS[stateName] || ORB_COLORS.idle;
+  const ringColor = stateName === "off" ? ORB_COLORS.off : color;
   const t = Date.now() / 1000;
   const muted = stateName === "off";
   const thinking = stateName === "thinking";
@@ -242,6 +350,11 @@ function renderOrb(level, stateName) {
     sweepT = phase < 0.5 ? phase * 2 : 2 - phase * 2;
   }
 
+  // Outer dust ring and segmented scanner ring first (furthest back) — both
+  // flat 2D circles, independent of the sphere's own 3D tilt/spin below.
+  drawDustRing(cx, cy, outerR, orbSpin, ringColor, 0.55 * listenPulse);
+  drawSegmentRing(cx, cy, outerR * 0.82, orbSpin, ringColor, level, 0.75 * listenPulse);
+
   const projected = orbVerts.map((v) => {
     const ripple = Math.sin(v.x * 4 + t * 1.6) * Math.cos(v.y * 4 - t * 1.1);
     let sweep = 0;
@@ -264,26 +377,53 @@ function renderOrb(level, stateName) {
     };
   });
 
-  const dotR = Math.max(1, baseR * 0.018);
-  for (const p of projected) {
-    const depth = p.depth; // ~-1 front .. ~1 back
-    orbCtx.globalAlpha =
-      Math.min(1, 0.25 + Math.max(0, (1 - (depth + 1) / 2)) * 0.65 + p.sweep * 0.6) * listenPulse;
-    orbCtx.fillStyle = muted ? mutedNoiseShade(p.x, p.y, p.z, t) : color;
-    // Points closer to the viewer read as slightly bigger — a cheap depth cue.
-    const size = dotR * (0.7 + Math.max(0, (1 - (depth + 1) / 2)) * 0.6);
+  // The wireframe grid itself — the "flower of life" triangulated sphere.
+  // Each edge gets its own stroke() call (not one shared path) so its alpha
+  // can fade with depth like the old dot cloud did — a single uniform-alpha
+  // path would flatten the front/back depth cue entirely.
+  const wireColor = muted ? ORB_COLORS.off : color;
+  orbCtx.save();
+  orbCtx.lineCap = "round";
+  orbCtx.strokeStyle = wireColor;
+  orbCtx.shadowColor = wireColor;
+  orbCtx.shadowBlur = 5;
+  orbCtx.lineWidth = Math.max(0.6, baseR * 0.008);
+  for (const [ia, ib] of orbEdges) {
+    const a = projected[ia], b = projected[ib];
+    const front = Math.max(0, 1 - (a.depth + b.depth + 2) / 4); // ~0 back .. ~1 front
+    orbCtx.globalAlpha = (0.1 + front * 0.5 + Math.max(a.sweep, b.sweep) * 0.5) * listenPulse;
     orbCtx.beginPath();
-    orbCtx.arc(p.sx, p.sy, size, 0, Math.PI * 2);
+    orbCtx.moveTo(a.sx, a.sy);
+    orbCtx.lineTo(b.sx, b.sy);
+    orbCtx.stroke();
+  }
+  orbCtx.restore();
+
+  // A handful of the frontmost vertices get a small bright dot on top — the
+  // sparkle highlights visible in the reference — rather than every vertex,
+  // which would just look like the old dot cloud again.
+  const dotR = Math.max(1, baseR * 0.03);
+  orbCtx.save();
+  orbCtx.shadowColor = wireColor;
+  orbCtx.shadowBlur = 6;
+  for (const p of projected) {
+    if (p.depth > -0.55 && p.sweep < 0.5) continue;
+    const front = Math.max(0, (1 - (p.depth + 1) / 2));
+    orbCtx.globalAlpha = (0.5 + front * 0.5 + p.sweep * 0.5) * listenPulse;
+    orbCtx.fillStyle = muted ? mutedNoiseShade(p.x, p.y, p.z, t) : color;
+    orbCtx.beginPath();
+    orbCtx.arc(p.sx, p.sy, dotR, 0, Math.PI * 2);
     orbCtx.fill();
   }
+  orbCtx.restore();
 
-  const glow = orbCtx.createRadialGradient(cx, cy, 0, cx, cy, baseR * 1.1);
+  const glow = orbCtx.createRadialGradient(cx, cy, 0, cx, cy, baseR * 1.3);
   glow.addColorStop(0, `${color}33`);
   glow.addColorStop(1, `${color}00`);
   orbCtx.globalAlpha = (0.3 + level * 0.35) * listenPulse;
   orbCtx.fillStyle = glow;
   orbCtx.beginPath();
-  orbCtx.arc(cx, cy, baseR * 1.1, 0, Math.PI * 2);
+  orbCtx.arc(cx, cy, baseR * 1.3, 0, Math.PI * 2);
   orbCtx.fill();
   orbCtx.globalAlpha = 1;
 }
@@ -299,7 +439,7 @@ function renderOrb(level, stateName) {
 const backgroundTasks = new Map(); // id -> label
 const subOrbCanvas = document.getElementById("subOrb");
 const subOrbCtx = subOrbCanvas.getContext("2d");
-const subOrbVerts = buildIcosphere(1).map(([x, y, z]) => ({ x, y, z }));
+const subOrbVerts = buildIcosphere(1).verts.map(([x, y, z]) => ({ x, y, z }));
 
 function resizeSubOrbCanvas() {
   const rect = subOrbCanvas.getBoundingClientRect();
