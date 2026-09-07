@@ -31,29 +31,11 @@ from pathlib import Path
 IS_WINDOWS = sys.platform.startswith("win")
 URL = "http://127.0.0.1:8000"
 
-# The floating widget's fixed size — no more expand/collapse case now that
-# there's no debug/chat sidebar to grow into (see frontend/app.js and
-# backend/transcript_log.py).
-WIDGET_WIDTH = 440
-WIDGET_HEIGHT = 540
-# Always the same corner on launch — a floating widget with no title bar
-# has no natural "restore position" affordance, so rather than trusting
-# whatever the OS/backend defaults to (centered, or wherever it last was),
-# it always starts somewhere predictable and easy to find.
-SPAWN_X = 24
-SPAWN_Y = 24
-
-
-class Api:
-    """Bridge for the one thing the page can't do to its own OS window:
-    closing it. Exposed to JS as `window.pywebview.api.quit()` once
-    pywebview injects it — see frontend/app.js."""
-
-    window = None  # set right after create_window returns (see main())
-
-    def quit(self) -> None:
-        if self.window is not None:
-            self.window.destroy()
+# A normal, opaque app window — its own title bar (with the OS's native
+# close/minimize controls) is how you close it, no custom frameless/
+# transparent/always-on-top widget behaviour.
+WINDOW_WIDTH = 480
+WINDOW_HEIGHT = 640
 
 
 def _find_root_dir() -> Path:
@@ -162,47 +144,14 @@ def main() -> None:
         # server never came up in the first place.
         import webview
 
-        api = Api()
-        # frameless + transparent + on_top turns the window into a floating
-        # widget: just the orb and its two small controls hovering over the
-        # desktop instead of an opaque app window covering the screen.
-        # easy_drag makes the borderless window still moveable by dragging
-        # its background/orb (pywebview skips this for actual buttons on
-        # its own). Not resizable — a fixed-size widget has no use for
-        # resize handles, and (transparent windows already force
-        # setHasShadow_(False) on macOS regardless of a `shadow` kwarg)
-        # there's nothing left for that flag to do here.
-        window = webview.create_window(
+        webview.create_window(
             "Jarvis",
             URL,
-            width=WIDGET_WIDTH,
-            height=WIDGET_HEIGHT,
-            x=SPAWN_X,
-            y=SPAWN_Y,
-            frameless=True,
-            on_top=True,
-            transparent=True,
-            easy_drag=True,
-            resizable=False,
-            js_api=api,
+            width=WINDOW_WIDTH,
+            height=WINDOW_HEIGHT,
+            min_size=(360, 480),
         )
-        api.window = window
-        # Windows only: forces pywebview's Qt backend (PyQt6 + QtWebEngine,
-        # installed via `pip install pywebview[qt6]`) instead of letting it
-        # default to edgechromium/WinForms. WinForms' transparent=True only
-        # makes the WebView2 *control's* background see-through, never the
-        # containing Form itself — real desktop transparency needs
-        # Form.AllowTransparency, which that backend never sets (confirmed
-        # by reading webview/platforms/winforms.py directly). Patching that
-        # in was tried and reverted: it does make the window transparent,
-        # but also breaks Windows' accessibility Bounds lookup on the Form
-        # ("maximum recursion depth exceeded", observed live). Qt's own
-        # QWidget.setAttribute(Qt.WA_TranslucentBackground) — what
-        # webview/platforms/qt.py actually uses — is the standard,
-        # well-tested mechanism real transparent Qt windows use; no patching
-        # needed. macOS already gets proper transparency from the cocoa
-        # backend, so this is Windows-only.
-        webview.start(gui="qt" if IS_WINDOWS else None)
+        webview.start()
     finally:
         # The window closing is the signal to shut everything down — a
         # server left running invisibly in the background, un-killable

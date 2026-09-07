@@ -5,41 +5,6 @@ const composer = document.getElementById("composer");
 const inputEl = document.getElementById("input");
 const startBtn = document.getElementById("startBtn");
 const muteBtn = document.getElementById("muteBtn");
-const quitBtn = document.getElementById("quitBtn");
-
-// The packaged desktop app opens a transparent, frameless, always-on-top
-// window (see launcher/jarvis_launcher.py) so the orb floats directly over
-// the desktop instead of sitting in an opaque app window — a plain browser
-// tab has neither the transparency nor a window to quit, so all of this
-// only activates once pywebview's own bridge object actually shows up.
-// `pywebviewready` covers the normal case; the immediate check covers the
-// (backend-dependent) case where the bridge is already there by the time
-// this script runs.
-// pywebview's own easy_drag implementation (injected into every page,
-// windows/js/customize.js in the pywebview package — not something this
-// project's code controls) moves the frameless window by sending one
-// native IPC call to the Python side on every single raw `mousemove`
-// event, completely unthrottled. That IPC round-trip competes for the
-// same JS thread as this page's own per-frame orb redraw (a ~1280-vertex
-// icosphere re-projected with trig every frame), and the two together is
-// what made dragging feel "extrem langsam" — reported live. Nothing here
-// can fix pywebview's own drag script, but pausing the expensive redraw
-// for the drag's duration frees the thread back up for it, which is the
-// part actually in this project's control.
-let isDraggingWindow = false;
-
-function enableWidgetMode() {
-  document.documentElement.classList.add("widget-mode");
-  quitBtn.hidden = false;
-  window.addEventListener("mousedown", () => { isDraggingWindow = true; });
-  window.addEventListener("mouseup", () => { isDraggingWindow = false; });
-}
-if (window.pywebview) enableWidgetMode();
-else window.addEventListener("pywebviewready", enableWidgetMode);
-
-quitBtn.addEventListener("click", () => {
-  if (window.pywebview) window.pywebview.api.quit();
-});
 
 // The old debug/chat sidebar (and its toggle button) is gone — a window
 // sized for just the floating orb has no room for one, and the turn-by-turn
@@ -435,10 +400,8 @@ function meterLoop() {
   }
 
   smoothed += (level - smoothed) * (level > smoothed ? 0.5 : 0.12);
-  if (!isDraggingWindow) {
-    renderOrb(smoothed, document.body.dataset.state);
-    if (backgroundTasks.size) renderSubOrb();
-  }
+  renderOrb(smoothed, document.body.dataset.state);
+  if (backgroundTasks.size) renderSubOrb();
 
   requestAnimationFrame(meterLoop);
 }

@@ -99,12 +99,9 @@ Statt jedes Mal ein Terminal zu öffnen, lässt sich der Server als
 Doppelklick-App verpacken: `launcher\build_exe.bat` einmal ausführen (nach
 Schritt 2, venv muss stehen). Das erzeugt `launcher\dist\Jarvis.exe` — ein
 schlanker Launcher, der den bestehenden `.venv`-Server startet und ein
-eigenes, randloses, transparentes Fenster öffnet, das nur den Orb (plus
-Mikro- und Beenden-Button) über dem Desktop schweben lässt, statt den
-Bildschirm zu bedecken — kein Browsertab, kein Terminal-Fenster. Auf den
-Debug-/Chat-Bereich (≡-Symbol) vergrößert sich das Fenster automatisch.
-Bei einem Fehlschlag kommt eine Fehlermeldung statt eines stillen
-Abbruchs.
+eigenes, normales App-Fenster mit dem Orb öffnet (kein Browsertab, kein
+Terminal-Fenster). Bei einem Fehlschlag kommt eine Fehlermeldung statt
+eines stillen Abbruchs.
 
 Das ist bewusst kein vollständiges PyInstaller-Freeze des ganzen Backends —
 `faster-whisper`/`ctranslate2` und Supertonic bringen native Bibliotheken

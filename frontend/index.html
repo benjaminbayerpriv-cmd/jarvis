@@ -16,24 +16,21 @@
 
     <!-- Icon-only, no labels — this row sits right under the orb, which
          carries all the state a glance needs (colour = mic/speaking state).
-         Only one of startBtn/muteBtn is ever visible at a time. -->
+         Only one of startBtn/muteBtn is ever visible at a time. A normal
+         window has its own native close button, so there's no separate
+         quit control here. -->
     <div class="control-row">
       <button class="icon-btn" id="startBtn" aria-label="Mikrofon freigeben" title="Mikrofon freigeben">●</button>
       <button class="icon-btn" id="muteBtn" aria-label="Mikro stumm/aktiv" title="Mikro stumm/aktiv" hidden>●</button>
-      <!-- Only does anything inside the packaged desktop app (see app.js) —
-           a plain browser tab has no window to close, so this stays hidden
-           there instead of showing a button that does nothing. -->
-      <button class="icon-btn" id="quitBtn" aria-label="Jarvis beenden" title="Beenden" hidden>×</button>
     </div>
 
     <!-- No visible transcript/chat panel anymore — the orb + the two
          small controls above are the entire UI. The turn-by-turn record
          that used to live in a toggleable sidebar here now goes to
-         backend/transcript.log instead (see backend/transcript_log.py) —
-         a floating-widget-sized window has no room for a real chat view,
-         and this DOM is kept only because #log/#input are still written
-         to internally (tool-call/block rendering, text fallback input)
-         even with nothing on screen ever revealing them. -->
+         backend/transcript.log instead (see backend/transcript_log.py).
+         This DOM is kept only because #log/#input are still written to
+         internally (tool-call/block rendering, text fallback input) even
+         with nothing on screen ever revealing them. -->
     <aside class="hidden-chat" id="debugPanel" hidden>
       <header class="deck-head">
         <span class="wordmark">Jarvis</span>
