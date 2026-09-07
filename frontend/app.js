@@ -130,12 +130,20 @@ const orbCtx = orbCanvas.getContext("2d");
 // a lat/long grid where each cell is really a quad with a diagonal drawn
 // in. Rendered at native (devicePixelRatio-aware) resolution — a flat,
 // pixel-textured "cloud" version was tried and just looked blurry.
+//
+// One blue for every active state — a green/amber/red code barely showed
+// up floating over an arbitrary desktop background, and needing to
+// recognize a *hue* at a glance to know what's happening was the wrong
+// idea for a widget you mostly see out of the corner of your eye anyway.
+// States are told apart by motion instead: listening blinks (see
+// LISTEN_PULSE below), thinking sweeps top-to-bottom, speaking ripples
+// with the actual audio level. Grey is the one deliberate exception.
 const ORB_COLORS = {
-  idle: "#5d594d",
-  listening: "#7fd86b",
-  thinking: "#c9a227",
-  speaking: "#e3a63c",
-  off: "#d9634a",
+  idle: "#4a9eff",
+  listening: "#4a9eff",
+  thinking: "#4a9eff",
+  speaking: "#4a9eff",
+  off: "#9a9aa2",
 };
 
 const ORB_SWEEP_PERIOD = 1.6; // seconds per top-to-bottom pass while thinking
@@ -186,19 +194,18 @@ function buildIcosphere(subdivisions) {
 
 const orbVerts = buildIcosphere(ORB_SUBDIVISIONS).map(([x, y, z]) => ({ x, y, z }));
 
-// Muted state: a smooth noise field of deep-red-to-orange-red shades flows
-// across the sphere instead of one flat color — evaluated in object-space
-// (x,y,z before rotation) so it turns with the sphere.
-function redNoiseShade(x, y, z, t) {
+// Muted state: a smooth noise field of grey shades flows across the sphere
+// instead of one flat color — evaluated in object-space (x,y,z before
+// rotation) so it turns with the sphere.
+function mutedNoiseShade(x, y, z, t) {
   const raw =
     Math.sin(x * 3.0 + t * 0.31) * 0.4 +
     Math.sin(y * 2.7 - t * 0.24) * 0.4 +
     Math.sin(z * 3.3 + t * 0.27) * 0.3 +
     Math.sin((x + y) * 1.9 - t * 0.19) * 0.3;
   const n = (raw / 1.4 + 1) / 2; // ~0..1
-  const hue = -6 + n * 20;
-  const light = 34 + n * 30;
-  return `hsl(${hue}, 70%, ${light}%)`;
+  const light = 40 + n * 28;
+  return `hsl(230, 4%, ${light}%)`;
 }
 
 function resizeOrbCanvas() {
@@ -232,11 +239,16 @@ function renderOrb(level, stateName) {
   const t = Date.now() / 1000;
   const muted = stateName === "off";
   const thinking = stateName === "thinking";
+  const listening = stateName === "listening";
+  // Listening has no distinct colour anymore, so it needs its own motion to
+  // still read as "actively listening" rather than idle — a slow breathing
+  // blink, brightest right as it dips into shadow and back.
+  const listenPulse = listening ? 0.55 + 0.45 * Math.sin(t * 2.4) : 1;
 
   // Keeps spinning at rest even while muted — muting only stops audio from
   // being recorded, it doesn't pause Jarvis (a reply already in flight
   // keeps going, typed messages still work), so freezing the orb here
-  // used to visually claim otherwise. The red colour below is still the
+  // used to visually claim otherwise. The grey colour below is still the
   // signal that the mic itself is off.
   orbSpin += 0.0032 + level * 0.014;
   const tilt = 0.32 + Math.sin(t / 4) * 0.06;
@@ -275,8 +287,9 @@ function renderOrb(level, stateName) {
   const dotR = Math.max(1, baseR * 0.018);
   for (const p of projected) {
     const depth = p.depth; // ~-1 front .. ~1 back
-    orbCtx.globalAlpha = Math.min(1, 0.25 + Math.max(0, (1 - (depth + 1) / 2)) * 0.65 + p.sweep * 0.6);
-    orbCtx.fillStyle = muted ? redNoiseShade(p.x, p.y, p.z, t) : color;
+    orbCtx.globalAlpha =
+      Math.min(1, 0.25 + Math.max(0, (1 - (depth + 1) / 2)) * 0.65 + p.sweep * 0.6) * listenPulse;
+    orbCtx.fillStyle = muted ? mutedNoiseShade(p.x, p.y, p.z, t) : color;
     // Points closer to the viewer read as slightly bigger — a cheap depth cue.
     const size = dotR * (0.7 + Math.max(0, (1 - (depth + 1) / 2)) * 0.6);
     orbCtx.beginPath();
@@ -287,7 +300,7 @@ function renderOrb(level, stateName) {
   const glow = orbCtx.createRadialGradient(cx, cy, 0, cx, cy, baseR * 1.1);
   glow.addColorStop(0, `${color}33`);
   glow.addColorStop(1, `${color}00`);
-  orbCtx.globalAlpha = 0.3 + level * 0.35;
+  orbCtx.globalAlpha = (0.3 + level * 0.35) * listenPulse;
   orbCtx.fillStyle = glow;
   orbCtx.beginPath();
   orbCtx.arc(cx, cy, baseR * 1.1, 0, Math.PI * 2);
