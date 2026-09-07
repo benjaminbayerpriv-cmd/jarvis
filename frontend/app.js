@@ -1277,11 +1277,9 @@ const COCO_LABELS_DE_ARR = Object.values(COCO_LABELS_DE);
 // detection overlay. Only a Worker keeps the rest of the app responsive
 // while a detection is in flight.
 let camStream = null;
-let handsModel = null;
 let camLoopRunning = false;
-let latestHandLandmarks = null; // MediaPipe's raw landmark list, or null
+let latestHandLandmarks = null; // {x,y,z}[21] normalized, or null
 let latestDetections = [];      // YOLOv8's last result: {bbox, label, score}[]
-let handsBusy = false;
 
 let detectWorker = null;
 let yoloReady = false;
@@ -1313,6 +1311,40 @@ function ensureDetectWorker() {
   };
 }
 
+// Hand tracking (MediaPipe Tasks HandLandmarker) in its own worker — see
+// the long comment at the top of hands-worker.js for why this has to be a
+// classic worker (no { type: "module" }) despite the underlying package
+// being ESM-only upstream.
+let handsWorker = null;
+let handsReady = false;
+let handsReadyResolve;
+const handsReadyPromise = new Promise((resolve) => { handsReadyResolve = resolve; });
+let handsRequestId = 0;
+const pendingHandsResolvers = new Map();
+let handsBusy = false;
+
+function ensureHandsWorker() {
+  if (handsWorker) return;
+  handsWorker = new Worker("/static/hands-worker.js");
+  handsWorker.onmessage = (e) => {
+    const { type, id } = e.data;
+    if (type === "ready") {
+      handsReady = true;
+      handsReadyResolve();
+      return;
+    }
+    const resolve = pendingHandsResolvers.get(id);
+    if (!resolve) return;
+    pendingHandsResolvers.delete(id);
+    if (type === "error") {
+      console.error("[hands-worker]", e.data.error);
+      resolve(null);
+    } else {
+      resolve(e.data.landmarks);
+    }
+  };
+}
+
 function resizeCamCanvas() {
   const rect = camCanvas.getBoundingClientRect();
   const dpr = window.devicePixelRatio || 1;
@@ -1340,29 +1372,14 @@ async function startCamera() {
     camStartBtn.hidden = true;
     camHint.textContent = "Lade Modelle …";
 
-    if (!handsModel) {
-      handsModel = new Hands({
-        locateFile: (file) =>
-          `https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/${file}`,
-      });
-      handsModel.setOptions({
-        maxNumHands: 1,
-        modelComplexity: 0,
-        minDetectionConfidence: 0.6,
-        minTrackingConfidence: 0.5,
-      });
-      handsModel.onResults((results) => {
-        latestHandLandmarks =
-          (results.multiHandLandmarks && results.multiHandLandmarks[0]) || null;
-      });
-    }
+    ensureHandsWorker();
     ensureDetectWorker();
-    await yoloReadyPromise;
+    await Promise.all([handsReadyPromise, yoloReadyPromise]);
 
     camHint.textContent = "";
     camLoopRunning = true;
     requestAnimationFrame(drawLoop);
-    requestAnimationFrame(handsLoop);
+    handsLoop();
     detectLoop();
   } catch (err) {
     console.error(err);
@@ -1383,23 +1400,37 @@ function drawLoop() {
   requestAnimationFrame(drawLoop);
 }
 
-// Hand tracking self-throttles to whatever rate MediaPipe can actually
-// sustain: a new send() only starts once the previous one's promise has
-// resolved, so on a slow machine this naturally runs at, say, 12fps while
-// drawLoop above keeps drawing the video at the full 30/60fps the camera
-// and display can do — the skeleton overlay just updates less often, it
-// never holds the video itself back.
-async function handsLoop() {
+// Hand tracking self-throttles to whatever rate the worker can actually
+// sustain, same pattern as detectLoop below: a new request only starts
+// once the previous one's response has arrived, so on a slow machine this
+// naturally runs slower while drawLoop above keeps drawing the video at
+// the full 30/60fps the camera and display can do — the skeleton overlay
+// just updates less often, it never holds the video itself back (and,
+// since this now runs in a Worker, it doesn't hold the rest of the page's
+// main thread back either).
+function handsLoop() {
   if (!camLoopRunning) return;
-  if (handsModel && !handsBusy && camVideo.readyState >= 2) {
+  if (handsReady && !handsBusy && camVideo.readyState >= 2) {
     handsBusy = true;
-    try {
-      await handsModel.send({ image: camVideo });
-    } finally {
+    detectHands().finally(() => {
       handsBusy = false;
-    }
+    });
   }
-  requestAnimationFrame(handsLoop);
+  setTimeout(handsLoop, 15);
+}
+
+async function detectHands() {
+  if (!camVideo.videoWidth || !camVideo.videoHeight) return;
+  const bitmap = await createImageBitmap(camVideo);
+  const id = ++handsRequestId;
+  const landmarks = await new Promise((resolve) => {
+    pendingHandsResolvers.set(id, resolve);
+    handsWorker.postMessage(
+      { type: "detect", id, bitmap, timestamp: Math.trunc(performance.now()) },
+      [bitmap]
+    );
+  });
+  latestHandLandmarks = landmarks;
 }
 
 // Self-throttles like handsLoop above: a new detection pass only starts

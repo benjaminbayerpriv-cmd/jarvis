@@ -5,15 +5,17 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Jarvis</title>
   <link rel="stylesheet" href="/static/style.css" />
-  <!-- Hand tracking (MediaPipe Hands, on the main thread — fast enough not
-       to need one) + object detection across the whole frame (YOLOv8n via
-       onnxruntime-web, preprocessed with real OpenCV.js —
-       @techstark/opencv-js's WASM build). The YOLOv8/OpenCV pipeline itself
-       runs in frontend/detect-worker.js, not here — a single CPU inference
-       pass is slow enough to freeze the whole page (orb included) if run
-       on the main thread, so it's offloaded to a Worker instead. See the
-       "camera" section in app.js. -->
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/hands.js"></script>
+  <!-- Hand tracking (MediaPipe Tasks HandLandmarker) + object detection
+       across the whole frame (YOLOv8n via onnxruntime-web, preprocessed
+       with real OpenCV.js — @techstark/opencv-js's WASM build). Neither
+       pipeline runs here on the main thread — both MediaPipe's own docs
+       and onnxruntime-web's CPU/WASM execution are confirmed *synchronous,
+       main-thread-blocking* calls, so each one freezes the whole page (orb
+       included) for however long a detection pass takes if run directly.
+       They're offloaded to frontend/hands-worker.js and
+       frontend/detect-worker.js instead. See the "camera" section in
+       app.js. -->
+
 </head>
 <body>
   <main class="stage" id="console">
