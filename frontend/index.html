@@ -5,12 +5,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Jarvis</title>
   <link rel="stylesheet" href="/static/style.css" />
-  <!-- Hand tracking (MediaPipe Tasks HandLandmarker). Doesn't run here on
-       the main thread — MediaPipe's own docs confirm detect()/
-       detectForVideo() are *synchronous, main-thread-blocking* calls, so a
-       tracking pass would otherwise freeze the whole page (orb included)
-       for however long it takes. It's offloaded to frontend/hands-worker.js
-       instead. See the "camera" section in app.js. -->
+  <!-- Body + both-hands tracking (MediaPipe Tasks HolisticLandmarker).
+       Doesn't run here on the main thread — MediaPipe's own docs confirm
+       detect()/detectForVideo() are *synchronous, main-thread-blocking*
+       calls, so a tracking pass would otherwise freeze the whole page (orb
+       included) for however long it takes. It's offloaded to
+       frontend/tracking-worker.js instead. See the "camera" section in
+       app.js. -->
 
 </head>
 <body>
@@ -35,7 +36,8 @@
 
     <!-- Webcam + hand tracking: raw video is only ever a texture source for
          the canvas (never shown itself), which draws the mirrored frame
-         plus the MediaPipe hand skeleton. Only works in a normal
+         plus the MediaPipe body and both-hands skeleton (no face). Only
+         works in a normal
          browser tab — the packaged desktop app's WKWebView on macOS has no
          delegate method for media-capture permission requests at all, so
          getUserMedia() is silently denied there (a real pywebview

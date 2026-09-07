@@ -1,9 +1,17 @@
-// Runs hand landmark tracking off the main thread. MediaPipe's own docs
-// confirm both the old solutions API (Hands.send()) and the current Tasks
-// API's detect()/detectForVideo() run *synchronously and block the main
-// thread* — every hand-tracking pass would otherwise freeze the whole page
+// Runs body/hand landmark tracking off the main thread. MediaPipe's own
+// docs confirm both the old solutions API (Hands.send()) and the current
+// Tasks API's detect()/detectForVideo() run *synchronously and block the
+// main thread* — every tracking pass would otherwise freeze the whole page
 // (orb, audio meter, the video draw loop) for however long it takes. See:
 // https://developers.google.com/mediapipe/solutions/vision/hand_landmarker/web_js
+//
+// Uses HolisticLandmarker rather than the plain HandLandmarker: it tracks
+// pose (33-point body skeleton), left hand, and right hand all from one
+// model, in one pass — a single-hand model can't tell "no hand" apart from
+// "wrong hand" the way a two-handed one that separately labels left/right
+// can, and the pose landmarks are what give shoulders/arms/legs, not just
+// the hands. Face landmarks come back too but the caller has no reason to
+// draw them (as-is; a face overlay was never wanted here).
 //
 // This has to be a *classic* worker, not a module one, even though
 // @mediapipe/tasks-vision is published ESM-only: the library's own runtime
@@ -18,23 +26,22 @@
 // See https://ankdev.me/blog/how-to-run-mediapipe-task-vision-in-a-web-worker
 // for the reference writeup of this exact workaround.
 importScripts("/static/mediapipe-tasks-vision.js");
-const { HandLandmarker, FilesetResolver } = self.$mediapipe;
+const { HolisticLandmarker, FilesetResolver } = self.$mediapipe;
 
-const MODEL_URL =
-  "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task";
+const MODEL_URL = "https://storage.googleapis.com/mediapipe-assets/holistic_landmarker.task";
 const WASM_ROOT = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.17/wasm";
 
-let handLandmarker = null;
+let landmarker = null;
 let readyPromise = null;
 
 async function createLandmarker(delegate) {
   const vision = await FilesetResolver.forVisionTasks(WASM_ROOT);
-  return HandLandmarker.createFromOptions(vision, {
+  return HolisticLandmarker.createFromOptions(vision, {
     baseOptions: { modelAssetPath: MODEL_URL, delegate },
     runningMode: "VIDEO",
-    numHands: 1,
-    minHandDetectionConfidence: 0.6,
-    minTrackingConfidence: 0.5,
+    minFaceDetectionConfidence: 0.5,
+    minPoseDetectionConfidence: 0.5,
+    minHandLandmarksConfidence: 0.5,
   });
 }
 
@@ -42,12 +49,12 @@ function ensureReady() {
   if (!readyPromise) {
     readyPromise = (async () => {
       try {
-        handLandmarker = await createLandmarker("GPU");
+        landmarker = await createLandmarker("GPU");
       } catch (_) {
         // Not every machine/browser can give a Worker a GPU context for
         // this — CPU delegate still keeps the *isolation* benefit (nothing
         // here ever touches the main thread), just slower per frame.
-        handLandmarker = await createLandmarker("CPU");
+        landmarker = await createLandmarker("CPU");
       }
       self.postMessage({ type: "ready" });
     })();
@@ -61,10 +68,15 @@ self.onmessage = async (e) => {
   if (type !== "detect") return;
   try {
     await ensureReady();
-    const result = handLandmarker.detectForVideo(bitmap, timestamp);
+    const result = landmarker.detectForVideo(bitmap, timestamp);
     bitmap.close();
-    const landmarks = (result.landmarks && result.landmarks[0]) || null;
-    self.postMessage({ type: "result", id, landmarks });
+    self.postMessage({
+      type: "result",
+      id,
+      pose: (result.poseLandmarks && result.poseLandmarks[0]) || null,
+      leftHand: (result.leftHandLandmarks && result.leftHandLandmarks[0]) || null,
+      rightHand: (result.rightHandLandmarks && result.rightHandLandmarks[0]) || null,
+    });
   } catch (err) {
     bitmap.close();
     self.postMessage({ type: "error", id, error: String((err && err.stack) || err) });

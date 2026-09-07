@@ -1222,7 +1222,8 @@ const camStartBtn = document.getElementById("camStartBtn");
 const camHint = document.getElementById("camHint");
 
 // MediaPipe's 21 hand landmarks, connected into the standard skeleton —
-// index numbering per the official hand-landmark model (0 = wrist).
+// index numbering per the official hand-landmark model (0 = wrist). Used
+// for both the left and right hand.
 const HAND_CONNECTIONS = [
   [0, 1], [1, 2], [2, 3], [3, 4],
   [0, 5], [5, 6], [6, 7], [7, 8],
@@ -1232,40 +1233,57 @@ const HAND_CONNECTIONS = [
   [0, 17],
 ];
 
+// The 33-point BlazePose body skeleton, restricted to shoulders/arms/hips/
+// legs/feet only — indices 0-10 (nose, eyes, ears, mouth) are the face
+// landmarks and are deliberately left out of both this list and anywhere
+// it's drawn, since a face overlay was never wanted here.
+const POSE_CONNECTIONS = [
+  [11, 12],
+  [11, 13], [13, 15],
+  [12, 14], [14, 16],
+  [11, 23], [12, 24], [23, 24],
+  [23, 25], [25, 27],
+  [24, 26], [26, 28],
+  [27, 29], [29, 31], [27, 31],
+  [28, 30], [30, 32], [28, 32],
+];
+
 let camStream = null;
 let camLoopRunning = false;
-let latestHandLandmarks = null; // {x,y,z}[21] normalized, or null
+let latestPose = null;      // {x,y,z}[33] normalized, or null
+let latestLeftHand = null;  // {x,y,z}[21] normalized, or null
+let latestRightHand = null; // {x,y,z}[21] normalized, or null
 
-// Hand tracking (MediaPipe Tasks HandLandmarker) in its own worker — see
-// the long comment at the top of hands-worker.js for why this has to be a
-// classic worker (no { type: "module" }) despite the underlying package
-// being ESM-only upstream.
-let handsWorker = null;
-let handsReady = false;
-let handsReadyResolve;
-const handsReadyPromise = new Promise((resolve) => { handsReadyResolve = resolve; });
-let handsRequestId = 0;
-const pendingHandsResolvers = new Map();
-let handsBusy = false;
+// Body/hand tracking (MediaPipe Tasks HolisticLandmarker) in its own
+// worker — see the long comment at the top of tracking-worker.js for why
+// this has to be a classic worker (no { type: "module" }) despite the
+// underlying package being ESM-only upstream.
+let trackingWorker = null;
+let trackingReady = false;
+let trackingReadyResolve;
+const trackingReadyPromise = new Promise((resolve) => { trackingReadyResolve = resolve; });
+let trackingRequestId = 0;
+const pendingTrackingResolvers = new Map();
+let trackingBusy = false;
 
-function ensureHandsWorker() {
-  if (handsWorker) return;
-  handsWorker = new Worker("/static/hands-worker.js");
-  handsWorker.onmessage = (e) => {
+function ensureTrackingWorker() {
+  if (trackingWorker) return;
+  trackingWorker = new Worker("/static/tracking-worker.js");
+  trackingWorker.onmessage = (e) => {
     const { type, id } = e.data;
     if (type === "ready") {
-      handsReady = true;
-      handsReadyResolve();
+      trackingReady = true;
+      trackingReadyResolve();
       return;
     }
-    const resolve = pendingHandsResolvers.get(id);
+    const resolve = pendingTrackingResolvers.get(id);
     if (!resolve) return;
-    pendingHandsResolvers.delete(id);
+    pendingTrackingResolvers.delete(id);
     if (type === "error") {
-      console.error("[hands-worker]", e.data.error);
+      console.error("[tracking-worker]", e.data.error);
       resolve(null);
     } else {
-      resolve(e.data.landmarks);
+      resolve(e.data);
     }
   };
 }
@@ -1297,13 +1315,13 @@ async function startCamera() {
     camStartBtn.hidden = true;
     camHint.textContent = "Lade Modelle …";
 
-    ensureHandsWorker();
-    await handsReadyPromise;
+    ensureTrackingWorker();
+    await trackingReadyPromise;
 
     camHint.textContent = "";
     camLoopRunning = true;
     requestAnimationFrame(drawLoop);
-    handsLoop();
+    trackingLoop();
   } catch (err) {
     console.error(err);
     camHint.textContent = "Kamera abgelehnt oder Modelle nicht ladbar.";
@@ -1323,43 +1341,68 @@ function drawLoop() {
   requestAnimationFrame(drawLoop);
 }
 
-// Hand tracking self-throttles to whatever rate the worker can actually
-// sustain: a new request only starts once the previous one's response has
-// arrived, so on a slow machine this
-// naturally runs slower while drawLoop above keeps drawing the video at
-// the full 30/60fps the camera and display can do — the skeleton overlay
-// just updates less often, it never holds the video itself back (and,
-// since this now runs in a Worker, it doesn't hold the rest of the page's
-// main thread back either).
-function handsLoop() {
+// Body/hand tracking self-throttles to whatever rate the worker can
+// actually sustain: a new request only starts once the previous one's
+// response has arrived, so on a slow machine this naturally runs slower
+// while drawLoop above keeps drawing the video at the full 30/60fps the
+// camera and display can do — the skeleton overlay just updates less
+// often, it never holds the video itself back (and, since this runs in a
+// Worker, it doesn't hold the rest of the page's main thread back either).
+function trackingLoop() {
   if (!camLoopRunning) return;
-  if (handsReady && !handsBusy && camVideo.readyState >= 2) {
-    handsBusy = true;
-    detectHands().finally(() => {
-      handsBusy = false;
+  if (trackingReady && !trackingBusy && camVideo.readyState >= 2) {
+    trackingBusy = true;
+    detectTracking().finally(() => {
+      trackingBusy = false;
     });
   }
-  setTimeout(handsLoop, 15);
+  setTimeout(trackingLoop, 15);
 }
 
-async function detectHands() {
+async function detectTracking() {
   if (!camVideo.videoWidth || !camVideo.videoHeight) return;
   const bitmap = await createImageBitmap(camVideo);
-  const id = ++handsRequestId;
-  const landmarks = await new Promise((resolve) => {
-    pendingHandsResolvers.set(id, resolve);
-    handsWorker.postMessage(
+  const id = ++trackingRequestId;
+  const data = await new Promise((resolve) => {
+    pendingTrackingResolvers.set(id, resolve);
+    trackingWorker.postMessage(
       { type: "detect", id, bitmap, timestamp: Math.trunc(performance.now()) },
       [bitmap]
     );
   });
-  latestHandLandmarks = landmarks;
+  latestPose = data && data.pose;
+  latestLeftHand = data && data.leftHand;
+  latestRightHand = data && data.rightHand;
 }
 
-// Everything drawn on the canvas — video and hand skeleton — shares one
-// mirrored transform (front-camera convention) so a hand reaching from the
-// right of the *frame* still appears to reach from the right on screen,
-// matching what looking at your own hand feels like.
+// `skipBelow` drops landmark indices below it entirely (dots included, not
+// just the connection lines) — used to keep the pose skeleton's face
+// points (indices 0-10) off screen, since a face overlay was never wanted.
+function drawSkeleton(points, connections, w, h, skipBelow = 0) {
+  camCtx.strokeStyle = "#2be2e2";
+  camCtx.fillStyle = "#2be2e2";
+  camCtx.lineWidth = 2;
+  for (const [a, b] of connections) {
+    const pa = points[a], pb = points[b];
+    if (!pa || !pb) continue;
+    camCtx.beginPath();
+    camCtx.moveTo(pa.x * w, pa.y * h);
+    camCtx.lineTo(pb.x * w, pb.y * h);
+    camCtx.stroke();
+  }
+  for (let i = skipBelow; i < points.length; i++) {
+    const p = points[i];
+    camCtx.beginPath();
+    camCtx.arc(p.x * w, p.y * h, 3, 0, Math.PI * 2);
+    camCtx.fill();
+  }
+}
+
+// Everything drawn on the canvas — video, body and both hand skeletons —
+// shares one mirrored transform (front-camera convention) so an arm
+// reaching from the right of the *frame* still appears to reach from the
+// right on screen, matching what looking at yourself in a mirror feels
+// like.
 function drawCamOverlay() {
   const w = camCanvas.clientWidth, h = camCanvas.clientHeight;
   if (!w || !h || !camVideo.videoWidth) return;
@@ -1370,23 +1413,9 @@ function drawCamOverlay() {
   camCtx.scale(-1, 1);
   camCtx.drawImage(camVideo, 0, 0, w, h);
 
-  if (latestHandLandmarks) {
-    camCtx.strokeStyle = "#2be2e2";
-    camCtx.fillStyle = "#2be2e2";
-    camCtx.lineWidth = 2;
-    for (const [a, b] of HAND_CONNECTIONS) {
-      const pa = latestHandLandmarks[a], pb = latestHandLandmarks[b];
-      camCtx.beginPath();
-      camCtx.moveTo(pa.x * w, pa.y * h);
-      camCtx.lineTo(pb.x * w, pb.y * h);
-      camCtx.stroke();
-    }
-    for (const p of latestHandLandmarks) {
-      camCtx.beginPath();
-      camCtx.arc(p.x * w, p.y * h, 3, 0, Math.PI * 2);
-      camCtx.fill();
-    }
-  }
+  if (latestPose) drawSkeleton(latestPose, POSE_CONNECTIONS, w, h, 11);
+  if (latestLeftHand) drawSkeleton(latestLeftHand, HAND_CONNECTIONS, w, h);
+  if (latestRightHand) drawSkeleton(latestRightHand, HAND_CONNECTIONS, w, h);
 
   camCtx.restore();
 }
