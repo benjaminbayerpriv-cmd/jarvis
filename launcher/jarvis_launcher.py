@@ -109,6 +109,27 @@ def _wait_until_up(timeout_s: float = 60) -> bool:
     return False
 
 
+# Known, unresolved limitation: pywebview's Windows backend
+# (webview/platforms/winforms.py) only sets the WebView2 *control's* own
+# background to transparent when create_window(transparent=True) — it
+# never marks the containing Form itself as a layered/transparent window
+# (Form.AllowTransparency + a transparent BackColor), which is what
+# Windows actually needs to show the real desktop through a window rather
+# than the Form's own opaque background. Confirmed by reading that file
+# directly, and reported live: "es ist nicht transparent" even with
+# transparent=True already passed here.
+#
+# A monkey-patch adding AllowTransparency=True + BackColor=Color.Transparent
+# to BrowserForm.__init__ was tried and reverted — it made the window
+# transparent but also broke Windows' accessibility/UI-Automation Bounds
+# lookup on that Form ("maximum recursion depth exceeded", flooding
+# server.err.log, confirmed live via a test launch), a known bad
+# interaction between AllowTransparency and accessibility tooling on
+# .NET Forms. Not safe to ship. A real fix needs either an upstream
+# pywebview change or a different Windows GUI backend entirely — out of
+# scope for a patch inside this project alone.
+
+
 def main() -> None:
     try:
         root_dir = _find_root_dir()
