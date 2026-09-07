@@ -1,8 +1,6 @@
-/* Jarvis — a floating widget, not a chat window.
+/* Jarvis — a normal desktop app window, just the orb and a mute button.
    One colour (blue) for every active state — listening, thinking, and
-   speaking are told apart by how the orb *moves*, not by hue, so it stays
-   recognizable at a glance instead of relying on a green/amber/red code
-   that barely showed up against a busy desktop background. Grey is the
+   speaking are told apart by how the orb *moves*, not by hue. Grey is the
    one deliberate exception: mic off. Mono is the machine's voice, Avenir
    is the conversation's. */
 
@@ -21,7 +19,7 @@
 
   --sig-active: #4a9eff; /* listening / thinking / speaking */
   --muted: #9a9aa2;      /* mic off */
-  --alert: #d9634a;      /* destructive-only now (quit button hover) */
+  --alert: #d9634a;      /* destructive/error accents */
 
   --mono: ui-monospace, "SF Mono", Menlo, monospace;
   --sans: "Avenir Next", "Helvetica Neue", system-ui, sans-serif;
@@ -36,21 +34,6 @@ html, body {
   color: var(--text);
   font-family: var(--sans);
   overflow: hidden;
-}
-
-/* Packaged desktop app only (see app.js — set once pywebview confirms a
-   transparent native window is actually behind this page). A plain browser
-   tab never gets this class, so it keeps its normal solid background. */
-html.widget-mode, html.widget-mode body {
-  background: transparent;
-}
-
-/* The floating widget has no title bar to grab, so the whole background is
-   draggable (pywebview's easy_drag) — except the controls themselves,
-   which must stay clickable instead of starting a window drag. */
-html.widget-mode .icon-btn,
-html.widget-mode .hidden-chat {
-  -webkit-app-region: no-drag;
 }
 
 button { font-family: var(--mono); cursor: pointer; }
@@ -92,13 +75,8 @@ button { font-family: var(--mono); cursor: pointer; }
   filter: drop-shadow(0 0 6px color-mix(in srgb, var(--sig-active) 55%, transparent));
 }
 
-/* Shared look for every small, icon-only control (mic, quit, debug) — a
-   plain glyph in a subtle square, no text label, no backdrop-filter (that
-   combined with a truly transparent host window rendered as a stray dark
-   halo around each button instead of a clean frosted-glass look — observed
-   live in the packaged widget once the window was actually transparent,
-   never in a normal opaque browser tab where there's real page content
-   behind it to blur). */
+/* Shared look for every small, icon-only control (mic, debug) — a plain
+   glyph in a subtle square, no text label. */
 .icon-btn {
   width: 30px;
   height: 30px;
@@ -117,15 +95,11 @@ button { font-family: var(--mono); cursor: pointer; }
 .icon-btn:hover { opacity: 1; color: var(--text); border-color: var(--dim); }
 .icon-btn[hidden] { display: none; }
 
-.icon-btn#quitBtn:hover { color: var(--alert); border-color: var(--alert); }
-.icon-btn#quitBtn { font-size: 17px; }
 .icon-btn#muteBtn.off { color: var(--muted); border-color: color-mix(in srgb, var(--muted) 45%, var(--line)); opacity: 1; }
 
 /* Sits right under the orb — offset scales with the orb's own min(vh,vw)
    sizing so the gap stays proportional instead of colliding on a very
-   short window. Hidden until the pointer is anywhere over the widget —
-   the orb alone is the resting-state UI, these are secondary controls
-   that only need to exist when you're actually about to use them. */
+   short window. */
 .control-row {
   position: absolute;
   left: 50%;
@@ -133,14 +107,6 @@ button { font-family: var(--mono); cursor: pointer; }
   transform: translateX(-50%);
   display: flex;
   gap: 8px;
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 160ms ease;
-}
-
-.stage:hover .control-row {
-  opacity: 1;
-  pointer-events: auto;
 }
 
 /* Debug sidebar: the full transcript plus verbose tool-call log — the same

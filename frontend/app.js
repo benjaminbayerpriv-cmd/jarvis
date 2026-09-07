@@ -5,26 +5,6 @@ const composer = document.getElementById("composer");
 const inputEl = document.getElementById("input");
 const startBtn = document.getElementById("startBtn");
 const muteBtn = document.getElementById("muteBtn");
-const quitBtn = document.getElementById("quitBtn");
-
-// The packaged desktop app opens a transparent, frameless, always-on-top
-// window (see launcher/jarvis_launcher.py) so the orb floats directly over
-// the desktop instead of sitting in an opaque app window — a plain browser
-// tab has neither the transparency nor a window to quit, so all of this
-// only activates once pywebview's own bridge object actually shows up.
-// `pywebviewready` covers the normal case; the immediate check covers the
-// (backend-dependent) case where the bridge is already there by the time
-// this script runs.
-function enableWidgetMode() {
-  document.documentElement.classList.add("widget-mode");
-  quitBtn.hidden = false;
-}
-if (window.pywebview) enableWidgetMode();
-else window.addEventListener("pywebviewready", enableWidgetMode);
-
-quitBtn.addEventListener("click", () => {
-  if (window.pywebview) window.pywebview.api.quit();
-});
 
 // The old debug/chat sidebar (and its toggle button) is gone — a window
 // sized for just the floating orb has no room for one, and the turn-by-turn
