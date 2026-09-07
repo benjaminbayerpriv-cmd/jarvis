@@ -20,6 +20,12 @@
     <div class="control-row">
       <button class="icon-btn" id="startBtn" aria-label="Mikrofon freigeben" title="Mikrofon freigeben">●</button>
       <button class="icon-btn" id="muteBtn" aria-label="Mikro stumm/aktiv" title="Mikro stumm/aktiv" hidden>●</button>
+      <!-- Interrupts whatever Jarvis is currently doing (thinking,
+           speaking, or an utterance still being recorded) — same action
+           as barge-in or the Ctrl/Cmd+Shift+J shortcut, just reachable by
+           click. Always visible (not gated to widget mode like quitBtn)
+           since it's just as useful in a plain browser tab. -->
+      <button class="icon-btn" id="stopBtn" aria-label="Denkprozess unterbrechen" title="Unterbrechen">■</button>
       <!-- Only does anything inside the packaged desktop app (see app.js) —
            a plain browser tab has no window to close, so this stays hidden
            there instead of showing a button that does nothing. -->

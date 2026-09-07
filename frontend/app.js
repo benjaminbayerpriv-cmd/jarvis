@@ -5,6 +5,7 @@ const composer = document.getElementById("composer");
 const inputEl = document.getElementById("input");
 const startBtn = document.getElementById("startBtn");
 const muteBtn = document.getElementById("muteBtn");
+const stopBtn = document.getElementById("stopBtn");
 const quitBtn = document.getElementById("quitBtn");
 
 // The packaged desktop app opens a transparent, frameless, always-on-top
@@ -1057,6 +1058,18 @@ startBtn.addEventListener("click", async () => {
 });
 
 muteBtn.addEventListener("click", () => setMuted(!muted));
+
+// Stops whatever Jarvis is currently doing in the foreground — an
+// in-progress reply (thinking or already speaking) and, since
+// cancelRecording() also runs, any utterance still being captured. Doesn't
+// touch the mic on/off state. A background job announced via the sub-orb
+// (build_project) is a separate server-side thread with no cooperative
+// cancellation point, so it keeps running either way — only the
+// foreground conversation turn can actually be interrupted here.
+stopBtn.addEventListener("click", () => {
+  cancelRecording();
+  interruptActiveTurn();
+});
 
 // Cmd+Shift+J on macOS, Ctrl+Shift+J on Windows — matching
 // launcher/hotkey_listener.py's own platform check for the equivalent
