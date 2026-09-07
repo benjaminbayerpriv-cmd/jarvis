@@ -1013,6 +1013,8 @@ muteBtn.addEventListener("click", () => setMuted(!muted));
 // never pressed together with Shift+J, so without this branch the
 // in-page shortcut simply never fired there at all.
 const IS_MAC = /Mac|iPod|iPhone|iPad/.test(navigator.platform);
+const HOTKEY_LABEL = IS_MAC ? "Cmd+Shift+J" : "Ctrl+Shift+J";
+debugToggle.title = `Debug (${HOTKEY_LABEL})`;
 
 document.addEventListener("keydown", (e) => {
   const modifierPressed = IS_MAC ? e.metaKey : e.ctrlKey;

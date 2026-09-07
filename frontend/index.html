@@ -19,11 +19,14 @@
       <button class="mic-btn" id="muteBtn" hidden>Mikro aus</button>
     </div>
 
-    <button class="debug-toggle" id="debugToggle" aria-label="Debug-Ansicht ein/aus" title="Debug (Cmd/Ctrl+Shift+J)">≡</button>
+    <!-- title is set at runtime (app.js) to the platform's actual
+         modifier key — Cmd on macOS, Ctrl on Windows — instead of showing
+         both here unconditionally. -->
+    <button class="debug-toggle" id="debugToggle" aria-label="Debug-Ansicht ein/aus" title="Debug">≡</button>
 
     <!-- Debug sidebar: full transcript + verbose tool-call log. Hidden by
          default — the orb alone carries state for normal use — toggled via
-         the button above or Cmd/Ctrl+Shift+J. -->
+         the button above or the platform hotkey (see app.js). -->
     <aside class="hidden-chat" id="debugPanel">
       <header class="deck-head">
         <span class="wordmark">Jarvis</span>
