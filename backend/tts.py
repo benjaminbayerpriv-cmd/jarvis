@@ -137,6 +137,32 @@ _MONTH_NAMES = {
     7: "Juli", 8: "August", 9: "September", 10: "Oktober", 11: "November", 12: "Dezember",
 }
 
+# The model doesn't only write dates numerically ("07.09.2026") — writing
+# the day as "21. Januar 2025" (month spelled out, not a second number) is
+# just as common in natural German text, and _DATE_RE above doesn't match
+# it at all (it needs a numeric month). Left unhandled, that "21." falls
+# straight through to the plain cardinal-number pass below, which drops
+# the trailing dot's ordinal meaning entirely — observed live, exactly
+# this: "einundzwanzig. Januar" instead of "einundzwanzigste Januar".
+_DATE_WORDS_RE = re.compile(
+    r"\b(\d{1,2})\.\s*("
+    + "|".join(_MONTH_NAMES.values())
+    + r")\b(?:\s+(\d{4}))?"
+)
+
+
+def _spell_date_words(match: re.Match) -> str:
+    day = int(match.group(1))
+    month_name = match.group(2)
+    year = match.group(3)
+    if not 1 <= day <= 31:
+        return match.group(0)
+    day_words = num2words(day, lang="de", to="ordinal")
+    result = f"{day_words} {month_name}"
+    if year:
+        result += f" {num2words(int(year), lang='de')}"
+    return result
+
 _MATH_SYMBOL_PATTERNS = [
     (re.compile(r"(?<=\d)\s*\+\s*(?=\d)"), " plus "),
     (re.compile(r"\+(?=\d)"), "plus "),
@@ -196,6 +222,7 @@ def _expand_numbers_for_speech(text: str) -> str:
     # left-to-right in the same order they were shielded.
     shielded = _TIME_RE.sub(shield, text)
     shielded = _DATE_RE.sub(_spell_date, shielded)
+    shielded = _DATE_WORDS_RE.sub(_spell_date_words, shielded)
     # Math symbols expand to words before numbers do, so e.g. "12+34"
     # becomes "12 plus 34" first — still cleanly digit-bounded for
     # _NUMBER_RE right after, since "plus"/"minus"/etc. are word characters
