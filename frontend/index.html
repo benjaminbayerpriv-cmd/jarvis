@@ -7,24 +7,30 @@
   <link rel="stylesheet" href="/static/style.css" />
 </head>
 <body>
-  <main class="console" id="console">
+  <main class="stage" id="console">
 
-    <section class="deck">
+    <div class="orb-wrap">
+      <canvas id="orb" aria-hidden="true"></canvas>
+      <canvas id="subOrb" aria-hidden="true" hidden></canvas>
+    </div>
+
+    <div class="mic-dock">
+      <button class="mic-btn" id="startBtn">Mikrofon freigeben</button>
+      <button class="mic-btn" id="muteBtn" hidden>Mikro aus</button>
+    </div>
+
+    <button class="debug-toggle" id="debugToggle" aria-label="Debug-Ansicht ein/aus" title="Debug (Cmd/Ctrl+Shift+J)">≡</button>
+
+    <!-- Debug sidebar: full transcript + verbose tool-call log. Hidden by
+         default — the orb alone carries state for normal use — toggled via
+         the button above or Cmd/Ctrl+Shift+J. -->
+    <aside class="hidden-chat" id="debugPanel">
       <header class="deck-head">
         <span class="wordmark">Jarvis</span>
         <span class="state-pill" id="statePill">
           <i class="dot"></i><span id="stateLabel">bereit</span>
         </span>
       </header>
-
-      <div class="meter-stage">
-        <div class="meter" id="meter">
-          <svg viewBox="0 0 200 200" aria-hidden="true">
-            <g id="ticks"></g>
-          </svg>
-          <div class="core" id="core"></div>
-        </div>
-      </div>
 
       <p class="hint" id="hint">Mikrofon freigeben, dann hört Jarvis dauerhaft zu.</p>
 
@@ -40,20 +46,7 @@
         />
         <button type="submit" class="send" aria-label="Senden">↵</button>
       </form>
-
-      <div class="controls">
-        <button class="ctrl" id="startBtn">Mikrofon freigeben</button>
-        <button class="ctrl" id="muteBtn" hidden>Mikro aus</button>
-      </div>
-    </section>
-
-    <section class="bench" id="bench">
-      <header class="bench-head">
-        <span class="label">Werkbank</span>
-        <button class="ctrl ghost" id="clearBench">Leeren</button>
-      </header>
-      <div class="bench-body" id="benchBody"></div>
-    </section>
+    </aside>
 
   </main>
   <script src="/static/app.js"></script>

@@ -1,23 +1,58 @@
-const consoleEl = document.getElementById("console");
 const stateLabel = document.getElementById("stateLabel");
 const hintEl = document.getElementById("hint");
 const logEl = document.getElementById("log");
-const coreEl = document.getElementById("core");
-const ticksEl = document.getElementById("ticks");
 const composer = document.getElementById("composer");
 const inputEl = document.getElementById("input");
 const startBtn = document.getElementById("startBtn");
 const muteBtn = document.getElementById("muteBtn");
-const benchBody = document.getElementById("benchBody");
-const clearBench = document.getElementById("clearBench");
+const debugPanel = document.getElementById("debugPanel");
+const debugToggle = document.getElementById("debugToggle");
+
+// Debug sidebar: the full transcript + verbose tool log, off by default —
+// the orb alone carries state for normal use. Toggled explicitly (button
+// or Cmd/Ctrl+Shift+J) rather than on focus, since it's meant to stay open
+// while debugging, not flicker away the moment focus moves to "Senden".
+let debugOpen = false;
+
+function setDebugOpen(open) {
+  debugOpen = open;
+  debugPanel.classList.toggle("open", open);
+}
+
+debugToggle.addEventListener("click", () => setDebugOpen(!debugOpen));
 
 let history = [];
-let recognition = null;
+
+// Once the rolling history window fills up, the oldest chunk used to just
+// be dropped outright — mid-conversation amnesia with no trace left. Now
+// it's folded into a short summary via the backend instead, so at least
+// the gist of it (and any open task) survives past the cutoff.
+const HISTORY_CAP = 20; // entries (10 turns) kept verbatim
+const SUMMARIZE_CHUNK = 10; // oldest entries condensed into one summary line once the cap is hit
+
+async function trimHistory() {
+  if (history.length <= HISTORY_CAP) return;
+  const stale = history.slice(0, history.length - HISTORY_CAP + SUMMARIZE_CHUNK);
+  const rest = history.slice(stale.length);
+  let summary = "";
+  try {
+    const r = await fetch("/summarize", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ history: stale }),
+    });
+    if (r.ok) summary = ((await r.json()).summary || "").trim();
+  } catch (_) {}
+  history = summary
+    ? [{ role: "system", content: `Zusammenfassung des bisherigen Gesprächs: ${summary}` }, ...rest]
+    : rest; // summarizing failed — losing the old turns beats blocking the conversation on it
+}
 let micReady = false;
+let micStream = null;
 let muted = false;
-// True while a request is in flight or Jarvis is speaking. Web Speech
-// recognition is off during this window (it would transcribe Jarvis's own
-// voice); the echo-cancelled VAD below is what listens for barge-in.
+// True while a request is in flight or Jarvis is speaking. Recording is
+// off during this window (it would capture Jarvis's own voice); the
+// echo-cancelled VAD below is what listens for barge-in instead.
 let busy = false;
 let fillerUrls = [];
 
@@ -67,32 +102,261 @@ function settle() {
   if (!busy) setState(restingState());
 }
 
-/* ---------- the meter ---------- */
+/* ---------- the orb: a voice-reactive 3D wireframe mesh ---------- */
+//
+// A UV-sphere wireframe, hand-rotated and perspective-projected on a plain
+// 2D canvas — no WebGL/Three.js, so it stays dependency-free and works
+// fully offline like the rest of Jarvis. At rest it's a calm, slowly
+// turning sphere; audio level (voice in, Jarvis's own speech out) both
+// speeds the spin and ripples each vertex outward, so it visibly "listens"
+// and "speaks" instead of just pulsing a flat circle.
 
-const TICK_COUNT = 56;
+const orbCanvas = document.getElementById("orb");
+const orbCtx = orbCanvas.getContext("2d");
 
-(function buildTicks() {
-  const ns = "http://www.w3.org/2000/svg";
-  for (let i = 0; i < TICK_COUNT; i++) {
-    const angle = (i / TICK_COUNT) * Math.PI * 2 - Math.PI / 2;
-    const r1 = 72, r2 = 88;
-    const rect = document.createElementNS(ns, "rect");
-    rect.setAttribute("class", "tick");
-    rect.setAttribute("x", "98.8"); // half the 2.4 width, so ticks sit centred
-    rect.setAttribute("y", String(100 - r2));
-    rect.setAttribute("width", "2.4");
-    rect.setAttribute("height", String(r2 - r1));
-    rect.setAttribute("rx", "1.2");
-    rect.setAttribute(
-      "transform",
-      `rotate(${(i / TICK_COUNT) * 360} 100 100)`
-    );
-    ticksEl.appendChild(rect);
-    void angle;
+// A rotating 3D wireframe orb — an icosphere (subdivided icosahedron), so
+// every face is a genuine triangle that varies in size/orientation, unlike
+// a lat/long grid where each cell is really a quad with a diagonal drawn
+// in. Rendered at native (devicePixelRatio-aware) resolution — a flat,
+// pixel-textured "cloud" version was tried and just looked blurry.
+const ORB_COLORS = {
+  idle: "#5d594d",
+  listening: "#7fd86b",
+  thinking: "#c9a227",
+  speaking: "#e3a63c",
+  off: "#d9634a",
+};
+
+const ORB_SWEEP_PERIOD = 1.6; // seconds per top-to-bottom pass while thinking
+const ORB_SUBDIVISIONS = 3; // denser point cloud now that there's no wireframe to keep legible
+
+function normalize3([x, y, z]) {
+  const len = Math.hypot(x, y, z) || 1;
+  return [x / len, y / len, z / len];
+}
+
+function buildIcosphere(subdivisions) {
+  const PHI = (1 + Math.sqrt(5)) / 2;
+  let verts = [
+    [-1, PHI, 0], [1, PHI, 0], [-1, -PHI, 0], [1, -PHI, 0],
+    [0, -1, PHI], [0, 1, PHI], [0, -1, -PHI], [0, 1, -PHI],
+    [PHI, 0, -1], [PHI, 0, 1], [-PHI, 0, -1], [-PHI, 0, 1],
+  ].map(normalize3);
+
+  let faces = [
+    [0, 11, 5], [0, 5, 1], [0, 1, 7], [0, 7, 10], [0, 10, 11],
+    [1, 5, 9], [5, 11, 4], [11, 10, 2], [10, 7, 6], [7, 1, 8],
+    [3, 9, 4], [3, 4, 2], [3, 2, 6], [3, 6, 8], [3, 8, 9],
+    [4, 9, 5], [2, 4, 11], [6, 2, 10], [8, 6, 7], [9, 8, 1],
+  ];
+
+  for (let s = 0; s < subdivisions; s++) {
+    const midCache = new Map();
+    const midpoint = (a, b) => {
+      const key = a < b ? `${a}_${b}` : `${b}_${a}`;
+      if (midCache.has(key)) return midCache.get(key);
+      const va = verts[a], vb = verts[b];
+      const m = normalize3([(va[0] + vb[0]) / 2, (va[1] + vb[1]) / 2, (va[2] + vb[2]) / 2]);
+      const idx = verts.length;
+      verts.push(m);
+      midCache.set(key, idx);
+      return idx;
+    };
+    const nextFaces = [];
+    for (const [a, b, c] of faces) {
+      const ab = midpoint(a, b), bc = midpoint(b, c), ca = midpoint(c, a);
+      nextFaces.push([a, ab, ca], [b, bc, ab], [c, ca, bc], [ab, bc, ca]);
+    }
+    faces = nextFaces;
   }
-})();
 
-const tickNodes = () => ticksEl.children;
+  return verts;
+}
+
+const orbVerts = buildIcosphere(ORB_SUBDIVISIONS).map(([x, y, z]) => ({ x, y, z }));
+
+// Muted state: a smooth noise field of deep-red-to-orange-red shades flows
+// across the sphere instead of one flat color — evaluated in object-space
+// (x,y,z before rotation) so it turns with the sphere.
+function redNoiseShade(x, y, z, t) {
+  const raw =
+    Math.sin(x * 3.0 + t * 0.31) * 0.4 +
+    Math.sin(y * 2.7 - t * 0.24) * 0.4 +
+    Math.sin(z * 3.3 + t * 0.27) * 0.3 +
+    Math.sin((x + y) * 1.9 - t * 0.19) * 0.3;
+  const n = (raw / 1.4 + 1) / 2; // ~0..1
+  const hue = -6 + n * 20;
+  const light = 34 + n * 30;
+  return `hsl(${hue}, 70%, ${light}%)`;
+}
+
+function resizeOrbCanvas() {
+  const rect = orbCanvas.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  orbCanvas.width = Math.max(1, rect.width * dpr);
+  orbCanvas.height = Math.max(1, rect.height * dpr);
+  orbCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+window.addEventListener("resize", resizeOrbCanvas);
+resizeOrbCanvas();
+
+let orbSpin = 0;
+
+function renderOrb(level, stateName) {
+  const rect = orbCanvas.getBoundingClientRect();
+  const w = rect.width, h = rect.height;
+  if (!w || !h) return;
+  orbCtx.clearRect(0, 0, w, h);
+
+  const cx = w / 2, cy = h / 2;
+  const baseR = Math.min(w, h) * 0.4;
+  const color = ORB_COLORS[stateName] || ORB_COLORS.idle;
+  const t = Date.now() / 1000;
+  const muted = stateName === "off";
+  const thinking = stateName === "thinking";
+
+  // Frozen in place while muted — the color noise below still flows, so
+  // red keeps moving even though the geometry doesn't rotate.
+  if (!muted) orbSpin += 0.0032 + level * 0.014;
+  const tilt = 0.32 + Math.sin(t / 4) * 0.06;
+  const cosY = Math.cos(orbSpin), sinY = Math.sin(orbSpin);
+  const cosX = Math.cos(tilt), sinX = Math.sin(tilt);
+
+  let sweepT = -1;
+  if (thinking) {
+    // Triangle wave: top→bottom→top continuously, no jump back to start.
+    const phase = (t % (ORB_SWEEP_PERIOD * 2)) / (ORB_SWEEP_PERIOD * 2);
+    sweepT = phase < 0.5 ? phase * 2 : 2 - phase * 2;
+  }
+
+  const projected = orbVerts.map((v) => {
+    const ripple = Math.sin(v.x * 4 + t * 1.6) * Math.cos(v.y * 4 - t * 1.1);
+    let sweep = 0;
+    if (thinking) {
+      const rowT = (1 - v.y) / 2;
+      sweep = Math.exp(-((Math.abs(rowT - sweepT) * 6) ** 2));
+    }
+    const r = 1 + level * 0.2 * ripple + sweep * 0.12;
+
+    const x = v.x * r, y = v.y * r, z = v.z * r;
+    const x1 = x * cosY + z * sinY;
+    const z1 = -x * sinY + z * cosY;
+    const y1 = y * cosX - z1 * sinX;
+    const z2 = y * sinX + z1 * cosX;
+
+    const perspective = 3.1 / (3.1 + z2);
+    return {
+      sx: cx + x1 * baseR * perspective, sy: cy + y1 * baseR * perspective,
+      depth: z2, sweep, x: v.x, y: v.y, z: v.z,
+    };
+  });
+
+  const dotR = Math.max(1, baseR * 0.018);
+  for (const p of projected) {
+    const depth = p.depth; // ~-1 front .. ~1 back
+    orbCtx.globalAlpha = Math.min(1, 0.25 + Math.max(0, (1 - (depth + 1) / 2)) * 0.65 + p.sweep * 0.6);
+    orbCtx.fillStyle = muted ? redNoiseShade(p.x, p.y, p.z, t) : color;
+    // Points closer to the viewer read as slightly bigger — a cheap depth cue.
+    const size = dotR * (0.7 + Math.max(0, (1 - (depth + 1) / 2)) * 0.6);
+    orbCtx.beginPath();
+    orbCtx.arc(p.sx, p.sy, size, 0, Math.PI * 2);
+    orbCtx.fill();
+  }
+
+  const glow = orbCtx.createRadialGradient(cx, cy, 0, cx, cy, baseR * 1.1);
+  glow.addColorStop(0, `${color}33`);
+  glow.addColorStop(1, `${color}00`);
+  orbCtx.globalAlpha = 0.3 + level * 0.35;
+  orbCtx.fillStyle = glow;
+  orbCtx.beginPath();
+  orbCtx.arc(cx, cy, baseR * 1.1, 0, Math.PI * 2);
+  orbCtx.fill();
+  orbCtx.globalAlpha = 1;
+}
+
+/* ---------- sub-orb: shows a background job (e.g. build_project) is running ---------- */
+//
+// build_project answers immediately and keeps working on its own thread —
+// without this, that work is invisible until it announces itself minutes
+// later. Every such job is tracked here by id (from the "task" panel
+// event) and rendered as a small second orb next to the main one for as
+// long as at least one is active.
+
+const backgroundTasks = new Map(); // id -> label
+const subOrbCanvas = document.getElementById("subOrb");
+const subOrbCtx = subOrbCanvas.getContext("2d");
+const subOrbVerts = buildIcosphere(1).map(([x, y, z]) => ({ x, y, z }));
+
+function resizeSubOrbCanvas() {
+  const rect = subOrbCanvas.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  subOrbCanvas.width = Math.max(1, rect.width * dpr);
+  subOrbCanvas.height = Math.max(1, rect.height * dpr);
+  subOrbCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+window.addEventListener("resize", resizeSubOrbCanvas);
+
+let subOrbSpin = 0;
+
+function renderSubOrb() {
+  const rect = subOrbCanvas.getBoundingClientRect();
+  const w = rect.width, h = rect.height;
+  if (!w || !h) return;
+  subOrbCtx.clearRect(0, 0, w, h);
+
+  const cx = w / 2, cy = h / 2;
+  const baseR = Math.min(w, h) * 0.42;
+  const t = Date.now() / 1000;
+  const color = ORB_COLORS.thinking;
+
+  subOrbSpin += 0.045;
+  const cosY = Math.cos(subOrbSpin), sinY = Math.sin(subOrbSpin);
+  const cosX = Math.cos(0.5), sinX = Math.sin(0.5);
+  const pulse = 0.85 + Math.sin(t * 3) * 0.15;
+
+  const dotR = Math.max(1, baseR * 0.05);
+  for (const v of subOrbVerts) {
+    const x1 = v.x * cosY + v.z * sinY;
+    const z1 = -v.x * sinY + v.z * cosY;
+    const y1 = v.y * cosX - z1 * sinX;
+    const z2 = v.y * sinX + z1 * cosX;
+    const perspective = 3 / (3 + z2);
+    const sx = cx + x1 * baseR * perspective;
+    const sy = cy + y1 * baseR * perspective;
+    subOrbCtx.globalAlpha = Math.min(1, 0.35 + Math.max(0, (1 - (z2 + 1) / 2)) * 0.65);
+    subOrbCtx.fillStyle = color;
+    subOrbCtx.beginPath();
+    subOrbCtx.arc(sx, sy, dotR * pulse, 0, Math.PI * 2);
+    subOrbCtx.fill();
+  }
+
+  const glow = subOrbCtx.createRadialGradient(cx, cy, 0, cx, cy, baseR * 1.2);
+  glow.addColorStop(0, `${color}55`);
+  glow.addColorStop(1, `${color}00`);
+  subOrbCtx.globalAlpha = 0.5;
+  subOrbCtx.fillStyle = glow;
+  subOrbCtx.beginPath();
+  subOrbCtx.arc(cx, cy, baseR * 1.2, 0, Math.PI * 2);
+  subOrbCtx.fill();
+  subOrbCtx.globalAlpha = 1;
+}
+
+function updateSubOrbVisibility() {
+  const active = backgroundTasks.size > 0;
+  subOrbCanvas.hidden = !active;
+  subOrbCanvas.title = [...backgroundTasks.values()].join(", ");
+  if (active) resizeSubOrbCanvas();
+}
+
+function taskStarted(id, label) {
+  backgroundTasks.set(id, label || "Arbeitet im Hintergrund");
+  updateSubOrbVisibility();
+}
+
+function taskEnded(id) {
+  backgroundTasks.delete(id);
+  updateSubOrbVisibility();
+}
 
 let outputAnalyser = null; // set while Jarvis speaks
 let smoothed = 0;
@@ -122,13 +386,8 @@ function meterLoop() {
   }
 
   smoothed += (level - smoothed) * (level > smoothed ? 0.5 : 0.12);
-
-  const lit = Math.round(smoothed * TICK_COUNT);
-  const nodes = tickNodes();
-  for (let i = 0; i < nodes.length; i++) {
-    nodes[i].classList.toggle("lit", i < lit);
-  }
-  coreEl.style.transform = `scale(${(1 + smoothed * 0.16).toFixed(3)})`;
+  renderOrb(smoothed, document.body.dataset.state);
+  if (backgroundTasks.size) renderSubOrb();
 
   requestAnimationFrame(meterLoop);
 }
@@ -151,7 +410,7 @@ function addTurn(who, text) {
   return said;
 }
 
-/* ---------- bench (rich content) ---------- */
+/* ---------- inline tool output (Claude Code-style verbose log) ---------- */
 
 function escapeHtml(s) {
   return s.replace(/[&<>"']/g, (c) =>
@@ -190,34 +449,64 @@ function miniMarkdown(src) {
   return html;
 }
 
-function showBench() {
-  consoleEl.classList.add("has-bench");
+function addBlock(title, bodyNode) {
+  const block = document.createElement("div");
+  block.className = "block";
+  if (title) {
+    const h = document.createElement("div");
+    h.className = "block-title";
+    h.textContent = title;
+    block.appendChild(h);
+  }
+  block.appendChild(bodyNode);
+  logEl.appendChild(block);
+  logEl.scrollTop = logEl.scrollHeight;
 }
 
-function addCard(title, bodyNode) {
-  const card = document.createElement("div");
-  card.className = "card";
-  if (title) {
-    const h = document.createElement("h3");
-    h.textContent = title;
-    card.appendChild(h);
+// Every "action" event for the same tool call shares item.id (first "läuft",
+// then "erfolgreich"/"fehlgeschlagen") — tracked here so the second event
+// updates the existing line instead of appending a duplicate.
+const toolLines = new Map();
+
+function toolArgSummary(target) {
+  if (!target || typeof target !== "object") return "";
+  const value = Object.values(target).find((v) => typeof v === "string" && v);
+  if (!value) return "";
+  return value.length > 60 ? value.slice(0, 57) + "…" : value;
+}
+
+function renderAction(item) {
+  let line = toolLines.get(item.id);
+  if (!line) {
+    line = document.createElement("div");
+    line.className = "tool";
+    line.innerHTML = `<div class="call"><span class="bullet">●</span><span class="name"></span></div><div class="result" hidden></div>`;
+    logEl.appendChild(line);
+    toolLines.set(item.id, line);
   }
-  card.appendChild(bodyNode);
-  benchBody.appendChild(card);
-  showBench();
-  benchBody.scrollTop = benchBody.scrollHeight;
+
+  const status = item.status || "läuft";
+  line.className = `tool ${status === "erfolgreich" ? "ok" : status === "fehlgeschlagen" ? "fail" : "running"}`;
+  const arg = toolArgSummary(item.target);
+  line.querySelector(".name").textContent = arg ? `${item.action}(${arg})` : item.action || "Aktion";
+
+  const resultEl = line.querySelector(".result");
+  if (item.detail) {
+    resultEl.textContent = item.detail.length > 500 ? item.detail.slice(0, 500) + "…" : item.detail;
+    resultEl.hidden = false;
+  }
+  logEl.scrollTop = logEl.scrollHeight;
 }
 
 function renderPanelItem(item) {
   if (item.kind === "action") {
-    const div = document.createElement("div");
-    div.className = `action action-${item.status || "läuft"}`;
-    const label = document.createElement("strong");
-    label.textContent = `${item.status || "läuft"}: ${item.action || "Aktion"}`;
-    const detail = document.createElement("span");
-    detail.textContent = item.detail || "";
-    div.append(label, detail);
-    addCard("Aktionsprotokoll", div);
+    renderAction(item);
+    return;
+  }
+
+  if (item.kind === "task") {
+    if (item.status === "started") taskStarted(item.id, item.label);
+    else taskEnded(item.id);
     return;
   }
 
@@ -231,14 +520,14 @@ function renderPanelItem(item) {
     const img = document.createElement("img");
     img.src = item.data_url;
     img.alt = item.title || "Screenshot";
-    addCard(item.title || "Bild", img);
+    addBlock(item.title || "Bild", img);
     return;
   }
 
   if (item.kind === "code") {
     const pre = document.createElement("pre");
     pre.textContent = item.text;
-    addCard(item.title || "Code", pre);
+    addBlock(item.title || "Code", pre);
     return;
   }
 
@@ -246,7 +535,7 @@ function renderPanelItem(item) {
     const div = document.createElement("div");
     div.className = "prose";
     div.innerHTML = miniMarkdown(item.text || "");
-    addCard(item.title || "", div);
+    addBlock(item.title || "", div);
     return;
   }
 
@@ -263,7 +552,7 @@ function renderPanelItem(item) {
     p.className = "path";
     p.textContent = item.path || "";
     wrap.append(ul, p);
-    addCard(item.title || "Dateien", wrap);
+    addBlock(item.title || "Dateien", wrap);
     return;
   }
 
@@ -273,14 +562,9 @@ function renderPanelItem(item) {
     a.textContent = item.url;
     a.target = "_blank";
     a.rel = "noopener noreferrer";
-    addCard(item.title || "Link", a);
+    addBlock(item.title || "Link", a);
   }
 }
-
-clearBench.addEventListener("click", () => {
-  benchBody.innerHTML = "";
-  consoleEl.classList.remove("has-bench");
-});
 
 /* ---------- audio ---------- */
 
@@ -370,7 +654,7 @@ async function handleUserMessage(text) {
   if (!text) return;
 
   if (activeTurn) interruptActiveTurn();
-  if (recognition) recognition.stop();
+  cancelRecording();
 
   addTurn("you", text);
 
@@ -393,6 +677,10 @@ async function handleUserMessage(text) {
       body: JSON.stringify({ message: text, history }),
     });
     if (turn.aborted) return;
+    if (!resp.ok) {
+      const detail = await resp.text().catch(() => "");
+      throw new Error(`Server antwortete mit ${resp.status}${detail ? `: ${detail.slice(0, 200)}` : ""}`);
+    }
 
     const reader = resp.body.getReader();
     const decoder = new TextDecoder();
@@ -426,9 +714,13 @@ async function handleUserMessage(text) {
     }
 
     if (!turn.aborted) {
+      // A stream that ends without ever sending a sentence event is a
+      // backend bug, not silence — surface it instead of leaving the turn
+      // looking like Jarvis never heard the question at all.
+      if (!parts.length) said.textContent = "Keine Antwort erhalten. Bitte nochmal versuchen.";
       history.push({ role: "user", content: text });
       history.push({ role: "assistant", content: fullText || parts.join(" ") });
-      if (history.length > 20) history = history.slice(-20);
+      await trimHistory();
     }
   } catch (err) {
     if (!turn.aborted) {
@@ -443,7 +735,6 @@ async function handleUserMessage(text) {
       activeTurn = null;
       busy = false;
       settle();
-      startListening();
     }
   }
 }
@@ -458,63 +749,161 @@ composer.addEventListener("submit", (e) => {
   handleUserMessage(text);
 });
 
-/* ---------- speech recognition ---------- */
-
-const SpeechRecognitionImpl = window.SpeechRecognition || window.webkitSpeechRecognition;
-
-function initRecognition() {
-  if (!SpeechRecognitionImpl) {
-    hintEl.textContent = "Spracherkennung braucht Chrome. Tippen geht überall.";
-    return null;
-  }
-  const rec = new SpeechRecognitionImpl();
-  rec.lang = "de-DE";
-  rec.continuous = true;
-  rec.interimResults = true;
-
-  rec.onstart = () => { if (!busy) setState(restingState()); };
-
-  rec.onresult = (event) => {
-    let text = "";
-    for (let i = event.resultIndex; i < event.results.length; i++) {
-      text += event.results[i][0].transcript;
-    }
-    text = text.trim();
-    if (event.results[event.results.length - 1].isFinal && text) {
-      handleUserMessage(text);
-    }
-  };
-
-  rec.onerror = (event) => {
-    if (event.error === "no-speech" || event.error === "aborted") return;
-    if (event.error === "not-allowed") {
-      micReady = false;
-      settle();
-      hintEl.textContent = "Mikrofon ist blockiert. In den Browser-Einstellungen freigeben.";
-    }
-  };
-
-  // Chrome stops recognition on its own after silence, even with
-  // continuous=true — restart it unless muted or mid-turn.
-  rec.onend = () => {
-    if (!muted && !busy && micReady) setTimeout(startListening, 250);
-  };
-
-  return rec;
-}
-
-function startListening() {
-  if (!recognition || muted || busy || !micReady) return;
-  try { recognition.start(); } catch (_) {}
-}
-
-/* ---------- barge-in (echo-cancelled VAD) ---------- */
+/* ---------- local speech-to-text (record on VAD, transcribe via Whisper) ---------- */
 //
-// Web Speech ignores getUserMedia's echoCancellation constraint, so leaving
-// it running while Jarvis speaks means it transcribes Jarvis and interrupts
-// him in a loop. Instead we watch a separate, explicitly echo-cancelled
-// stream: the OS subtracts Jarvis's own output from it, so a sustained
-// level spike there means a real person is talking.
+// Chrome's Web Speech API was the previous mechanism here, but its German
+// recognition was unreliable enough to be a running complaint. This
+// records raw audio locally and posts it to the backend's /stt endpoint (a
+// local Whisper model — see backend/stt.py) once the same echo-cancelled
+// VAD used for barge-in below decides the person has stopped talking.
+// Nothing about voice input leaves the machine.
+//
+// Raw PCM via a ScriptProcessor, not MediaRecorder — a WebM/Opus stream
+// only carries its container header in the very first chunk it ever emits.
+// A continuously-running MediaRecorder feeding a rolling pre-roll buffer
+// (the previous approach here) eventually rotates that header chunk out,
+// leaving every later utterance a headerless, undecodable fragment — that
+// silently broke every single transcription. Building our own WAV file
+// from raw samples sidesteps the problem: every utterance is a complete,
+// self-contained file, pre-roll included.
+
+let pcmNode = null;
+let pcmSampleRate = 48000;
+let pcmRing = []; // rolling pre-roll buffer, Float32Array chunks
+let utterancePCM = null; // non-null while actively capturing an utterance
+let utteranceStartedAt = 0;
+let silenceStreak = 0;
+
+const PCM_BUFFER_SIZE = 4096;
+// Generous on purpose: onset-cutting persisted at 700ms because actual
+// detection latency (noise floor still adapting, a soft-spoken first
+// syllable, echo-cancellation's own ramp-in) can exceed a small window —
+// this is cheap (a couple seconds of Float32 samples) insurance against
+// that, not a precisely-tuned value.
+const PREROLL_MS = 1500;
+// ~960ms used to end the utterance, which cut people off mid-sentence during
+// completely normal speech (a thinking pause, searching for a word, a breath
+// before the next clause) — raised to ~2.2s of real silence.
+const RECORD_SILENCE_SUSTAIN = 28; // ~28 * VAD_CHECK_MS ≈ 2240ms of silence ends the utterance
+const RECORD_MIN_MS = 300; // ignore accidental blips shorter than this
+
+function startContinuousRecording() {
+  if (pcmNode || !micStream) return;
+  const ctx = ensureCtx();
+  pcmSampleRate = ctx.sampleRate;
+  const source = ctx.createMediaStreamSource(micStream);
+  pcmNode = ctx.createScriptProcessor(PCM_BUFFER_SIZE, 1, 1);
+  const preRollChunks = Math.ceil((PREROLL_MS / 1000) * pcmSampleRate / PCM_BUFFER_SIZE);
+
+  pcmNode.onaudioprocess = (e) => {
+    const data = new Float32Array(e.inputBuffer.getChannelData(0));
+    if (utterancePCM) {
+      utterancePCM.push(data);
+    } else {
+      pcmRing.push(data);
+      if (pcmRing.length > preRollChunks) pcmRing.shift();
+    }
+  };
+  // ScriptProcessor only fires once connected through to a destination —
+  // route through a silent gain so nothing is actually audible.
+  const silentGain = ctx.createGain();
+  silentGain.gain.value = 0;
+  source.connect(pcmNode);
+  pcmNode.connect(silentGain);
+  silentGain.connect(ctx.destination);
+}
+
+// Marks the start of an utterance, seeded with whatever's already in the
+// rolling pre-roll buffer so the trigger delay never costs real audio.
+function beginUtterance() {
+  if (utterancePCM) return;
+  utterancePCM = pcmRing.slice();
+  utteranceStartedAt = Date.now();
+}
+
+// Ends the utterance and sends it for transcription.
+function stopRecording() {
+  if (!utterancePCM) return;
+  const chunks = utterancePCM;
+  const startedAt = utteranceStartedAt;
+  utterancePCM = null;
+  pcmRing = [];
+  sendUtterance(chunks, startedAt);
+}
+
+// Ends the utterance and discards it — used when something else (typed
+// text, a barge-in) supersedes whatever was being captured.
+function cancelRecording() {
+  if (!utterancePCM) return;
+  utterancePCM = null;
+  pcmRing = [];
+}
+
+const isRecording = () => utterancePCM !== null;
+
+function concatFloat32(chunks) {
+  const total = chunks.reduce((n, c) => n + c.length, 0);
+  const out = new Float32Array(total);
+  let offset = 0;
+  for (const c of chunks) { out.set(c, offset); offset += c.length; }
+  return out;
+}
+
+function encodeWav(samples, sampleRate) {
+  const buffer = new ArrayBuffer(44 + samples.length * 2);
+  const view = new DataView(buffer);
+  const writeString = (offset, str) => {
+    for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
+  };
+  writeString(0, "RIFF");
+  view.setUint32(4, 36 + samples.length * 2, true);
+  writeString(8, "WAVE");
+  writeString(12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true); // PCM
+  view.setUint16(22, 1, true); // mono
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true); // byte rate
+  view.setUint16(32, 2, true); // block align
+  view.setUint16(34, 16, true); // bits per sample
+  writeString(36, "data");
+  view.setUint32(40, samples.length * 2, true);
+  let offset = 44;
+  for (let i = 0; i < samples.length; i++) {
+    const s = Math.max(-1, Math.min(1, samples[i]));
+    view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+    offset += 2;
+  }
+  return new Blob([view], { type: "audio/wav" });
+}
+
+async function sendUtterance(chunks, startedAt) {
+  if (!chunks.length || Date.now() - startedAt < RECORD_MIN_MS) return;
+  const samples = concatFloat32(chunks);
+  if (samples.length < pcmSampleRate * 0.2) return; // shorter than ~200ms
+  const blob = encodeWav(samples, pcmSampleRate);
+
+  try {
+    const form = new FormData();
+    form.append("audio", blob, "speech.wav");
+    const resp = await fetch("/stt", { method: "POST", body: form });
+    if (!resp.ok) return;
+    const data = await resp.json();
+    const text = (data.text || "").trim();
+    if (text) handleUserMessage(text);
+  } catch (err) {
+    console.error(err);
+  }
+}
+
+/* ---------- echo-cancelled VAD: drives both recording and barge-in ---------- */
+//
+// A plain getUserMedia stream ignores its own echoCancellation constraint
+// for analysis purposes unless the analysis itself pulls from that same
+// constrained stream — which this does: the OS subtracts Jarvis's own
+// output from it, so a sustained level spike here reliably means a real
+// person is talking, whether Jarvis is currently silent (listening) or
+// speaking (barge-in).
 
 let vadAnalyser = null;
 let vadData = null;
@@ -524,25 +913,57 @@ let vadAbove = 0;
 const VAD_CHECK_MS = 80;
 const VAD_MULTIPLIER = 2.4;
 const VAD_MIN_ABS = 0.025;
-const VAD_SUSTAIN = 3; // ~240ms
+const VAD_SUSTAIN = 2; // ~160ms — kept short since the pre-roll buffer, not this, is what protects the onset
 
 function vadTick() {
   if (!vadAnalyser || muted) return;
   const rms = rmsFrom(vadAnalyser, vadData);
+  const state = document.body.dataset.state;
 
-  if (!busy) {
-    vadNoiseFloor = vadNoiseFloor * 0.98 + rms * 0.02;
-    vadAbove = 0;
+  // Barge-in only makes sense once Jarvis is actually making sound to talk
+  // over. During "thinking" there's nothing playing yet — a local model
+  // can easily take 15-20s, and any ambient noise in that window (fan,
+  // breathing, a chair creak) used to silently cancel the turn before its
+  // reply ever arrived, via `busy` covering both phases.
+  if (state === "speaking") {
+    const threshold = Math.max(vadNoiseFloor * VAD_MULTIPLIER, VAD_MIN_ABS);
+    vadAbove = rms > threshold ? vadAbove + 1 : 0;
+    if (vadAbove >= VAD_SUSTAIN) {
+      vadAbove = 0;
+      interruptActiveTurn();
+    }
     return;
   }
 
-  const threshold = Math.max(vadNoiseFloor * VAD_MULTIPLIER, VAD_MIN_ABS);
-  vadAbove = rms > threshold ? vadAbove + 1 : 0;
-
-  if (vadAbove >= VAD_SUSTAIN) {
+  if (state !== "listening") {
+    vadNoiseFloor = vadNoiseFloor * 0.98 + rms * 0.02;
     vadAbove = 0;
-    interruptActiveTurn();
-    startListening();
+    if (isRecording()) cancelRecording();
+    return;
+  }
+
+  // Idle listening: use the same threshold logic to detect speech start,
+  // then track sustained silence to know when the utterance is over. The
+  // VAD_SUSTAIN wait here is just a false-positive guard, not an audio-loss
+  // window — beginUtterance() below seeds itself from the pre-roll buffer,
+  // so whatever was said during this confirmation delay is not lost.
+  const threshold = Math.max(vadNoiseFloor * VAD_MULTIPLIER, VAD_MIN_ABS);
+  if (!isRecording()) {
+    if (rms > threshold) {
+      vadAbove++;
+      if (vadAbove >= VAD_SUSTAIN) {
+        vadAbove = 0;
+        beginUtterance();
+      }
+    } else {
+      vadAbove = 0;
+      vadNoiseFloor = vadNoiseFloor * 0.98 + rms * 0.02;
+    }
+  } else if (rms > threshold) {
+    silenceStreak = 0;
+  } else {
+    silenceStreak++;
+    if (silenceStreak >= RECORD_SILENCE_SUSTAIN) stopRecording();
   }
 }
 
@@ -562,11 +983,7 @@ function setMuted(next) {
   muted = next;
   muteBtn.textContent = muted ? "Mikro an" : "Mikro aus";
   muteBtn.classList.toggle("off", muted);
-  if (muted) {
-    if (recognition) recognition.stop();
-  } else {
-    startListening();
-  }
+  if (muted) cancelRecording();
   settle();
 }
 
@@ -577,11 +994,12 @@ startBtn.addEventListener("click", async () => {
       audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
     });
     micReady = true;
+    micStream = stream;
     startBtn.hidden = true;
     muteBtn.hidden = false;
     setupVad(stream);
+    startContinuousRecording();
     settle();
-    startListening();
   } catch (_) {
     hintEl.textContent = "Mikrofon abgelehnt. Tippen funktioniert trotzdem.";
   }
@@ -593,7 +1011,7 @@ document.addEventListener("keydown", (e) => {
   if (e.metaKey && e.shiftKey && e.key.toLowerCase() === "j") {
     e.preventDefault();
     if (muted) setMuted(false);
-    else if (busy) { interruptActiveTurn(); startListening(); }
+    else if (busy) interruptActiveTurn();
     else inputEl.focus();
   }
 });
@@ -613,13 +1031,12 @@ function connectWs() {
     } else if (msg.type === "wake") {
       if (!micReady) return;
       if (muted) setMuted(false);
-      else if (busy) { interruptActiveTurn(); startListening(); }
+      else if (busy) interruptActiveTurn();
     }
   };
 
   ws.onclose = () => setTimeout(connectWs, 2000);
 }
 
-recognition = initRecognition();
 connectWs();
 setState("idle");

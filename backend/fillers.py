@@ -4,6 +4,11 @@ from . import tts
 
 FILLER_DIR = Path(__file__).resolve().parent.parent / "frontend" / "fillers"
 
+# Extension must match the actual container the engine returns — the
+# browser's <audio> element trusts the file extension, and a WAV clip
+# saved as ".mp3" fails to play in some browsers.
+_ENGINE_EXT = {"macos": "m4a", "windows": "wav", "supertonic": "wav"}
+
 PHRASES = [
     "Warte mal kurz.",
     "Moment, ich schau's mir an.",
@@ -23,13 +28,14 @@ def ensure_fillers() -> list[str]:
     FILLER_DIR.mkdir(parents=True, exist_ok=True)
     urls = []
     for i, phrase in enumerate(PHRASES):
-        path = FILLER_DIR / f"filler_{i}.mp3"
-        if not path.exists():
+        existing = next(FILLER_DIR.glob(f"filler_{i}.*"), None)
+        if existing is None:
             try:
                 audio = tts.synthesize(phrase)
-                path.write_bytes(audio)
             except Exception:
                 continue
-        if path.exists():
-            urls.append(f"/static/fillers/{path.name}")
+            ext = _ENGINE_EXT.get(tts.VoiceInfo.engine, "mp3")
+            existing = FILLER_DIR / f"filler_{i}.{ext}"
+            existing.write_bytes(audio)
+        urls.append(f"/static/fillers/{existing.name}")
     return urls

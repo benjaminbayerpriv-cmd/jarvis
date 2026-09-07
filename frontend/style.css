@@ -23,8 +23,6 @@
 
   --mono: ui-monospace, "SF Mono", Menlo, monospace;
   --sans: "Avenir Next", "Helvetica Neue", system-ui, sans-serif;
-
-  --rail: 400px;
 }
 
 * { box-sizing: border-box; }
@@ -45,130 +43,106 @@ button { font-family: var(--mono); cursor: pointer; }
   outline-offset: 2px;
 }
 
-/* ---------- shell ---------- */
+/* ---------- shell: just the orb and a mute button ---------- */
 
-.console {
+.stage {
   height: 100vh;
   display: grid;
-  grid-template-columns: 1fr;
-  transition: grid-template-columns 420ms cubic-bezier(.22,.61,.36,1);
+  place-items: center;
+  position: relative;
 }
 
-.console.has-bench {
-  grid-template-columns: var(--rail) 1fr;
+.orb-wrap {
+  position: relative;
+  width: min(62vh, 62vw, 460px);
+  height: min(62vh, 62vw, 460px);
 }
 
-/* ---------- deck (left rail) ---------- */
+#orb {
+  width: 100%;
+  height: 100%;
+}
 
-.deck {
+/* Small satellite orb: appears next to the main one while a background
+   job (e.g. build_project's own thread) is running, so work happening
+   off the voice channel is still visible instead of silent. */
+#subOrb {
+  position: absolute;
+  right: -4%;
+  bottom: 6%;
+  width: 22%;
+  height: 22%;
+  filter: drop-shadow(0 0 6px color-mix(in srgb, var(--sig-out) 55%, transparent));
+}
+
+.mic-dock {
+  position: absolute;
+  left: 50%;
+  bottom: 8vh;
+  transform: translateX(-50%);
+}
+
+.mic-btn {
+  padding: 9px 20px;
+  background: color-mix(in srgb, var(--housing) 70%, transparent);
+  backdrop-filter: blur(6px);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--dim);
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  transition: color 160ms, border-color 160ms, opacity 160ms;
+  opacity: .55;
+}
+
+.mic-btn:hover { opacity: 1; color: var(--text); border-color: var(--dim); }
+.mic-btn.off { color: var(--alert); border-color: color-mix(in srgb, var(--alert) 45%, var(--line)); opacity: 1; }
+
+.debug-toggle {
+  position: absolute;
+  top: 18px;
+  right: 20px;
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  background: none;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--faint);
+  font-size: 15px;
+  opacity: .4;
+  transition: opacity 160ms, color 160ms, border-color 160ms;
+}
+
+.debug-toggle:hover { opacity: 1; color: var(--text); border-color: var(--dim); }
+
+/* Debug sidebar: the full transcript plus verbose tool-call log — the same
+   #log the orb view otherwise hides. Docked right, off-screen by default,
+   slid in via .open (toggled by the button above or Cmd/Ctrl+Shift+J).
+   Kept in normal flow (not display:none) so the input stays focusable even
+   while closed. */
+.hidden-chat {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(420px, 92vw);
+  z-index: 6;
   display: flex;
   flex-direction: column;
   min-height: 0;
-  padding: 22px 24px 20px;
-  border-right: 1px solid transparent;
-  max-width: 640px;
-  margin: 0 auto;
-  width: 100%;
+  padding: 20px 20px 16px;
+  background: var(--housing);
+  border-left: 1px solid var(--line);
+  box-shadow: -24px 0 48px -24px rgba(0, 0, 0, .5);
+  transform: translateX(100%);
+  transition: transform 220ms cubic-bezier(.22, .61, .36, 1);
 }
 
-.console.has-bench .deck {
-  border-right-color: var(--line);
-  max-width: none;
-  margin: 0;
-}
-
-.deck-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding-bottom: 18px;
-}
-
-.wordmark {
-  font-family: var(--mono);
-  font-size: 13px;
-  letter-spacing: .34em;
-  text-transform: uppercase;
-  color: var(--dim);
-}
-
-.state-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  font-family: var(--mono);
-  font-size: 11px;
-  letter-spacing: .16em;
-  text-transform: uppercase;
-  color: var(--dim);
-}
-
-.state-pill .dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--faint);
-  transition: background 200ms, box-shadow 200ms;
-}
-
-body[data-state="listening"] .dot { background: var(--sig-in); box-shadow: 0 0 10px var(--sig-in); }
-body[data-state="thinking"]  .dot { background: var(--sig-work); box-shadow: 0 0 10px var(--sig-work); }
-body[data-state="speaking"]  .dot { background: var(--sig-out); box-shadow: 0 0 10px var(--sig-out); }
-body[data-state="off"]       .dot { background: var(--alert); }
-
-body[data-state="listening"] .state-pill { color: var(--sig-in); }
-body[data-state="thinking"]  .state-pill { color: var(--sig-work); }
-body[data-state="speaking"]  .state-pill { color: var(--sig-out); }
-body[data-state="off"]       .state-pill { color: var(--alert); }
-
-/* ---------- the meter: the one bold element ---------- */
-
-.meter-stage {
-  display: grid;
-  place-items: center;
-  padding: 6px 0 14px;
-}
-
-.meter {
-  position: relative;
-  width: 190px;
-  height: 190px;
-  display: grid;
-  place-items: center;
-}
-
-.meter svg { position: absolute; inset: 0; width: 100%; height: 100%; }
-
-.meter .tick {
-  fill: var(--line);
-  transition: fill 90ms linear;
-}
-
-.meter .tick.lit { fill: var(--sig-in); }
-body[data-state="speaking"] .meter .tick.lit { fill: var(--sig-out); }
-body[data-state="thinking"] .meter .tick.lit { fill: var(--sig-work); }
-
-.core {
-  width: 84px;
-  height: 84px;
-  border-radius: 50%;
-  background: var(--raised);
-  border: 1px solid var(--line);
-  transition: transform 90ms linear, border-color 200ms, box-shadow 200ms;
-}
-
-body[data-state="listening"] .core { border-color: color-mix(in srgb, var(--sig-in) 45%, var(--line)); }
-body[data-state="speaking"]  .core { border-color: color-mix(in srgb, var(--sig-out) 55%, var(--line)); box-shadow: 0 0 34px -8px var(--sig-out); }
-body[data-state="thinking"]  .core { border-color: color-mix(in srgb, var(--sig-work) 45%, var(--line)); }
-body[data-state="off"]       .core { border-color: color-mix(in srgb, var(--alert) 40%, var(--line)); }
-
-/* Thinking has no audio to drive the ring, so give it its own pulse. */
-body[data-state="thinking"] .core { animation: breathe 1.5s ease-in-out infinite; }
-
-@keyframes breathe {
-  0%, 100% { transform: scale(.96); }
-  50%      { transform: scale(1.04); }
-}
+.hidden-chat.open { transform: translateX(0); }
 
 .hint {
   margin: 0 0 16px;
@@ -284,75 +258,66 @@ body[data-state="thinking"] .core { animation: breathe 1.5s ease-in-out infinite
 
 .ctrl:hover { color: var(--text); border-color: var(--dim); }
 .ctrl.off { color: var(--alert); border-color: color-mix(in srgb, var(--alert) 45%, var(--line)); }
-.ctrl.ghost { flex: 0 0 auto; }
 
-/* ---------- bench (right) ---------- */
+/* ---------- inline tool calls (Claude Code-style verbose log) ---------- */
 
-.bench {
-  display: none;
-  flex-direction: column;
-  min-height: 0;
-  background: var(--housing);
-}
-
-.console.has-bench .bench { display: flex; }
-
-.bench-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 18px 22px;
-  border-bottom: 1px solid var(--line);
-}
-
-.bench-head .label {
+.tool {
   font-family: var(--mono);
-  font-size: 11px;
-  letter-spacing: .26em;
-  text-transform: uppercase;
-  color: var(--dim);
-}
-
-.bench-body {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  padding: 20px 22px 40px;
-  display: flex;
-  flex-direction: column;
-  gap: 18px;
-  scrollbar-width: thin;
-  scrollbar-color: var(--line) transparent;
-}
-
-.card {
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  background: var(--ground);
-  overflow: hidden;
-  animation: rise 320ms cubic-bezier(.22,.61,.36,1);
+  font-size: 12.5px;
+  line-height: 1.55;
+  animation: rise 200ms cubic-bezier(.22,.61,.36,1);
 }
 
 @keyframes rise {
-  from { opacity: 0; transform: translateY(10px); }
+  from { opacity: 0; transform: translateY(6px); }
   to   { opacity: 1; transform: none; }
 }
 
-.card > h3 {
-  margin: 0;
-  padding: 11px 14px;
+.tool .call { display: flex; gap: 7px; align-items: baseline; }
+
+.tool .bullet { color: var(--sig-work); }
+.tool.running .bullet { animation: breathe 1.1s ease-in-out infinite; }
+.tool.ok .bullet { color: var(--sig-out); }
+.tool.fail .bullet { color: #e77d7d; }
+
+.tool .name { color: var(--dim); }
+.tool.ok .name { color: var(--text); }
+.tool.fail .name { color: #e77d7d; }
+
+.tool .result {
+  margin: 3px 0 0 16px;
+  padding-left: 11px;
+  border-left: 1px solid var(--line);
+  color: var(--faint);
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 12px;
+}
+
+/* ---------- inline rich blocks (code, files, images, links) ---------- */
+
+.block {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--housing);
+  overflow: hidden;
+  animation: rise 260ms cubic-bezier(.22,.61,.36,1);
+}
+
+.block-title {
+  padding: 10px 13px;
   font-family: var(--mono);
   font-size: 11px;
   font-weight: 500;
-  letter-spacing: .16em;
+  letter-spacing: .14em;
   text-transform: uppercase;
   color: var(--dim);
   border-bottom: 1px solid var(--line-soft);
 }
 
-.card img { display: block; width: 100%; }
+.block img { display: block; width: 100%; }
 
-.card pre {
+.block pre {
   margin: 0;
   padding: 14px;
   overflow-x: auto;
@@ -363,19 +328,19 @@ body[data-state="thinking"] .core { animation: breathe 1.5s ease-in-out infinite
   white-space: pre;
 }
 
-.card .prose {
+.block .prose {
   padding: 14px 16px;
   font-size: 14.5px;
   line-height: 1.65;
 }
 
-.card .prose h1, .card .prose h2, .card .prose h3 {
+.block .prose h1, .block .prose h2, .block .prose h3 {
   font-size: 15px;
   margin: 14px 0 6px;
   letter-spacing: .01em;
 }
 
-.card .prose code {
+.block .prose code {
   font-family: var(--mono);
   font-size: 12.5px;
   background: var(--raised);
@@ -383,8 +348,8 @@ body[data-state="thinking"] .core { animation: breathe 1.5s ease-in-out infinite
   border-radius: 4px;
 }
 
-.card .prose li { margin: 3px 0; }
-.card .prose p { margin: 0 0 10px; }
+.block .prose li { margin: 3px 0; }
+.block .prose p { margin: 0 0 10px; }
 
 .filelist {
   margin: 0;
@@ -399,7 +364,7 @@ body[data-state="thinking"] .core { animation: breathe 1.5s ease-in-out infinite
 
 .filelist li { padding: 2px 0; break-inside: avoid; }
 
-.card .path {
+.block .path {
   padding: 0 14px 12px;
   font-family: var(--mono);
   font-size: 11px;
@@ -407,7 +372,7 @@ body[data-state="thinking"] .core { animation: breathe 1.5s ease-in-out infinite
   word-break: break-all;
 }
 
-.card a {
+.block a {
   display: block;
   padding: 13px 14px;
   color: var(--sig-out);
@@ -417,31 +382,13 @@ body[data-state="thinking"] .core { animation: breathe 1.5s ease-in-out infinite
   word-break: break-all;
 }
 
-.card a:hover { text-decoration: underline; }
-
-.card .action {
-  display: grid;
-  gap: 6px;
-  padding: 13px 14px;
-  font-family: var(--mono);
-  font-size: 12px;
-  line-height: 1.45;
-  color: var(--dim);
-}
-.card .action strong { color: var(--text); text-transform: uppercase; letter-spacing: .06em; }
-.card .action-erfolgreich strong { color: var(--sig-out); }
-.card .action-fehlgeschlagen strong { color: #e77d7d; }
+.block a:hover { text-decoration: underline; }
 
 /* ---------- responsive ---------- */
 
 @media (max-width: 900px) {
   html, body { overflow: auto; }
-  .console, .console.has-bench {
-    grid-template-columns: 1fr;
-    height: auto;
-  }
-  .console.has-bench .deck { border-right: 0; border-bottom: 1px solid var(--line); }
-  .log { max-height: 40vh; }
+  .stage { height: 100svh; }
   .filelist { columns: 1; }
 }
 

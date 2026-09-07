@@ -7,13 +7,13 @@ import time
 from pathlib import Path
 
 import requests
-from fastapi import FastAPI, Response, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, File, Response, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import browser_agent, config, fillers, llm_client, memory, panel, tts
+from . import browser_agent, config, fillers, llm_client, memory, panel, stt, tts
 
 app = FastAPI(title="Jarvis")
 app.add_middleware(
@@ -71,6 +71,9 @@ async def on_startup():
 
     loop = asyncio.get_event_loop()
     loop.run_in_executor(None, _generate)
+    # Whisper's first load takes ~15s — do it now instead of on the user's
+    # first spoken sentence.
+    loop.run_in_executor(None, stt._get_model)
     loop.create_task(_pump_panel())
 
 
@@ -81,6 +84,14 @@ class ChatRequest(BaseModel):
 
 class ChatResponse(BaseModel):
     reply: str
+
+
+class SummarizeRequest(BaseModel):
+    history: list[dict]
+
+
+class SummarizeResponse(BaseModel):
+    summary: str
 
 
 class BrowserResult(BaseModel):
@@ -130,14 +141,53 @@ def chat(req: ChatRequest):
     return ChatResponse(reply=reply)
 
 
+@app.post("/summarize", response_model=SummarizeResponse)
+async def summarize(req: SummarizeRequest):
+    """Condense old chat turns the frontend is about to drop from its
+    rolling history window, instead of just discarding them outright."""
+    try:
+        loop = asyncio.get_running_loop()
+        summary = await loop.run_in_executor(None, llm_client.summarize_history, req.history)
+    except (requests.RequestException, llm_client.ModelError):
+        summary = ""
+    return SummarizeResponse(summary=summary)
+
+
+def _tts_mime(engine: str) -> str:
+    return {"macos": "audio/mp4", "windows": "audio/wav", "supertonic": "audio/wav"}.get(
+        engine, "audio/mpeg"
+    )
+
+
 @app.post("/tts")
 def speak(req: ChatResponse):
     try:
         audio = tts.synthesize(req.reply)
     except Exception:
         return Response(status_code=502, content=b"")
-    mime = "audio/mp4" if tts.VoiceInfo.engine == "macos" else "audio/wav" if tts.VoiceInfo.engine == "windows" else "audio/mpeg"
+    mime = _tts_mime(tts.VoiceInfo.engine)
     return Response(content=audio, media_type=mime)
+
+
+@app.post("/stt")
+async def transcribe(audio: UploadFile = File(...)):
+    data = await audio.read()
+    try:
+        # stt.transcribe() is a blocking, CPU-bound Whisper call (real
+        # seconds, not milliseconds) — run directly inside this async def it
+        # would freeze the whole event loop for that whole time, so no other
+        # request (a second /stt call from the very next utterance, the
+        # websocket panel pump, a /tts or /chat/stream request) could be
+        # served until it finished. Offloading it to a worker thread is what
+        # actually lets a real utterance get processed promptly even if an
+        # earlier one (e.g. a VAD false-trigger during a long silence) is
+        # still being transcribed.
+        loop = asyncio.get_running_loop()
+        text = await loop.run_in_executor(None, stt.transcribe, data)
+    except Exception as exc:
+        print(f"[stt] Transkription fehlgeschlagen: {exc}")
+        return {"text": ""}
+    return {"text": text}
 
 
 @app.post("/chat/stream")
@@ -161,10 +211,7 @@ def chat_stream(req: ChatRequest):
                     try:
                         audio = tts.synthesize(text)
                         audio_b64 = base64.b64encode(audio).decode("ascii")
-                        if tts.VoiceInfo.engine == "macos":
-                            mime = "audio/mp4"
-                        elif tts.VoiceInfo.engine == "windows":
-                            mime = "audio/wav"
+                        mime = _tts_mime(tts.VoiceInfo.engine)
                     except Exception as exc:  # noqa: BLE001 - never mute the reply
                         print(f"[tts] Sprachausgabe fehlgeschlagen: {exc}")
                     yield json.dumps(

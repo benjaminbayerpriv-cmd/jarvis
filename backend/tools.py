@@ -10,7 +10,7 @@ from pathlib import Path
 
 import requests
 
-from . import browser_agent, coder, config, keyboard, memory, mouse, panel, platform_utils, vision
+from . import browser_agent, coder, config, confirm, last_target, memory, panel, platform_utils
 
 TOOL_SCHEMAS = [
     {
@@ -76,7 +76,14 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "web_search",
-            "description": "Öffnet eine Web-Ergebnisliste für eine Suchanfrage im verbundenen Chrome.",
+            "description": (
+                "Sucht im Web nach einer Anfrage und liefert echte Ergebnisse "
+                "(Titel, Kurzbeschreibung, URL) zum Vorlesen/Zusammenfassen zurück. "
+                "NUR für aktuelle oder unsichere Informationen (Preise, News, "
+                "Öffnungszeiten, Fakten, die du wirklich nicht kennst). NICHT für "
+                "Allgemeinwissen wie Hauptstädte, Geschichte, Mathematik oder Definitionen "
+                "— das beantwortest du direkt aus eigenem Wissen, ohne dieses Tool."
+            ),
             "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]},
         },
     },
@@ -117,10 +124,11 @@ TOOL_SCHEMAS = [
         "function": {
             "name": "open_folder",
             "description": (
-                "Öffnet einen Ordner im Finder/Explorer anhand seines Namens und "
-                "optional seines Ortes, z.B. 'Projekte auf dem Desktop' oder "
-                "'Rechnungen in den Dokumenten'. Nutze das für JEDEN Ordner — "
-                "niemals open_app oder click_on_screen für Ordner verwenden."
+                "Öffnet einen Ordner SICHTBAR im Finder/Explorer, z.B. 'Projekte auf "
+                "dem Desktop' oder 'Rechnungen in den Dokumenten'. Nutze das nur, wenn "
+                "der Nutzer den Ordner selbst sehen/durchsuchen will. Willst du "
+                "stattdessen NUR wissen, was drin liegt, um es zu sagen, nutze "
+                "list_folder — niemals open_app für Ordner verwenden."
             ),
             "parameters": {
                 "type": "object",
@@ -137,28 +145,22 @@ TOOL_SCHEMAS = [
     {
         "type": "function",
         "function": {
-            # NOT named see_screen. Under that name this schema tripped a
-            # real LM Studio bug: the reply's first tokens came back mangled
-            # ("IGHLICHScreen...") for 10 out of 10 attempts on its own
-            # trigger phrases, with no tool call. Measured cause was the tool
-            # NAME itself, not the description or parameters — renaming it
-            # dropped the failure rate to 0 out of 30. Keep the name free of
-            # "screen" unless you re-measure.
-            "name": "look_at_display",
+            "name": "list_folder",
             "description": (
-                "Schaut auf den Bildschirm des Nutzers und beschreibt oder analysiert was "
-                "dort zu sehen ist. Nutze dieses Tool bei jeder Frage zum aktuellen "
-                "Bildschirminhalt, zum Beispiel schau mal, guck mal, was siehst du, was "
-                "zeigt der Bildschirm, oder bei Hilfe zu einem sichtbaren Fehler."
+                "Sagt, was in einem Ordner liegt (Dateinamen als Text), OHNE etwas zu "
+                "öffnen. Nutze das bei 'was liegt in X', 'was ist in X drin', 'zeig mir "
+                "den Inhalt von X', 'guck in X'. Für 'Dokumente', 'Desktop', 'Downloads' "
+                "reicht der Name allein — nicht nach dem genauen Pfad fragen."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "question": {
+                    "description": {
                         "type": "string",
-                        "description": "Was am Bildschirm herausgefunden werden soll",
+                        "description": "Ordnername und, falls genannt, sein Ort — genau wie der Nutzer es gesagt hat",
                     }
                 },
+                "required": ["description"],
             },
         },
     },
@@ -195,6 +197,50 @@ TOOL_SCHEMAS = [
                     "destination": {"type": "string", "description": "Der Zielordner, z.B. ~/Documents oder ein Zielpfad"},
                 },
                 "required": ["source", "destination"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "write_file",
+            "description": (
+                "Schreibt Text in eine Datei — legt sie neu an oder überschreibt sie, "
+                "legt fehlende Ordner automatisch an. Nutze das für 'schreib eine Datei', "
+                "'speicher das als', 'leg eine Konfig-Datei an' und ähnliches."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Zielpfad, z.B. ~/Desktop/notiz.txt"},
+                    "content": {"type": "string", "description": "Der zu schreibende Inhalt"},
+                },
+                "required": ["path", "content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "delete_path",
+            "description": (
+                "Verschiebt eine Datei oder einen Ordner in den Papierkorb (reversibel, "
+                "kein endgültiges Löschen). Nutze das für JEDE Lösch-Anfrage ('lösch den "
+                "Ordner X', 'entferne die Datei Y') — niemals rm über run_shell, das kann "
+                "bei einem falschen oder nicht existierenden Pfad fälschlich Erfolg "
+                "vortäuschen. Das Tool fragt selbst automatisch nach Bestätigung und löscht "
+                "erst, wenn der Nutzer zustimmt — ruf es einfach direkt auf, du musst nicht "
+                "selbst vorher nachfragen oder dir merken, worauf sich ein späteres 'ja' bezieht."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "description": {
+                        "type": "string",
+                        "description": "Name/Beschreibung der Datei oder des Ordners, z.B. 'Ordner Machs auf dem Desktop' oder 'notiz.txt in Dokumente'.",
+                    },
+                },
+                "required": ["description"],
             },
         },
     },
@@ -247,175 +293,6 @@ TOOL_SCHEMAS = [
                     },
                 },
                 "required": ["title", "content"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "save_screenshot",
-            "description": (
-                "Macht ein Bildschirmfoto und speichert es als Datei. Nutze das immer, "
-                "wenn der Nutzer einen Screenshot machen oder speichern will. Nicht "
-                "verwechseln mit look_at_display, das nur anschaut ohne zu speichern."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "location": {
-                        "type": "string",
-                        "description": "Zielordner, zum Beispiel Desktop. Leer lassen fuer Desktop.",
-                    }
-                },
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "type_text",
-            "description": (
-                "Tippt Text auf der Tastatur in das gerade aktive Fenster. Nutze das, "
-                "wenn der Nutzer etwas schreiben oder eingeben lassen will."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {"text": {"type": "string", "description": "Der zu tippende Text"}},
-                "required": ["text"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "press_key",
-            "description": (
-                "Drueckt eine Taste oder Tastenkombination, zum Beispiel Enter, Escape, "
-                "cmd+s zum Speichern oder cmd+w zum Schliessen."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "key": {
-                        "type": "string",
-                        "description": "Die Taste, zum Beispiel enter, escape, cmd+s",
-                    }
-                },
-                "required": ["key"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "click_on_screen",
-            "description": (
-                "Schaut auf den Bildschirm, findet ein sichtbares Element anhand seiner "
-                "Beschreibung und interagiert damit: klicken (Standard), doppelklicken, "
-                "rechtsklicken, oder mit action='move' die Maus NUR dorthin bewegen ohne "
-                "zu klicken — echtes Hover, kein Klick-Ersatz. Nutze 'move' bei 'bewege die "
-                "Maus auf/zu X', 'zeig auf X', 'fahr über X'. Die Zielerkennung ist "
-                "ungefähr, nicht pixelgenau — bei kleinen oder dicht beieinanderliegenden "
-                "Elementen kann es danebengehen."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "description": {
-                        "type": "string",
-                        "description": "Womit interagiert werden soll, so wie der Nutzer es beschrieben hat",
-                    },
-                    "action": {
-                        "type": "string",
-                        "enum": ["click", "double_click", "right_click", "move"],
-                        "description": "Standardmäßig 'click'. 'move' bewegt nur die Maus, ohne zu klicken.",
-                    },
-                },
-                "required": ["description"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "mouse_action",
-            "description": (
-                "Bewegt die Maus zu exakten Bildschirm-Koordinaten oder zieht von einer "
-                "Koordinate zu einer anderen. Nur nutzen, wenn die Koordinaten bereits "
-                "bekannt sind (z.B. aus einer vorherigen click_on_screen-Antwort) — sonst "
-                "click_on_screen verwenden, das die Position selbst herausfindet."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "action": {"type": "string", "enum": ["move", "click", "drag", "scroll"]},
-                    "x": {"type": "number"},
-                    "y": {"type": "number"},
-                    "x2": {"type": "number", "description": "Zielpunkt, nur für 'drag'"},
-                    "y2": {"type": "number", "description": "Zielpunkt, nur für 'drag'"},
-                    "button": {"type": "string", "enum": ["left", "right"]},
-                },
-                "required": ["action"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "find_coordinates",
-            "description": (
-                "Findet die Bildschirm-Koordinaten (x, y) eines Elements auf dem "
-                "Bildschirm, ohne darauf zu klicken. Nutze das, um Positionen zu "
-                "überprüfen oder mehrere Aktionen zu planen. Gibt Pixel-Koordinaten "
-                "zurück, die mit mouse_action verwendet werden können."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "description": {
-                        "type": "string",
-                        "description": "Was zu finden ist, z.B. 'der rote Button', 'das Suchfeld oben links'",
-                    }
-                },
-                "required": ["description"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_screen_elements",
-            "description": (
-                "Analysiert den Bildschirm und gibt eine Liste der sichtbaren "
-                "interaktiven Elemente zurück (Buttons, Links, Eingabefelder). "
-                "Nutze das, um zu sehen, was auf dem Bildschirm klickbar ist, "
-                "bevor du auf etwas klickst."
-            ),
-            "parameters": {"type": "object", "properties": {}},
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "drag_on_screen",
-            "description": (
-                "Zieht ein Element von einer Position zu einer anderen. "
-                "Koordinaten können von find_coordinates kommen oder als Beschreibungen "
-                "angegeben werden ('vom roten Button zum blauen Feld')."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "from_description": {
-                        "type": "string",
-                        "description": "Beschreibung des Startelements oder 'x,y' Koordinaten",
-                    },
-                    "to_description": {
-                        "type": "string",
-                        "description": "Beschreibung des Zielelements oder 'x,y' Koordinaten",
-                    },
-                },
-                "required": ["from_description", "to_description"],
             },
         },
     },
@@ -502,7 +379,33 @@ def _youtube_search(query: str) -> str:
 
 
 def _web_search(query: str) -> str:
-    return browser_agent.agent.web_search(query)
+    """Real search when a Tavily key is configured; otherwise the old
+    behaviour (open a results page in the connected browser) so this still
+    works, just without spoken answers, when nobody has set up a key."""
+    if not config.TAVILY_API_KEY:
+        return browser_agent.agent.web_search(query)
+
+    try:
+        resp = requests.post(
+            "https://api.tavily.com/search",
+            headers={"Authorization": f"Bearer {config.TAVILY_API_KEY}", "Content-Type": "application/json"},
+            json={"query": query, "max_results": 5, "include_answer": True},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        if data.get("answer"):
+            return data["answer"]
+        results = data.get("results", [])
+        if not results:
+            return f"Keine Suchergebnisse für '{query}' gefunden."
+        lines = [
+            f"{r.get('title', '')}: {r.get('content', '')} ({r.get('url', '')})"
+            for r in results[:5]
+        ]
+        return "\n".join(lines)
+    except Exception as exc:
+        return f"Suche fehlgeschlagen: {exc}"
 
 
 def _browser_tabs() -> str:
@@ -588,17 +491,19 @@ _FOLDER_STOPWORDS = {
 }
 
 
-def _open_folder(description: str) -> str:
-    """Open a named folder deterministically via its real filesystem path.
+def _resolve_fs_path(description: str, *, require_dir: bool) -> tuple[Path | None, str]:
+    """Resolve a spoken file/folder reference to a real path deterministically.
 
     Vision-based clicking is approximate and struggles with small desktop
-    icons; a named folder request ("Ordner Projekte auf dem Desktop") has an
-    exact answer on disk, so this resolves it directly instead of guessing
-    pixel coordinates.
+    icons; a named request ("Ordner Projekte auf dem Desktop") has an exact
+    answer on disk, so this resolves it directly instead of guessing pixel
+    coordinates. Returns (path or None, the resolved/attempted name) —
+    shared by every tool that takes a spoken folder/file reference, so they
+    all fail the same way.
     """
     text = (description or "").strip()
     if not text:
-        return "Welchen Ordner soll ich öffnen?"
+        return None, ""
 
     lowered = text.lower()
     base = Path.home() / "Desktop"
@@ -607,7 +512,9 @@ def _open_folder(description: str) -> str:
             base = Path(os.path.expanduser(path))
             break
 
-    words = [w for w in re.findall(r"[\wÄÖÜäöüß-]+", text) if w.lower() not in _FOLDER_STOPWORDS]
+    # "." kept so a spoken filename with an extension ("notiz.txt") survives
+    # as one token instead of splitting into "notiz" + "txt".
+    words = [w for w in re.findall(r"[\wÄÖÜäöüß.-]+", text) if w.lower() not in _FOLDER_STOPWORDS]
     name = " ".join(words).strip()
 
     target = base if not name else base / name
@@ -616,10 +523,22 @@ def _open_folder(description: str) -> str:
         if matches:
             target = matches[0]
 
-    if not target.exists():
-        return f"Konnte den Ordner '{name or base.name}' nicht finden."
-    if not target.is_dir():
-        return f"'{target.name}' ist kein Ordner."
+    if not target.exists() or (require_dir and not target.is_dir()):
+        return None, name or base.name
+    last_target.remember(target)
+    return target, target.name
+
+
+def _resolve_folder_path(description: str) -> tuple[Path | None, str]:
+    return _resolve_fs_path(description, require_dir=True)
+
+
+def _open_folder(description: str) -> str:
+    target, name = _resolve_folder_path(description)
+    if not (description or "").strip():
+        return "Welchen Ordner soll ich öffnen?"
+    if target is None:
+        return f"Konnte den Ordner '{name}' nicht finden."
 
     try:
         if platform_utils.is_windows():
@@ -631,6 +550,30 @@ def _open_folder(description: str) -> str:
     except Exception as exc:
         return f"Konnte '{target.name}' nicht öffnen: {exc}"
     return f"Ordner '{target.name}' geöffnet."
+
+
+def _list_folder(description: str) -> str:
+    """Return a folder's contents as text, without opening anything.
+
+    Answers "was liegt in Ordner X" honestly — open_folder only opens
+    Finder/Explorer and tells Jarvis nothing back, which was leading to
+    hallucinated "der Ordner existiert nicht" claims for folders that were
+    never actually checked.
+    """
+    if not (description or "").strip():
+        return "Welchen Ordner soll ich mir ansehen?"
+    target, name = _resolve_folder_path(description)
+    if target is None:
+        return f"Konnte den Ordner '{name}' nicht finden."
+
+    entries = sorted(target.iterdir(), key=lambda p: p.name.lower())
+    if not entries:
+        return f"'{target.name}' ist leer."
+    shown = [f"{p.name}/" if p.is_dir() else p.name for p in entries[:40]]
+    listing = ", ".join(shown)
+    if len(entries) > 40:
+        listing += f", … und {len(entries) - 40} weitere"
+    return f"Inhalt von '{target.name}': {listing}"
 
 
 def _run_shell(command: str) -> str:
@@ -690,139 +633,59 @@ def _move_file(source: str, destination: str) -> str:
     return f"'{src.name}' nach '{dst.parent}' verschoben."
 
 
+def _delete_path(description: str) -> str:
+    """Ask for confirmation, then move a file or folder to the Trash.
+
+    Two things that used to go wrong here: a raw `rm -rf` run through
+    run_shell silently no-ops on a missing target (that's what -f means),
+    with the exact same empty output and exit code as a real deletion —
+    Jarvis once confidently claimed to have deleted a folder that was never
+    there. And the confirm/execute split used to be pure prose: the model
+    asked "Soll ich das löschen?" in plain text, then had to correctly
+    remember and re-resolve what "das" meant when the user said "ja" a turn
+    later — which a small local model reliably failed at.
+
+    Both are fixed the same way: nothing here is inferred from conversation
+    text. send2trash raises for a path that doesn't exist (existence is
+    checked again after, too), and the confirmation itself is registered as
+    real state via confirm.propose — resolved deterministically in code the
+    moment the user answers, never re-derived by the model.
+    """
+    if not (description or "").strip():
+        return "Was genau soll ich löschen?"
+
+    target, name = _resolve_fs_path(description, require_dir=False)
+    if target is None:
+        return f"Konnte '{name}' nicht finden — da ist nichts zu löschen."
+
+    def _do_delete() -> str:
+        try:
+            from send2trash import send2trash
+            send2trash(str(target))
+        except Exception as exc:
+            return f"Konnte '{target.name}' nicht löschen: {exc}"
+        if target.exists():
+            return f"'{target.name}' konnte nicht in den Papierkorb verschoben werden."
+        return f"'{target.name}' wurde in den Papierkorb verschoben."
+
+    return confirm.propose(f"Soll ich '{target.name}' wirklich in den Papierkorb verschieben?", _do_delete)
+
+
+def _write_file(path: str, content: str) -> str:
+    target = Path(os.path.expanduser((path or "").strip().strip("\"'")))
+    if not str(target):
+        return "Welche Datei soll ich schreiben?"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(content or "")
+    return f"Datei geschrieben: {target} ({len(content or '')} Zeichen)."
+
+
 def _show_on_screen(title: str, content: str, language: str = "") -> str:
     if language:
         panel.push("code", title=title, language=language, text=content)
     else:
         panel.push("markdown", title=title, text=content)
     return f"Ich hab '{title}' im Interface angezeigt."
-
-
-def _click_on_screen(description: str, action: str = "click") -> str:
-    if not description.strip():
-        return "Was soll ich anklicken?"
-    return mouse.click_on_screen(description, action or "click")
-
-
-def _mouse_action(a: dict) -> str:
-    action = a.get("action", "")
-    w, h = mouse.screen_size()
-
-    def clamp(v, lo, hi):
-        return max(lo, min(hi, v))
-
-    x = clamp(float(a.get("x", 0)), 0, w)
-    y = clamp(float(a.get("y", 0)), 0, h)
-
-    if action == "move":
-        mouse._move_mouse(x, y)
-        return f"Maus zu ({int(x)}, {int(y)}) bewegt."
-    if action == "click":
-        ok = mouse.click(x, y, button=a.get("button", "left"))
-        return f"Bei ({int(x)}, {int(y)}) geklickt." if ok else f"Klick fehlgeschlagen bei ({int(x)}, {int(y)})."
-    if action == "drag":
-        x2 = clamp(float(a.get("x2", x)), 0, w)
-        y2 = clamp(float(a.get("y2", y)), 0, h)
-        mouse.drag(x, y, x2, y2)
-        return f"Von ({int(x)}, {int(y)}) nach ({int(x2)}, {int(y2)}) gezogen."
-    if action == "scroll":
-        mouse.scroll(dy=int(a.get("y", 0)))
-        return "Gescrollt."
-    return f"Unbekannte Mausaktion: {action}"
-
-
-def _find_coordinates(description: str) -> str:
-    """Find element and return its coordinates without clicking."""
-    if not description.strip():
-        return "Was soll ich finden?"
-    coords = mouse.find_on_screen(description)
-    if coords is None:
-        return f"Konnte '{description}' nicht auf dem Bildschirm finden."
-    x, y = coords
-    return f"'{description}' gefunden bei Koordinaten: x={int(x)}, y={int(y)}"
-
-
-def _get_screen_elements() -> str:
-    """Analyze screen and return list of interactive elements."""
-    try:
-        shot_path = vision.capture_screen()
-        raw = vision.downscale(shot_path, max_width=1400)
-    except Exception as exc:
-        return f"Konnte keinen Screenshot machen: {exc}"
-
-    import base64
-    import io
-    from PIL import Image
-
-    img = Image.open(io.BytesIO(raw))
-    shot_w, shot_h = img.size
-
-    b64 = base64.b64encode(raw).decode("ascii")
-    panel.push("image", title="Bildschirm-Analyse", data_url=f"data:image/png;base64,{b64}")
-
-    prompt = (
-        f"Analysiere diesen Bildschirm ({shot_w}x{shot_h} Pixel). "
-        "Liste alle sichtbaren interaktiven Elemente auf: Buttons, Links, "
-        "Eingabefelder, Menüpunkte, Icons. Gib für jedes Element zurück: "
-        "eine kurze Beschreibung und die ungefähren Koordinaten (x,y). "
-        "Format: 'Beschreibung bei x,y'. Maximal 10 wichtigste Elemente."
-    )
-    try:
-        resp = requests.post(
-            f"{config.LM_STUDIO_BASE_URL}/chat/completions",
-            json={
-                "model": vision.VISION_MODEL,
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": prompt},
-                            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
-                        ],
-                    }
-                ],
-                "max_tokens": 400,
-                "reasoning_effort": "none",
-            },
-            timeout=180,
-        )
-        resp.raise_for_status()
-        answer = resp.json()["choices"][0]["message"].get("content", "").strip()
-        if not answer:
-            return "Konnte keine Elemente erkennen."
-        return f"Gefundene Elemente:\n{answer}"
-    except Exception as exc:
-        return f"Analyse fehlgeschlagen: {exc}"
-
-
-def _drag_on_screen(from_desc: str, to_desc: str) -> str:
-    """Drag from one element/coordinate to another."""
-    # Parse coordinates if provided as "x,y" strings
-    def parse_coord(s: str) -> tuple[float, float] | None:
-        import re
-        m = re.match(r"(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)", s.strip())
-        if m:
-            return (float(m.group(1)), float(m.group(2)))
-        return None
-
-    # Get start position
-    start = parse_coord(from_desc)
-    if start is None:
-        start = mouse.find_on_screen(from_desc)
-        if start is None:
-            return f"Konnte Startpunkt '{from_desc}' nicht finden."
-
-    # Get end position
-    end = parse_coord(to_desc)
-    if end is None:
-        end = mouse.find_on_screen(to_desc)
-        if end is None:
-            return f"Konnte Zielpunkt '{to_desc}' nicht finden."
-
-    x1, y1 = start
-    x2, y2 = end
-    mouse.drag(x1, y1, x2, y2)
-    return f"Von ({int(x1)}, {int(y1)}) nach ({int(x2)}, {int(y2)}) gezogen."
 
 
 DISPATCH = {
@@ -835,21 +698,15 @@ DISPATCH = {
     "browser_tabs": lambda a: _browser_tabs(),
     "open_app": lambda a: _open_app(a.get("name", "")),
     "open_folder": lambda a: _open_folder(a.get("description", "")),
-    "look_at_display": lambda a: vision.look_at_screen(a.get("question", "")),
+    "list_folder": lambda a: _list_folder(a.get("description", "")),
     "run_shell": lambda a: _run_shell(a.get("command", "")),
     "build_project": lambda a: _build_project(a.get("location", ""), a.get("description", "")),
     "show_on_screen": lambda a: _show_on_screen(
         a.get("title", "Info"), a.get("content", ""), a.get("language", "")
     ),
-    "click_on_screen": lambda a: _click_on_screen(a.get("description", ""), a.get("action", "click")),
-    "mouse_action": _mouse_action,
-    "save_screenshot": lambda a: vision.save_screenshot(a.get("location", "")),
-    "type_text": lambda a: keyboard.type_text(a.get("text", "")),
-    "press_key": lambda a: keyboard.press_key(a.get("key", ""), a.get("modifiers")),
-    "find_coordinates": lambda a: _find_coordinates(a.get("description", "")),
-    "get_screen_elements": lambda a: _get_screen_elements(),
-    "drag_on_screen": lambda a: _drag_on_screen(a.get("from_description", ""), a.get("to_description", "")),
     "move_file": lambda a: _move_file(a.get("source", ""), a.get("destination", "")),
+    "write_file": lambda a: _write_file(a.get("path", ""), a.get("content", "")),
+    "delete_path": lambda a: _delete_path(a.get("description", "")),
 }
 
 
@@ -861,7 +718,7 @@ def call_tool(name: str, arguments: dict) -> str:
     panel.push("action", id=action_id, action=name, status="läuft", target=arguments)
     try:
         result = handler(arguments)
-        failed = result.lower().startswith(("fehler", "konnte", "unbekannt", "browser-agent nicht verbunden", "browser-aktion fehlgeschlagen", "screenshot fehlgeschlagen", "tastendruck fehlgeschlagen", "tippen fehlgeschlagen", "klick fehlgeschlagen"))
+        failed = result.lower().startswith(("fehler", "konnte", "unbekannt", "browser-agent nicht verbunden", "browser-aktion fehlgeschlagen"))
         panel.push("action", id=action_id, action=name, status="fehlgeschlagen" if failed else "erfolgreich", detail=result)
         return result
     except Exception as exc:

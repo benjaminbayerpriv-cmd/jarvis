@@ -18,7 +18,7 @@ _pending: list[dict] = []
 
 def push(kind: str, **fields) -> None:
     """Queue a panel item. `kind` is one of:
-    image | code | markdown | files | link
+    image | code | markdown | files | link | task | notify | action
     """
     with _lock:
         _pending.append({"kind": kind, **fields})

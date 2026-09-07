@@ -99,33 +99,20 @@ durchgelaufen sein.
 
 - **Programme & Webseiten öffnen** — auf macOS über Spotlight/App-Bundles,
   auf Windows über den Programmnamen (`Rechner`, `Notizen` etc.).
-- **Auf den Bildschirm schauen** — Screenshot via `screencapture` (macOS)
-  beziehungsweise Windows PowerShell, Analyse
-  durch das lokale Vision-Modell `google/gemma-4-e2b`. Muss in LM Studio
-  geladen sein, sonst schlägt nur dieses eine Tool fehl.
-- **Shell-Befehle ausführen** — Ausgaben über 400 Zeichen landen in der
-  Werkbank statt vorgelesen zu werden. Eine Sperrliste verhindert
-  systemzerstörende Befehle (`sudo`, `rm -rf /`, `mkfs`, Fork-Bombs …).
-- **Projekte programmieren** — Jarvis fragt nach dem Ordner und übergibt die
-  Arbeit an die **Claude Code CLI**, die dort wirklich Dateien schreibt.
-  Läuft im Hintergrund und meldet sich per Sprache, wenn es fertig ist.
-- **Inhalte anzeigen** — alles Längere (Code, Erklärungen, Listen) geht in
-  die Werkbank rechts, gesprochen wird nur ein kurzer Satz dazu.
-
-### Voraussetzung fürs Programmieren
-
-`build_project` braucht eine angemeldete Claude Code CLI. Falls Jarvis sagt,
-die Anmeldung sei abgelaufen, einmal im Terminal anmelden:
-
-```bash
-claude
-```
-
-Alternativ einen API-Key setzen (die CLI nimmt ihn automatisch):
-
-```bash
-export ANTHROPIC_API_KEY=dein-key
-```
+- **Shell-Befehle ausführen** — Ausgaben über 400 Zeichen gehen ins Interface
+  statt vorgelesen zu werden. Eine Sperrliste verhindert systemzerstörende
+  Befehle (`sudo`, `rm -rf /`, `mkfs`, Fork-Bombs …).
+- **Dateien schreiben** — direkt per `write_file`, ohne Shell-Umweg.
+- **Im Web suchen** — mit `TAVILY_API_KEY` echte Ergebnisse, sonst öffnet
+  es die Suche im verbundenen Browser.
+- **Projekte programmieren** — Jarvis fragt nach dem Ordner und baut das
+  Projekt mit seinem eigenen Modell selbst (kein externes Tool). Läuft im
+  Hintergrund und meldet sich per Sprache, wenn es fertig ist. Ein kleines
+  lokales Modell liefert dabei spürbar schwächere Ergebnisse als ein
+  dediziertes Coding-Tool — für ernsthafte Projekte eher als Ausgangspunkt
+  zu verstehen.
+- **Inhalte anzeigen** — alles Längere (Code, Erklärungen, Listen) geht ins
+  Interface, gesprochen wird nur ein kurzer Satz dazu.
 
 ## Anpassen
 
