@@ -291,62 +291,50 @@ function drawSegmentRing(cx, cy, ringR, spin, color, level, alpha) {
   orbCtx.restore();
 }
 
-// ---------- orbit rings: wide 3D bands interlocking around the outer ring -
+// ---------- DNA ring: a single double-helix band right at the outer edge -
 //
-// Full closed circles (not comet trails with a fading tail) — three wide
-// bands, each tilted into its own plane and spinning at its own speed, run
-// through the exact same cosY/sinY/cosX/sinX rotation the sphere itself
-// uses below. Together that reads as an armillary-sphere/gyroscope look:
-// the rings visibly pass through and interlock with each other as they
-// all turn, rather than sitting as flat decoration on top of the sphere.
-// radiusFactor is relative to the outer HUD radius (outerR), so these live
-// right at the dust ring's own width, not close in around the sphere.
-const ORBIT_RINGS = [
-  { tiltX: 0.9, tiltZ: 0.25, speed: 0.22, radiusFactor: 0.98 },
-  { tiltX: -0.55, tiltZ: 1.15, speed: -0.16, radiusFactor: 1.04 },
-  { tiltX: 0.15, tiltZ: -0.85, speed: 0.13, radiusFactor: 1.1 },
-];
-const ORBIT_SAMPLES = 72; // full circle now, needs more points to stay smooth
+// Two strands wound around one circle (a sine-wobbled radius, 180° out of
+// phase with each other) plus regular connecting "rungs" — the classic
+// double-helix ladder, wrapped into a ring instead of running straight.
+// Deliberately flat 2D (just orbSpin, none of the sphere's own tilt/spin
+// matrix) and sized to sit right at the outer boundary: it must not dip
+// through the middle over the sphere the way the earlier tilted-rings
+// version did.
+const DNA_TWISTS = 10; // full sine oscillations per lap — how tightly wound the helix looks
+const DNA_SAMPLES = 200;
+const DNA_RUNGS = 26;
 
-function drawOrbitTrails(cx, cy, outerR, cosY, sinY, cosX, sinX, color, alpha) {
+function drawDnaRing(cx, cy, outerR, spin, color, alpha) {
   const t = Date.now() / 1000;
+  const ringR = outerR * 1.06;
+  const amp = outerR * 0.045;
+  // Twisting independently of the ring's own rotation — spin alone would
+  // just carry a frozen wave pattern around; this makes the strands
+  // visibly crawl over/under each other as they go, the actual "hereindreht"
+  // motion that was asked for.
+  const twistPhase = t * 0.8;
+  const radiusAt = (theta, strandOffset) =>
+    ringR + amp * Math.sin(theta * DNA_TWISTS + twistPhase + strandOffset);
+
   orbCtx.save();
   orbCtx.lineCap = "round";
   orbCtx.shadowColor = color;
   orbCtx.shadowBlur = 5;
   orbCtx.strokeStyle = color;
-  // As wide as the segmented ring's own ticks — a thin hairline read as a
-  // stray line, not a ring band, at this scale.
-  orbCtx.lineWidth = Math.max(2, outerR * 0.05);
-  for (const ring of ORBIT_RINGS) {
-    const spin = t * ring.speed;
-    const r = outerR * ring.radiusFactor;
-    const ctz = Math.cos(ring.tiltZ), stz = Math.sin(ring.tiltZ);
-    const ctx2 = Math.cos(ring.tiltX), stx = Math.sin(ring.tiltX);
+  orbCtx.lineWidth = Math.max(1.5, outerR * 0.016);
+
+  for (const strandOffset of [0, Math.PI]) {
     let prev = null;
-    for (let i = 0; i <= ORBIT_SAMPLES; i++) {
-      const angle = spin + (Math.PI * 2 * i) / ORBIT_SAMPLES;
-
-      // Point on a unit circle, tilted into this ring's own plane.
-      const lx = Math.cos(angle), ly = Math.sin(angle);
-      const x0 = lx * ctz - ly * stz, y0 = lx * stz + ly * ctz;
-      const y1 = y0 * ctx2, z1 = y0 * stx;
-
-      // Same global spin/tilt the sphere uses, so the whole ring turns and
-      // dips with it — this is what makes it look like it interlocks with
-      // the sphere and the other rings instead of floating flat on top.
-      const gx = x0 * cosY + z1 * sinY;
-      const gz1 = -x0 * sinY + z1 * cosY;
-      const gy = y1 * cosX - gz1 * sinX;
-      const gz = y1 * sinX + gz1 * cosX;
-
-      const perspective = 3.1 / (3.1 + gz);
-      const sx = cx + gx * r * perspective;
-      const sy = cy + gy * r * perspective;
-
+    for (let i = 0; i <= DNA_SAMPLES; i++) {
+      const theta = spin + (Math.PI * 2 * i) / DNA_SAMPLES;
+      const r = radiusAt(theta, strandOffset);
+      const sx = cx + Math.cos(theta) * r, sy = cy + Math.sin(theta) * r;
       if (prev) {
-        const front = Math.max(0, 1 - (gz + 1) / 2); // ~0 behind sphere .. ~1 in front
-        orbCtx.globalAlpha = alpha * (0.25 + front * 0.6);
+        // The strand nearer the viewer (larger radius, bulging outward at
+        // this point in its twist) reads as "in front" — brighter — the
+        // one currently pulled inward as passing behind it.
+        const bulge = (r - ringR) / amp; // -1..1
+        orbCtx.globalAlpha = alpha * (0.45 + Math.max(0, bulge) * 0.55);
         orbCtx.beginPath();
         orbCtx.moveTo(prev.sx, prev.sy);
         orbCtx.lineTo(sx, sy);
@@ -355,6 +343,20 @@ function drawOrbitTrails(cx, cy, outerR, cosY, sinY, cosX, sinX, color, alpha) {
       prev = { sx, sy };
     }
   }
+
+  // Base-pair rungs between the two strands at regular intervals.
+  orbCtx.lineWidth = Math.max(1, outerR * 0.008);
+  for (let i = 0; i < DNA_RUNGS; i++) {
+    const theta = spin + (Math.PI * 2 * i) / DNA_RUNGS;
+    const rA = radiusAt(theta, 0);
+    const rB = radiusAt(theta, Math.PI);
+    orbCtx.globalAlpha = alpha * 0.4;
+    orbCtx.beginPath();
+    orbCtx.moveTo(cx + Math.cos(theta) * rA, cy + Math.sin(theta) * rA);
+    orbCtx.lineTo(cx + Math.cos(theta) * rB, cy + Math.sin(theta) * rB);
+    orbCtx.stroke();
+  }
+
   orbCtx.restore();
 }
 
@@ -435,7 +437,7 @@ function renderOrb(level, stateName) {
   // flat 2D circles, independent of the sphere's own 3D tilt/spin below.
   drawDustRing(cx, cy, outerR, orbSpin, ringColor, 0.55 * listenPulse);
   drawSegmentRing(cx, cy, outerR * 0.82, orbSpin, ringColor, level, 0.75 * listenPulse);
-  drawOrbitTrails(cx, cy, outerR, cosY, sinY, cosX, sinX, ringColor, 0.8 * listenPulse);
+  drawDnaRing(cx, cy, outerR, orbSpin, ringColor, 0.8 * listenPulse);
 
   const projected = orbVerts.map((v) => {
     const ripple = Math.sin(v.x * 4 + t * 1.6) * Math.cos(v.y * 4 - t * 1.1);
