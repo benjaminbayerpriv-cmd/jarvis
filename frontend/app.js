@@ -930,14 +930,21 @@ async function sendUtterance(chunks, startedAt) {
   }
 }
 
-/* ---------- echo-cancelled VAD: drives both recording and barge-in ---------- */
+/* ---------- VAD: drives recording; voice barge-in is off ---------- */
 //
-// A plain getUserMedia stream ignores its own echoCancellation constraint
-// for analysis purposes unless the analysis itself pulls from that same
-// constrained stream — which this does: the OS subtracts Jarvis's own
-// output from it, so a sustained level spike here reliably means a real
-// person is talking, whether Jarvis is currently silent (listening) or
-// speaking (barge-in).
+// This used to double as barge-in detection too, relying on the mic
+// stream's own echoCancellation to subtract Jarvis's speaker output back
+// out of the signal — so a level spike while Jarvis was talking reliably
+// meant a real person interrupting, not feedback. echoCancellation is off
+// now (see startBtn's handler — macOS's echo-cancelled "voice processing"
+// audio path was locking the mic exclusively for every other app on the
+// machine the whole time Jarvis was running), so that assumption no longer
+// holds: without it, Jarvis's own voice bleeding into a built-in mic reads
+// as a sustained level spike too, and would trigger this on every single
+// reply instead of on real interruptions. Voice barge-in is only ever
+// checked during "listening" below now; interrupting a reply in progress
+// still works, just via the hotkey (Cmd/Ctrl+Shift+J) instead of talking
+// over it.
 
 let vadAnalyser = null;
 let vadData = null;
@@ -954,20 +961,11 @@ function vadTick() {
   const rms = rmsFrom(vadAnalyser, vadData);
   const state = document.body.dataset.state;
 
-  // Barge-in only makes sense once Jarvis is actually making sound to talk
-  // over. During "thinking" there's nothing playing yet — a local model
-  // can easily take 15-20s, and any ambient noise in that window (fan,
-  // breathing, a chair creak) used to silently cancel the turn before its
-  // reply ever arrived, via `busy` covering both phases.
-  if (state === "speaking") {
-    const threshold = Math.max(vadNoiseFloor * VAD_MULTIPLIER, VAD_MIN_ABS);
-    vadAbove = rms > threshold ? vadAbove + 1 : 0;
-    if (vadAbove >= VAD_SUSTAIN) {
-      vadAbove = 0;
-      interruptActiveTurn();
-    }
-    return;
-  }
+  // No voice-triggered barge-in while Jarvis is talking or thinking
+  // anymore — without echoCancellation, Jarvis's own voice bleeding into
+  // the mic would read as a level spike on every reply (see the comment
+  // above). Use the hotkey to interrupt instead.
+  if (state === "speaking") return;
 
   if (state !== "listening") {
     vadNoiseFloor = vadNoiseFloor * 0.98 + rms * 0.02;
@@ -1024,8 +1022,13 @@ function setMuted(next) {
 startBtn.addEventListener("click", async () => {
   if (micReady) return;
   try {
+    // echoCancellation off on purpose (see the VAD comment below) — with
+    // built-in speakers + mic, macOS engages a "voice processing" audio
+    // path for echo-cancelled input that claims the mic exclusively, so no
+    // other app can use it at all while Jarvis is running. Trading away
+    // voice barge-in for that was a deliberate call, not an oversight.
     const stream = await navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+      audio: { echoCancellation: false, noiseSuppression: true, autoGainControl: true },
     });
     micReady = true;
     micStream = stream;
