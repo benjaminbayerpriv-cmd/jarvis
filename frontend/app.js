@@ -215,9 +215,12 @@ function renderOrb(level, stateName) {
   const muted = stateName === "off";
   const thinking = stateName === "thinking";
 
-  // Frozen in place while muted — the color noise below still flows, so
-  // red keeps moving even though the geometry doesn't rotate.
-  if (!muted) orbSpin += 0.0032 + level * 0.014;
+  // Keeps spinning at rest even while muted — muting only stops audio from
+  // being recorded, it doesn't pause Jarvis (a reply already in flight
+  // keeps going, typed messages still work), so freezing the orb here
+  // used to visually claim otherwise. The red colour below is still the
+  // signal that the mic itself is off.
+  orbSpin += 0.0032 + level * 0.014;
   const tilt = 0.32 + Math.sin(t / 4) * 0.06;
   const cosY = Math.cos(orbSpin), sinY = Math.sin(orbSpin);
   const cosX = Math.cos(tilt), sinX = Math.sin(tilt);
