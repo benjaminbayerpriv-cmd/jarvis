@@ -1286,7 +1286,10 @@ async function startCamera() {
   camHint.textContent = "Starte Kamera …";
   try {
     camStream = await navigator.mediaDevices.getUserMedia({
-      video: { width: 1280, height: 720 },
+      // frameRate is a request, not a guarantee — the camera/browser still
+      // picks whatever it can actually sustain — but leaving it unset
+      // tends to default lower than the hardware can really do.
+      video: { width: 1280, height: 720, frameRate: { ideal: 60 } },
     });
     camVideo.srcObject = camStream;
     await camVideo.play();
@@ -1316,7 +1319,8 @@ async function startCamera() {
 
     camHint.textContent = "";
     camLoopRunning = true;
-    requestAnimationFrame(camLoop);
+    requestAnimationFrame(drawLoop);
+    requestAnimationFrame(handsLoop);
     setInterval(runObjectDetection, 700);
   } catch (err) {
     console.error(err);
@@ -1326,13 +1330,36 @@ async function startCamera() {
   }
 }
 
-async function camLoop() {
+// Drawing the video frame is its own loop, uncoupled from hand tracking —
+// it redraws every rAF tick (the display's own full refresh rate) no
+// matter how slow MediaPipe is running, instead of waiting on it each
+// frame like the old single combined loop did. The webcam feed itself
+// should never look choppier than the model behind it can keep up with.
+function drawLoop() {
   if (!camLoopRunning) return;
-  if (handsModel && camVideo.readyState >= 2) {
-    await handsModel.send({ image: camVideo });
-  }
   drawCamOverlay();
-  requestAnimationFrame(camLoop);
+  requestAnimationFrame(drawLoop);
+}
+
+// Hand tracking self-throttles to whatever rate MediaPipe can actually
+// sustain: a new send() only starts once the previous one's promise has
+// resolved, so on a slow machine this naturally runs at, say, 12fps while
+// drawLoop above keeps drawing the video at the full 30/60fps the camera
+// and display can do — the skeleton overlay just updates less often, it
+// never holds the video itself back.
+let handsBusy = false;
+
+async function handsLoop() {
+  if (!camLoopRunning) return;
+  if (handsModel && !handsBusy && camVideo.readyState >= 2) {
+    handsBusy = true;
+    try {
+      await handsModel.send({ image: camVideo });
+    } finally {
+      handsBusy = false;
+    }
+  }
+  requestAnimationFrame(handsLoop);
 }
 
 async function runObjectDetection() {
@@ -1347,7 +1374,7 @@ async function runObjectDetection() {
   }
 }
 
-// Everything drawn on the canvas — video, hand skeleton, detection label —
+// Everything drawn on the canvas — video, hand skeleton, detection boxes —
 // shares one mirrored transform (front-camera convention) so a hand
 // reaching from the right of the *frame* still appears to reach from the
 // right on screen, matching what looking at your own hand feels like.
@@ -1361,7 +1388,15 @@ function drawCamOverlay() {
   camCtx.scale(-1, 1);
   camCtx.drawImage(camVideo, 0, 0, w, h);
 
-  let handNorm = null;
+  // Every object COCO-SSD currently sees anywhere in the frame — not just
+  // whatever's closest to the hand — each with its own box and label.
+  if (latestDetections.length && camVideo.videoWidth) {
+    const vw = camVideo.videoWidth, vh = camVideo.videoHeight;
+    for (const det of latestDetections) {
+      drawDetectionBox(det, vw, vh, w, h);
+    }
+  }
+
   if (latestHandLandmarks) {
     camCtx.strokeStyle = "#2be2e2";
     camCtx.fillStyle = "#2be2e2";
@@ -1378,58 +1413,36 @@ function drawCamOverlay() {
       camCtx.arc(p.x * w, p.y * h, 3, 0, Math.PI * 2);
       camCtx.fill();
     }
-    // Landmark 9 (base of the middle finger) sits roughly at the palm's
-    // centre — a steadier reference point for "where the hand is" than
-    // the wrist (0), which shifts a lot as the wrist bends.
-    handNorm = { x: latestHandLandmarks[9].x, y: latestHandLandmarks[9].y };
-  }
-
-  const nearby = handNorm ? findObjectNearHand(handNorm) : null;
-  if (nearby) {
-    const label = COCO_LABELS_DE[nearby.class] || nearby.class;
-    const labelX = handNorm.x * w;
-    const labelY = handNorm.y * h - 26;
-    camCtx.save();
-    // Text needs to read left-to-right — undo the mirroring just for the
-    // label itself, translating first so it still lands at the hand.
-    camCtx.translate(labelX, labelY);
-    camCtx.scale(-1, 1);
-    camCtx.font = "600 15px " + getComputedStyle(document.body).fontFamily;
-    const textWidth = camCtx.measureText(label).width;
-    camCtx.fillStyle = "rgba(18, 18, 15, 0.85)";
-    camCtx.fillRect(-textWidth / 2 - 8, -20, textWidth + 16, 26);
-    camCtx.fillStyle = "#2be2e2";
-    camCtx.textAlign = "center";
-    camCtx.fillText(label, 0, -2);
-    camCtx.restore();
   }
 
   camCtx.restore();
 }
 
-// Matches the hand's position (normalized 0..1, same space as MediaPipe's
-// landmarks) against COCO-SSD's detections (bbox in the video's native
-// pixel size) — a hand literally over a box wins outright; otherwise the
-// nearest box counts only if it's still reasonably close, so an object on
-// the far side of the frame never gets mislabeled as "at the hand".
-function findObjectNearHand(handNorm) {
-  if (!latestDetections.length || !camVideo.videoWidth) return null;
-  const vw = camVideo.videoWidth, vh = camVideo.videoHeight;
-  let best = null;
-  let bestDist = Infinity;
-  for (const det of latestDetections) {
-    const [x, y, bw, bh] = det.bbox;
-    const nx = x / vw, ny = y / vh, nw = bw / vw, nh = bh / vh;
-    const inside =
-      handNorm.x >= nx && handNorm.x <= nx + nw &&
-      handNorm.y >= ny && handNorm.y <= ny + nh;
-    if (inside) return det;
-    const cx = nx + nw / 2, cy = ny + nh / 2;
-    const dist = Math.hypot(handNorm.x - cx, handNorm.y - cy);
-    if (dist < bestDist) {
-      bestDist = dist;
-      best = det;
-    }
-  }
-  return bestDist < 0.35 ? best : null;
+// Draws one COCO-SSD detection's box plus its (German) label. `det.bbox` is
+// in the video's native pixel size, so it's scaled into the canvas's own
+// (possibly different) pixel size first.
+function drawDetectionBox(det, vw, vh, w, h) {
+  const [x, y, bw, bh] = det.bbox;
+  const scaleX = w / vw, scaleY = h / vh;
+  const bx = x * scaleX, by = y * scaleY, bwPx = bw * scaleX, bhPx = bh * scaleY;
+  const label = COCO_LABELS_DE[det.class] || det.class;
+
+  camCtx.strokeStyle = "#2be2e2";
+  camCtx.lineWidth = 2;
+  camCtx.strokeRect(bx, by, bwPx, bhPx);
+
+  // Text needs to read left-to-right — undo the mirroring just for the
+  // label itself, translating first so it still lands at the box.
+  camCtx.save();
+  camCtx.translate(bx + bwPx, by);
+  camCtx.scale(-1, 1);
+  camCtx.font = "600 13px " + getComputedStyle(document.body).fontFamily;
+  camCtx.textAlign = "left";
+  const textWidth = camCtx.measureText(label).width;
+  camCtx.fillStyle = "rgba(18, 18, 15, 0.85)";
+  camCtx.fillRect(0, -20, textWidth + 12, 20);
+  camCtx.fillStyle = "#2be2e2";
+  camCtx.fillText(label, 6, -5);
+  camCtx.restore();
 }
+
