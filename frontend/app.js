@@ -291,46 +291,50 @@ function drawSegmentRing(cx, cy, ringR, spin, color, level, alpha) {
   orbCtx.restore();
 }
 
-// ---------- orbit trails: comet-like streaks out at the outermost ring ----
+// ---------- orbit rings: wide 3D bands interlocking around the outer ring -
 //
-// Each ring is a circle in its own tilted local plane, orbiting at its own
-// speed — then run through the exact same cosY/sinY/cosX/sinX rotation the
-// sphere itself uses below, so the trails genuinely tumble in 3D (turn
-// edge-on, dip behind the sphere) instead of just being flat decoration.
-// radiusFactor is relative to the outer HUD radius (outerR), not the inner
-// sphere — these live out at the dust ring, weaving in and out of it,
-// rather than orbiting close in around the sphere.
+// Full closed circles (not comet trails with a fading tail) — three wide
+// bands, each tilted into its own plane and spinning at its own speed, run
+// through the exact same cosY/sinY/cosX/sinX rotation the sphere itself
+// uses below. Together that reads as an armillary-sphere/gyroscope look:
+// the rings visibly pass through and interlock with each other as they
+// all turn, rather than sitting as flat decoration on top of the sphere.
+// radiusFactor is relative to the outer HUD radius (outerR), so these live
+// right at the dust ring's own width, not close in around the sphere.
 const ORBIT_RINGS = [
-  { tiltX: 0.9, tiltZ: 0.25, speed: 0.5, radiusFactor: 0.98, trailLen: 1.15 },
-  { tiltX: -0.55, tiltZ: 1.15, speed: -0.38, radiusFactor: 1.06, trailLen: 0.85 },
-  { tiltX: 0.15, tiltZ: -0.85, speed: 0.3, radiusFactor: 1.14, trailLen: 1.5 },
+  { tiltX: 0.9, tiltZ: 0.25, speed: 0.22, radiusFactor: 0.98 },
+  { tiltX: -0.55, tiltZ: 1.15, speed: -0.16, radiusFactor: 1.04 },
+  { tiltX: 0.15, tiltZ: -0.85, speed: 0.13, radiusFactor: 1.1 },
 ];
-const ORBIT_SAMPLES = 36;
+const ORBIT_SAMPLES = 72; // full circle now, needs more points to stay smooth
 
 function drawOrbitTrails(cx, cy, outerR, cosY, sinY, cosX, sinX, color, alpha) {
   const t = Date.now() / 1000;
   orbCtx.save();
   orbCtx.lineCap = "round";
   orbCtx.shadowColor = color;
-  orbCtx.shadowBlur = 4;
+  orbCtx.shadowBlur = 5;
   orbCtx.strokeStyle = color;
+  // As wide as the segmented ring's own ticks — a thin hairline read as a
+  // stray line, not a ring band, at this scale.
+  orbCtx.lineWidth = Math.max(2, outerR * 0.05);
   for (const ring of ORBIT_RINGS) {
-    const headAngle = t * ring.speed;
+    const spin = t * ring.speed;
     const r = outerR * ring.radiusFactor;
     const ctz = Math.cos(ring.tiltZ), stz = Math.sin(ring.tiltZ);
     const ctx2 = Math.cos(ring.tiltX), stx = Math.sin(ring.tiltX);
     let prev = null;
     for (let i = 0; i <= ORBIT_SAMPLES; i++) {
-      const frac = i / ORBIT_SAMPLES; // 0 (fading tail) .. 1 (bright head)
-      const angle = headAngle - (1 - frac) * ring.trailLen;
+      const angle = spin + (Math.PI * 2 * i) / ORBIT_SAMPLES;
 
-      // Point on a unit circle, tilted into this orbit's own plane.
+      // Point on a unit circle, tilted into this ring's own plane.
       const lx = Math.cos(angle), ly = Math.sin(angle);
       const x0 = lx * ctz - ly * stz, y0 = lx * stz + ly * ctz;
       const y1 = y0 * ctx2, z1 = y0 * stx;
 
-      // Same global spin/tilt the sphere uses, so the whole trail turns
-      // and dips with it rather than floating flat on top of it.
+      // Same global spin/tilt the sphere uses, so the whole ring turns and
+      // dips with it — this is what makes it look like it interlocks with
+      // the sphere and the other rings instead of floating flat on top.
       const gx = x0 * cosY + z1 * sinY;
       const gz1 = -x0 * sinY + z1 * cosY;
       const gy = y1 * cosX - gz1 * sinX;
@@ -342,8 +346,7 @@ function drawOrbitTrails(cx, cy, outerR, cosY, sinY, cosX, sinX, color, alpha) {
 
       if (prev) {
         const front = Math.max(0, 1 - (gz + 1) / 2); // ~0 behind sphere .. ~1 in front
-        orbCtx.globalAlpha = alpha * frac * frac * (0.15 + front * 0.85);
-        orbCtx.lineWidth = Math.max(0.5, outerR * 0.012) * (0.3 + frac * 0.7);
+        orbCtx.globalAlpha = alpha * (0.25 + front * 0.6);
         orbCtx.beginPath();
         orbCtx.moveTo(prev.sx, prev.sy);
         orbCtx.lineTo(sx, sy);
