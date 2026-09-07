@@ -1007,8 +1007,16 @@ startBtn.addEventListener("click", async () => {
 
 muteBtn.addEventListener("click", () => setMuted(!muted));
 
+// Cmd+Shift+J on macOS, Ctrl+Shift+J on Windows — matching
+// launcher/hotkey_listener.py's own platform check for the equivalent
+// global hotkey. e.metaKey is the Windows key on Windows, essentially
+// never pressed together with Shift+J, so without this branch the
+// in-page shortcut simply never fired there at all.
+const IS_MAC = /Mac|iPod|iPhone|iPad/.test(navigator.platform);
+
 document.addEventListener("keydown", (e) => {
-  if (e.metaKey && e.shiftKey && e.key.toLowerCase() === "j") {
+  const modifierPressed = IS_MAC ? e.metaKey : e.ctrlKey;
+  if (modifierPressed && e.shiftKey && e.key.toLowerCase() === "j") {
     e.preventDefault();
     if (muted) setMuted(false);
     else if (busy) interruptActiveTurn();

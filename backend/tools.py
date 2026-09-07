@@ -446,24 +446,9 @@ def _resolve_app_macos(name: str) -> str | None:
 
 
 def _open_app_macos(name: str) -> str:
+    # _open_app below routes to _open_app_windows on Windows and never
+    # reaches this function there — this is macOS-only, unconditionally.
     try:
-        if platform_utils.is_windows():
-            aliases = {
-                "rechner": "calc.exe", "taschenrechner": "calc.exe", "notizen": "notepad.exe",
-                "editor": "notepad.exe", "explorer": "explorer.exe", "datei explorer": "explorer.exe",
-            }
-            target = aliases.get(name.lower(), name)
-            # A PowerShell single-quoted literal keeps a spoken app name from
-            # becoming PowerShell syntax.
-            safe_target = "'" + target.replace("'", "''") + "'"
-            proc = subprocess.run(
-                platform_utils.powershell(f"Start-Process -FilePath {safe_target}"),
-                capture_output=True, text=True, timeout=20,
-            )
-            if proc.returncode == 0:
-                return f"{name} geöffnet."
-            return f"Konnte '{name}' nicht finden. Heißt das Programm vielleicht anders?"
-
         proc = subprocess.run(["open", "-a", name], capture_output=True, text=True, timeout=20)
         if proc.returncode == 0:
             return f"{name} geöffnet."
@@ -641,6 +626,14 @@ def _run_shell(command: str) -> str:
             shell=True,
             capture_output=True,
             text=True,
+            # subprocess with text=True decodes the child's output using
+            # the OS locale's preferred encoding by default — cp1252 on
+            # German Windows — which either mangles or (for a genuinely
+            # invalid byte sequence) raises on any UTF-8 output, and a lot
+            # of modern CLI tools (git, npm, python itself) default to
+            # UTF-8 regardless of the console's codepage.
+            encoding="utf-8",
+            errors="replace",
             timeout=120,
             cwd=str(Path.home()),
         )

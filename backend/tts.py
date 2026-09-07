@@ -85,6 +85,11 @@ def _windows_say(text: str) -> bytes:
     and special characters in it can't break out of the PowerShell command."""
     out = Path(tempfile.mkdtemp()) / "say.wav"
     script = (
+        # Without this, PowerShell reads stdin using the console's
+        # codepage (cp1252 on German Windows) regardless of what encoding
+        # Python used to write it below — mismatched, every ü/ö/ä/ß in the
+        # spoken text would come out corrupted rather than just failing.
+        "[Console]::InputEncoding = [System.Text.Encoding]::UTF8; "
         "Add-Type -AssemblyName System.Speech; "
         "$s = New-Object System.Speech.Synthesis.SpeechSynthesizer; "
         f"$s.SetOutputToWaveFile('{out}'); "
@@ -97,6 +102,14 @@ def _windows_say(text: str) -> bytes:
         check=True,
         capture_output=True,
         text=True,
+        # Matches [Console]::InputEncoding above; without an explicit
+        # encoding here, text=True encodes `input` using the OS locale's
+        # preferred codepage, not UTF-8 — this is the last-resort voice
+        # (Supertonic and ElevenLabs both already failed to get here), so
+        # a crash on an unencodable character means total silence, the one
+        # outcome this whole module exists to avoid.
+        encoding="utf-8",
+        errors="replace",
         timeout=60,
     )
     data = out.read_bytes()
