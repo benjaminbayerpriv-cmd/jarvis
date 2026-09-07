@@ -71,8 +71,8 @@ button { font-family: var(--mono); cursor: pointer; }
 
 .orb-wrap {
   position: relative;
-  width: min(62vh, 62vw, 460px);
-  height: min(62vh, 62vw, 460px);
+  width: min(74vh, 74vw, 460px);
+  height: min(74vh, 74vw, 460px);
 }
 
 #orb {
@@ -129,7 +129,7 @@ button { font-family: var(--mono); cursor: pointer; }
 .control-row {
   position: absolute;
   left: 50%;
-  top: calc(50% + min(31vh, 31vw, 230px) + 14px);
+  top: calc(50% + min(37vh, 37vw, 230px) + 14px);
   transform: translateX(-50%);
   display: flex;
   gap: 8px;
