@@ -5,35 +5,32 @@ const composer = document.getElementById("composer");
 const inputEl = document.getElementById("input");
 const startBtn = document.getElementById("startBtn");
 const muteBtn = document.getElementById("muteBtn");
-const debugPanel = document.getElementById("debugPanel");
-const debugToggle = document.getElementById("debugToggle");
+const quitBtn = document.getElementById("quitBtn");
 
-// Debug sidebar: the full transcript + verbose tool log, off by default —
-// the orb alone carries state for normal use. Toggled explicitly (button
-// or Cmd/Ctrl+Shift+J) rather than on focus, since it's meant to stay open
-// while debugging, not flicker away the moment focus moves to "Senden".
-let debugOpen = false;
-
-// Relying on the CSS transform alone to hide the panel broke in the
-// packaged app's embedded webview (pywebview's WKWebView rendered it
-// on-screen at all times, unlike every real browser tested) — toggling
-// the `hidden` attribute too makes "closed" mean display:none regardless
-// of how a given engine handles the slide-out transform.
-function setDebugOpen(open) {
-  debugOpen = open;
-  if (open) {
-    debugPanel.hidden = false;
-    // rAF so the browser paints the un-hidden, still-off-screen state
-    // first — otherwise adding "open" in the same frame skips the slide
-    // transition straight to its end state.
-    requestAnimationFrame(() => debugPanel.classList.add("open"));
-  } else {
-    debugPanel.classList.remove("open");
-    setTimeout(() => { debugPanel.hidden = true; }, 220); // matches the CSS transition duration
-  }
+// The packaged desktop app opens a transparent, frameless, always-on-top
+// window (see launcher/jarvis_launcher.py) so the orb floats directly over
+// the desktop instead of sitting in an opaque app window — a plain browser
+// tab has neither the transparency nor a window to quit, so all of this
+// only activates once pywebview's own bridge object actually shows up.
+// `pywebviewready` covers the normal case; the immediate check covers the
+// (backend-dependent) case where the bridge is already there by the time
+// this script runs.
+function enableWidgetMode() {
+  document.documentElement.classList.add("widget-mode");
+  quitBtn.hidden = false;
 }
+if (window.pywebview) enableWidgetMode();
+else window.addEventListener("pywebviewready", enableWidgetMode);
 
-debugToggle.addEventListener("click", () => setDebugOpen(!debugOpen));
+quitBtn.addEventListener("click", () => {
+  if (window.pywebview) window.pywebview.api.quit();
+});
+
+// The old debug/chat sidebar (and its toggle button) is gone — a window
+// sized for just the floating orb has no room for one, and the turn-by-turn
+// record it showed now goes to backend/transcript.log instead. #log and
+// #input still exist in the DOM (see index.html) and this code still
+// writes to them below, but nothing ever reveals that container on screen.
 
 let history = [];
 
@@ -1005,7 +1002,7 @@ function setupVad(stream) {
 
 function setMuted(next) {
   muted = next;
-  muteBtn.textContent = muted ? "Mikro an" : "Mikro aus";
+  muteBtn.title = muted ? "Mikro aktivieren" : "Mikro stummschalten";
   muteBtn.classList.toggle("off", muted);
   if (muted) cancelRecording();
   settle();
@@ -1037,8 +1034,6 @@ muteBtn.addEventListener("click", () => setMuted(!muted));
 // never pressed together with Shift+J, so without this branch the
 // in-page shortcut simply never fired there at all.
 const IS_MAC = /Mac|iPod|iPhone|iPad/.test(navigator.platform);
-const HOTKEY_LABEL = IS_MAC ? "Cmd+Shift+J" : "Ctrl+Shift+J";
-debugToggle.title = `Debug (${HOTKEY_LABEL})`;
 
 document.addEventListener("keydown", (e) => {
   const modifierPressed = IS_MAC ? e.metaKey : e.ctrlKey;
@@ -1046,7 +1041,6 @@ document.addEventListener("keydown", (e) => {
     e.preventDefault();
     if (muted) setMuted(false);
     else if (busy) interruptActiveTurn();
-    else inputEl.focus();
   }
 });
 

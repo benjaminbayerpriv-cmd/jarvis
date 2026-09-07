@@ -31,6 +31,30 @@ from pathlib import Path
 IS_WINDOWS = sys.platform.startswith("win")
 URL = "http://127.0.0.1:8000"
 
+# The floating widget's fixed size — no more expand/collapse case now that
+# there's no debug/chat sidebar to grow into (see frontend/app.js and
+# backend/transcript_log.py).
+WIDGET_WIDTH = 340
+WIDGET_HEIGHT = 430
+# Always the same corner on launch — a floating widget with no title bar
+# has no natural "restore position" affordance, so rather than trusting
+# whatever the OS/backend defaults to (centered, or wherever it last was),
+# it always starts somewhere predictable and easy to find.
+SPAWN_X = 24
+SPAWN_Y = 24
+
+
+class Api:
+    """Bridge for the one thing the page can't do to its own OS window:
+    closing it. Exposed to JS as `window.pywebview.api.quit()` once
+    pywebview injects it — see frontend/app.js."""
+
+    window = None  # set right after create_window returns (see main())
+
+    def quit(self) -> None:
+        if self.window is not None:
+            self.window.destroy()
+
 
 def _find_root_dir() -> Path:
     # Checked both raw and symlink-resolved: a frozen app's own executable
@@ -109,7 +133,21 @@ def main() -> None:
         )
         return
 
-    server = subprocess.Popen([str(venv_python), "-m", "backend.main"], cwd=str(root_dir))
+    # Redirected to a real file instead of left on the default (for a
+    # --windowed/no-console build, effectively nowhere) — the "not
+    # reachable after 60 seconds" message below already told people to
+    # check this file even before it actually existed. Written next to the
+    # actual project (root_dir), not next to the frozen executable itself —
+    # __file__ inside a PyInstaller build points into a temporary
+    # extraction directory, not anywhere a user could go looking.
+    server_log_path = root_dir / "launcher" / "server.err.log"
+    server_log = open(server_log_path, "w")
+    server = subprocess.Popen(
+        [str(venv_python), "-m", "backend.main"],
+        cwd=str(root_dir),
+        stdout=server_log,
+        stderr=subprocess.STDOUT,
+    )
 
     try:
         if not _wait_until_up():
@@ -124,7 +162,31 @@ def main() -> None:
         # server never came up in the first place.
         import webview
 
-        webview.create_window("Jarvis", URL, width=480, height=860, min_size=(360, 600))
+        api = Api()
+        # frameless + transparent + on_top turns the window into a floating
+        # widget: just the orb and its two small controls hovering over the
+        # desktop instead of an opaque app window covering the screen.
+        # easy_drag makes the borderless window still moveable by dragging
+        # its background/orb (pywebview skips this for actual buttons on
+        # its own). Not resizable — a fixed-size widget has no use for
+        # resize handles, and (transparent windows already force
+        # setHasShadow_(False) on macOS regardless of a `shadow` kwarg)
+        # there's nothing left for that flag to do here.
+        window = webview.create_window(
+            "Jarvis",
+            URL,
+            width=WIDGET_WIDTH,
+            height=WIDGET_HEIGHT,
+            x=SPAWN_X,
+            y=SPAWN_Y,
+            frameless=True,
+            on_top=True,
+            transparent=True,
+            easy_drag=True,
+            resizable=False,
+            js_api=api,
+        )
+        api.window = window
         webview.start()
     finally:
         # The window closing is the signal to shut everything down — a

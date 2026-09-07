@@ -36,6 +36,21 @@ html, body {
   overflow: hidden;
 }
 
+/* Packaged desktop app only (see app.js — set once pywebview confirms a
+   transparent native window is actually behind this page). A plain browser
+   tab never gets this class, so it keeps its normal solid background. */
+html.widget-mode, html.widget-mode body {
+  background: transparent;
+}
+
+/* The floating widget has no title bar to grab, so the whole background is
+   draggable (pywebview's easy_drag) — except the controls themselves,
+   which must stay clickable instead of starting a window drag. */
+html.widget-mode .icon-btn,
+html.widget-mode .hidden-chat {
+  -webkit-app-region: no-drag;
+}
+
 button { font-family: var(--mono); cursor: pointer; }
 
 :focus-visible {
@@ -75,35 +90,14 @@ button { font-family: var(--mono); cursor: pointer; }
   filter: drop-shadow(0 0 6px color-mix(in srgb, var(--sig-out) 55%, transparent));
 }
 
-.mic-dock {
-  position: absolute;
-  left: 50%;
-  bottom: 8vh;
-  transform: translateX(-50%);
-}
-
-.mic-btn {
-  padding: 9px 20px;
-  background: color-mix(in srgb, var(--housing) 70%, transparent);
-  backdrop-filter: blur(6px);
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  color: var(--dim);
-  font-family: var(--mono);
-  font-size: 11px;
-  letter-spacing: .12em;
-  text-transform: uppercase;
-  transition: color 160ms, border-color 160ms, opacity 160ms;
-  opacity: .55;
-}
-
-.mic-btn:hover { opacity: 1; color: var(--text); border-color: var(--dim); }
-.mic-btn.off { color: var(--alert); border-color: color-mix(in srgb, var(--alert) 45%, var(--line)); opacity: 1; }
-
-.debug-toggle {
-  position: absolute;
-  top: 18px;
-  right: 20px;
+/* Shared look for every small, icon-only control (mic, quit, debug) — a
+   plain glyph in a subtle square, no text label, no backdrop-filter (that
+   combined with a truly transparent host window rendered as a stray dark
+   halo around each button instead of a clean frosted-glass look — observed
+   live in the packaged widget once the window was actually transparent,
+   never in a normal opaque browser tab where there's real page content
+   behind it to blur). */
+.icon-btn {
   width: 30px;
   height: 30px;
   display: grid;
@@ -113,15 +107,29 @@ button { font-family: var(--mono); cursor: pointer; }
   border-radius: 8px;
   color: var(--faint);
   font-size: 15px;
-  opacity: .4;
+  line-height: 1;
+  opacity: .5;
   transition: opacity 160ms, color 160ms, border-color 160ms;
-  /* Above .hidden-chat's z-index: 6 — otherwise the open panel (fixed,
-     covering this exact top-right corner) sits on top and swallows every
-     click meant for this button, making it impossible to close again. */
-  z-index: 7;
 }
 
-.debug-toggle:hover { opacity: 1; color: var(--text); border-color: var(--dim); }
+.icon-btn:hover { opacity: 1; color: var(--text); border-color: var(--dim); }
+.icon-btn[hidden] { display: none; }
+
+.icon-btn#quitBtn:hover { color: var(--alert); border-color: var(--alert); }
+.icon-btn#quitBtn { font-size: 17px; }
+.icon-btn#muteBtn.off { color: var(--alert); border-color: color-mix(in srgb, var(--alert) 45%, var(--line)); opacity: 1; }
+
+/* Sits right under the orb — offset scales with the orb's own min(vh,vw)
+   sizing so the gap stays proportional instead of colliding on a very
+   short window. */
+.control-row {
+  position: absolute;
+  left: 50%;
+  top: calc(50% + min(31vh, 31vw, 230px) + 14px);
+  transform: translateX(-50%);
+  display: flex;
+  gap: 8px;
+}
 
 /* Debug sidebar: the full transcript plus verbose tool-call log — the same
    #log the orb view otherwise hides. Docked right, off-screen by default,
@@ -141,12 +149,22 @@ button { font-family: var(--mono); cursor: pointer; }
   padding: 20px 20px 16px;
   background: var(--housing);
   border-left: 1px solid var(--line);
-  box-shadow: -24px 0 48px -24px rgba(0, 0, 0, .5);
   transform: translateX(100%);
   transition: transform 220ms cubic-bezier(.22, .61, .36, 1);
 }
 
-.hidden-chat.open { transform: translateX(0); }
+/* Shadow only while actually open — while closed, translateX(100%) only
+   moves the panel's own box off past the right edge, but a box-shadow
+   extends *beyond* that box, so the closed panel was still casting this
+   shadow back ~24-48px into view the whole time. Invisible in a normal
+   wide browser tab, but the floating widget's window is only a few
+   hundred px wide, so that leftover sliver became a permanent dark line
+   hugging the right edge — reported live as "a weird black glow where you
+   can see the window edge." */
+.hidden-chat.open {
+  transform: translateX(0);
+  box-shadow: -24px 0 48px -24px rgba(0, 0, 0, .5);
+}
 
 .hint {
   margin: 0 0 16px;

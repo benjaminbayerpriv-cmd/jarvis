@@ -213,8 +213,17 @@ Ganz wichtig: Sage nur dann, dass etwas erledigt ist, wenn du wirklich eine
 Funktion aufgerufen hast. Erfinde keine Funktionsnamen. Wenn du etwas nicht
 kannst, sage das offen. Lieber ehrlich zugeben als Erfolg vortäuschen.
 
-Deine Antwort wird vorgelesen. Bei allem, was länger als drei Sätze wäre (Code,
-Listen, Erklärungen), nutze show_on_screen und sage nur einen kurzen Satz dazu.
+Es gibt kein Werkzeug, um den Bildschirm zu sperren, den Computer
+herunterzufahren, neu zu starten oder in den Ruhezustand zu versetzen — auch
+nicht über run_shell (das würde ohne echten Effekt nur so aussehen). Wenn
+danach gefragt wird, sag klar, dass du das nicht kannst, und nenne stattdessen
+die Tastenkombination, statt eine erfundene Aktion als erledigt zu melden —
+auch wenn der Nutzer drängt oder unfreundlich wird.
+
+Deine Antwort wird ausschließlich vorgelesen — es gibt keine Anzeige für Text,
+Code oder Listen. Fasse dich deshalb kurz und sprich in ganzen Sätzen statt
+Code, Tabellen oder lange Aufzählungen vorzulesen; beschreibe stattdessen knapp,
+was du getan hast oder was das Ergebnis ist.
 Niemals Emojis verwenden — die werden vorgelesen oder klingen als Symbol im
 Transkript einfach nur seltsam.
 
@@ -531,9 +540,9 @@ def _stream_chat(messages: list):
 
 
 # This model intermittently writes a function call into its reply as plain
-# text instead of emitting a real tool call — e.g. `show_on_screen({"title":
-# ...})`. Read aloud that is gibberish, and the work never happens. When the
-# whole reply is one such call to a tool we actually have, run it for real.
+# text instead of emitting a real tool call — e.g. `open_url({"url": ...})`.
+# Read aloud that is gibberish, and the work never happens. When the whole
+# reply is one such call to a tool we actually have, run it for real.
 _LEAKED_CALL_RE = re.compile(
     r"^\s*(?P<name>[A-Za-z_][A-Za-z0-9_]{2,29})\s*\((?P<args>.*)\)\s*[.!]?\s*$",
     re.DOTALL,
@@ -743,7 +752,8 @@ def _leaked_unknown_tool(content: str) -> str | None:
 _ACTION_PARTICIPLE_RE = re.compile(
     r"\b(?:geöffnet|gespeichert|erstellt|angelegt|ausgeführt|hinzugefügt|notiert|"
     r"geklickt|gestartet|getippt|gedrückt|eingerichtet|installiert|verschoben|"
-    r"gelöscht|kopiert|aufgenommen|abgeschickt|gesendet)\b",
+    r"gelöscht|kopiert|aufgenommen|abgeschickt|gesendet|gesperrt|entsperrt|"
+    r"heruntergefahren|neugestartet|gesichert|verriegelt|aktiviert|deaktiviert)\b",
     re.IGNORECASE,
 )
 _CHECK_PARTICIPLE_RE = re.compile(
@@ -902,6 +912,26 @@ def _looks_like_tool_text(text: str) -> bool:
     return bool(re.search(rf"\b(?:{names})\s*\(", text or "", re.IGNORECASE))
 
 
+def _history_has_recent_action_claim(history: list | None, lookback: int = 6) -> bool:
+    """Whether a nearby past assistant turn already reported a real action.
+
+    Anything sitting in history already passed this same vet check when it
+    was first generated — an action claim only survives into history if a
+    tool really ran that turn (see _vet below). So if one shows up nearby,
+    a follow-up like "hast du das wirklich gemacht?" is asking about
+    something that genuinely happened, not making a fresh, unverified
+    claim — and must not be blocked just because no tool ran in *this*
+    turn (observed live: user asked exactly that after a real open_app
+    call, and Jarvis's honest "ja, hab ich" got replaced with "Das habe
+    ich nicht ausgeführt.", flatly contradicting an action it had just
+    completed).
+    """
+    for msg in (history or [])[-lookback:]:
+        if msg.get("role") == "assistant" and _claims_action(msg.get("content") or ""):
+            return True
+    return False
+
+
 # A small local model can occasionally fall into a degenerate loop, echoing
 # one fragment over and over instead of a real answer — the same failure
 # mode documented in Nous Research's Hermes Agent (MIT-licensed;
@@ -976,15 +1006,24 @@ def stream_reply(user_message: str, history: list | None = None):
     # Every tool that actually ran this turn. Used to catch replies that
     # claim an action was performed when nothing was.
     tools_used: list[str] = []
+    # A tool call from an earlier turn still counts as "really happened" —
+    # this only widens the exemption for claims that echo/confirm one of
+    # those, never for a claim about something new (see
+    # _history_has_recent_action_claim).
+    recent_action_confirmed = _history_has_recent_action_claim(history)
 
     def _vet(text: str) -> str:
         """Swap a sentence for an honest one if it fails the same checks
         the old end-of-turn gate used to run on the whole reply at once —
         now run per sentence so a lone false claim doesn't hold up (or
         taint) everything spoken around it."""
-        if not tools_used and (_claims_action(text) or _looks_like_tool_text(text)):
+        if _looks_like_tool_text(text) or (
+            not tools_used and not recent_action_confirmed and _claims_action(text)
+        ):
+            print(f"[vet] Ersetze mutmaßlich falsche Aktionsbehauptung: {text!r}")
             return "Das habe ich nicht ausgeführt."
         if _is_repetition_loop(text):
+            print(f"[vet] Ersetze erkannte Wiederholungsschleife: {text!r}")
             return "Da ist mir gerade etwas verrutscht, frag bitte nochmal."
         return text
 
@@ -1008,9 +1047,9 @@ def stream_reply(user_message: str, history: list | None = None):
             suspect = None
             # A model can also write a normal lead-in sentence first and
             # only leak the call afterwards ("Ich schaue nach.
-            # show_on_screen({...})") — that's invisible to the check above
-            # since it only looks at the very start. So every completed
-            # sentence is independently vetted too; the moment one of them
+            # open_url({...})") — that's invisible to the check above since
+            # it only looks at the very start. So every completed sentence
+            # is independently vetted too; the moment one of them
             # looks like a call, streaming for the rest of THIS round stops
             # and everything from there on is captured in trailing_suspect
             # for recovery once the round ends, instead of being spoken.
@@ -1054,6 +1093,16 @@ def stream_reply(user_message: str, history: list | None = None):
                                     # words in ~1s and sitting through the
                                     # model's full 15-20s reply in silence.
                                     clean = _vet(clean)
+                                    # Two separate sentences can each
+                                    # independently trip the same guard and
+                                    # both get swapped for the identical
+                                    # canned line — observed live as "Das
+                                    # habe ich nicht ausgeführt. Das habe
+                                    # ich nicht ausgeführt." Saying it once
+                                    # is exactly as honest and far less
+                                    # like a broken record.
+                                    if full_text_parts and full_text_parts[-1] == clean:
+                                        continue
                                     full_text_parts.append(clean)
                                     yield {"type": "sentence", "text": clean}
 
@@ -1247,6 +1296,8 @@ def get_reply(user_message: str, history: list | None = None) -> str:
     messages = _build_messages(user_message, history)
 
     last_tool_result = None
+    tool_ran = False
+    recent_action_confirmed = _history_has_recent_action_claim(history)
 
     for _ in range(MAX_TOOL_ROUNDS):
         data = _post_chat(messages)
@@ -1263,11 +1314,19 @@ def get_reply(user_message: str, history: list | None = None) -> str:
                 name, args = recovered
                 result = tools.call_tool(name, args)
                 last_tool_result = result
+                tool_ran = True
                 messages.append({"role": "assistant", "content": content})
                 messages.append({"role": "user", "content": f"[Ergebnis von {name}: {result}]"})
                 continue
             if content:
-                if _claims_action(content) or _looks_like_tool_text(content):
+                # A claim is only false when nothing backs it up: no tool
+                # ran earlier this same turn, and no earlier turn already
+                # reported doing it either (see
+                # _history_has_recent_action_claim — same reasoning as the
+                # streaming path in stream_reply).
+                if _looks_like_tool_text(content) or (
+                    not tool_ran and not recent_action_confirmed and _claims_action(content)
+                ):
                     return "Das habe ich nicht ausgeführt."
                 return content
             # Model sometimes returns empty text right after a tool call —
@@ -1283,6 +1342,7 @@ def get_reply(user_message: str, history: list | None = None) -> str:
                 args = {}
             result = tools.call_tool(fn["name"], args)
             last_tool_result = result
+            tool_ran = True
             messages.append(
                 {
                     "role": "tool",

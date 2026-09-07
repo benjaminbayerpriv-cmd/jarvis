@@ -13,7 +13,7 @@ from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import browser_agent, config, fillers, llm_client, memory, panel, stt, tts
+from . import browser_agent, config, fillers, llm_client, memory, panel, stt, transcript_log, tts
 
 app = FastAPI(title="Jarvis")
 app.add_middleware(
@@ -224,6 +224,7 @@ def chat_stream(req: ChatRequest):
                     yield json.dumps({"type": "done", "full_text": event["full_text"]}) + "\n"
             if full_text:
                 memory.log_summary(req.message, full_text)
+                transcript_log.log_turn(req.message, full_text)
         except (requests.RequestException, llm_client.ModelError, KeyError, IndexError) as exc:
             fallback = (
                 "Ich komme gerade nicht an mein Sprachmodell ran. "

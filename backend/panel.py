@@ -12,6 +12,8 @@ actual content lands somewhere you can read it.
 
 import threading
 
+from . import transcript_log
+
 _lock = threading.Lock()
 _pending: list[dict] = []
 
@@ -19,9 +21,14 @@ _pending: list[dict] = []
 def push(kind: str, **fields) -> None:
     """Queue a panel item. `kind` is one of:
     image | code | markdown | files | link | task | notify | action
-    """
+
+    Also written to backend/transcript.log — the packaged app's window is
+    now just a floating orb with no room for a chat/debug sidebar, so this
+    is the only place any of it (tool status, build progress, background
+    notifications) still ends up."""
     with _lock:
         _pending.append({"kind": kind, **fields})
+    transcript_log.log_panel_event(kind, fields)
 
 
 def drain() -> list[dict]:

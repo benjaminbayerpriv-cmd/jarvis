@@ -273,32 +273,6 @@ TOOL_SCHEMAS = [
             },
         },
     },
-    {
-        "type": "function",
-        "function": {
-            "name": "show_on_screen",
-            "description": (
-                "Zeigt längeren Text im Interface an, damit der Nutzer ihn lesen kann: "
-                "Erklärungen, Code, Listen, Tabellen, Vergleiche. Nutze das immer bei "
-                "'erklär mir', 'zeig mir', 'wie funktioniert', 'schreib mir', wenn die "
-                "Antwort länger als drei Sätze wäre. Der Nutzer bekommt deine Antwort "
-                "nur vorgelesen — langen Text sieht er ausschließlich über dieses Tool. "
-                "Den ganzen Inhalt in 'content' übergeben, nicht in die Sprachantwort."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "title": {"type": "string", "description": "Überschrift"},
-                    "content": {"type": "string", "description": "Der Inhalt (Markdown erlaubt)"},
-                    "language": {
-                        "type": "string",
-                        "description": "Bei Code die Sprache, z.B. python. Sonst weglassen.",
-                    },
-                },
-                "required": ["title", "content"],
-            },
-        },
-    },
 ]
 
 # ---------------------------------------------------------------------------
@@ -733,14 +707,6 @@ def _write_file(path: str, content: str) -> str:
     return f"Datei geschrieben: {target} ({len(content or '')} Zeichen)."
 
 
-def _show_on_screen(title: str, content: str, language: str = "") -> str:
-    if language:
-        panel.push("code", title=title, language=language, text=content)
-    else:
-        panel.push("markdown", title=title, text=content)
-    return f"Ich hab '{title}' im Interface angezeigt."
-
-
 DISPATCH = {
     "get_weather": lambda a: _get_weather(a.get("city", "")),
     "get_time": lambda a: _get_time(),
@@ -754,9 +720,6 @@ DISPATCH = {
     "list_folder": lambda a: _list_folder(a.get("description", "")),
     "run_shell": lambda a: _run_shell(a.get("command", "")),
     "build_project": lambda a: _build_project(a.get("location", ""), a.get("description", "")),
-    "show_on_screen": lambda a: _show_on_screen(
-        a.get("title", "Info"), a.get("content", ""), a.get("language", "")
-    ),
     "move_file": lambda a: _move_file(a.get("source", ""), a.get("destination", "")),
     "write_file": lambda a: _write_file(a.get("path", ""), a.get("content", "")),
     "delete_path": lambda a: _delete_path(a.get("description", "")),
