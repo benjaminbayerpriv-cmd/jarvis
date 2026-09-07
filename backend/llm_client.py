@@ -3,6 +3,9 @@ from __future__ import annotations
 import datetime
 import json
 import re
+import shutil
+import subprocess
+import sys
 from pathlib import Path
 
 import requests
@@ -437,6 +440,52 @@ def summarize_history(history: list) -> str:
             print(f"[model] {base_url} nicht verfügbar, versuche nächstes Ziel: {exc}")
             last_exc = exc
     raise last_exc
+
+
+def list_models() -> list[str]:
+    """Every model LM Studio currently reports via its OpenAI-compatible
+    /models endpoint — the same call model_health() below already relies
+    on, just returning the full list instead of checking one id against
+    it. Used by the frontend's model-picker dropdown."""
+    response = requests.get(f"{config.LM_STUDIO_BASE_URL}/models", timeout=5)
+    response.raise_for_status()
+    return sorted(entry.get("id") for entry in response.json().get("data", []) if entry.get("id"))
+
+
+def _find_lms_cli() -> str | None:
+    """LM Studio's own `lms` CLI is the only way to explicitly unload a
+    model — the OpenAI-compatible HTTP API has no unload endpoint, and
+    just-in-time loading alone was observed to leave a previous model
+    resident in VRAM instead of reliably evicting it on its own. `lms` is
+    usually only on PATH after the user has run `lms bootstrap` once, so
+    this also checks LM Studio's standard install location directly."""
+    found = shutil.which("lms")
+    if found:
+        return found
+    exe = "lms.exe" if sys.platform.startswith("win") else "lms"
+    default = Path.home() / ".lmstudio" / "bin" / exe
+    return str(default) if default.exists() else None
+
+
+def eject_model(model_id: str) -> None:
+    """Unloads a model via `lms unload` so switching models actually
+    replaces the one in VRAM instead of leaving both loaded at once."""
+    lms = _find_lms_cli()
+    if not lms:
+        print(
+            f"[model] 'lms'-CLI nicht gefunden — {model_id} bleibt in LM Studio geladen. "
+            "Einmalig 'lms bootstrap' in LM Studio ausführen, damit alte Modelle beim "
+            "Wechsel automatisch entladen werden."
+        )
+        return
+    try:
+        result = subprocess.run(
+            [lms, "unload", model_id], capture_output=True, text=True, timeout=30
+        )
+        if result.returncode != 0:
+            print(f"[model] 'lms unload {model_id}' fehlgeschlagen: {result.stderr.strip()}")
+    except (OSError, subprocess.SubprocessError) as exc:
+        print(f"[model] Konnte {model_id} nicht entladen: {exc}")
 
 
 def model_health() -> tuple[bool, str]:

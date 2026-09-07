@@ -55,3 +55,24 @@ def load_config() -> dict:
     if not CONFIG_FILE.exists():
         return {}
     return json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+
+
+def set_model(model: str) -> None:
+    """Switch the active LM Studio model at runtime and persist it to .env
+    so it survives a restart too. llm_client._request_targets() reads
+    LM_STUDIO_MODEL fresh on every chat request, so mutating it here takes
+    effect on the very next turn — no restart needed for the live switch,
+    only for it to have already been the default on process start."""
+    global LM_STUDIO_MODEL
+    LM_STUDIO_MODEL = model
+    env_path = ROOT_DIR / ".env"
+    if not env_path.exists():
+        return
+    lines = env_path.read_text(encoding="utf-8").splitlines()
+    for i, line in enumerate(lines):
+        if line.startswith("LM_STUDIO_MODEL="):
+            lines[i] = f"LM_STUDIO_MODEL={model}"
+            break
+    else:
+        lines.append(f"LM_STUDIO_MODEL={model}")
+    env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
