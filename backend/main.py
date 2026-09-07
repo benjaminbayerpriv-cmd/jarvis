@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import os
+import threading
 import time
 from pathlib import Path
 
@@ -256,6 +258,22 @@ def chat_cancel(req: CancelRequest):
     silence the reply once it came back. This flags the turn so
     stream_reply can check it right before the next tool actually runs."""
     llm_client.cancel_turn(req.turn_id)
+    return {"ok": True}
+
+
+@app.post("/shutdown")
+def shutdown():
+    """Called by quitBtn — ends the whole running program, not just this
+    browser tab. os._exit() (not sys.exit, which only raises inside the
+    calling thread and would just kill this one request handler) runs on a
+    short delay from a separate thread so the response below actually
+    reaches the browser before the process disappears out from under it."""
+
+    def _die():
+        time.sleep(0.3)
+        os._exit(0)
+
+    threading.Thread(target=_die, daemon=True).start()
     return {"ok": True}
 
 
