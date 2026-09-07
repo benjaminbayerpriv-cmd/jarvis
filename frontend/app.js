@@ -209,29 +209,43 @@ const RING_GAP_DEG = 46; // open gap at the top, like a loading-ring readout
 // individual segments don't flicker in and out.
 const ringSegmentSeeds = Array.from({ length: RING_SEGMENTS }, () => 0.35 + Math.random() * 0.65);
 
-const DUST_COUNT = 220;
-// Same idea for the outer dust ring: fixed per-particle angle/size/twinkle
-// phase, so the jagged boundary holds its shape and only rotates/twinkles
-// rather than reshuffling every frame.
-const dustParticles = Array.from({ length: DUST_COUNT }, () => ({
-  angle: Math.random() * Math.PI * 2,
-  jitter: (Math.random() - 0.5) * 2,
-  size: 0.6 + Math.random() * 1.6,
-  twinklePhase: Math.random() * Math.PI * 2,
-}));
-// A few sine harmonics with fixed random phases give the dust ring's
+// A dust *band*, not a thin ring of dots: each particle sits somewhere
+// across a radial band around the boundary rather than right on a single
+// jittered line, so the silhouette reads as a fuzzy, torn-edge texture
+// instead of a sparse necklace of individual points.
+const DUST_COUNT = 420;
+const DUST_BAND_WIDTH = 0.16; // fraction of ringR the band spans, inner to outer
+// Fixed per-particle angle/band-position/size/twinkle phase, so the jagged
+// boundary holds its shape and only rotates/twinkles rather than
+// reshuffling every frame.
+const dustParticles = Array.from({ length: DUST_COUNT }, () => {
+  // Averaging two uniform randoms approximates a triangular distribution —
+  // denser toward the band's centre line, thinning out at its inner and
+  // outer edges, rather than a flat, equally-likely-anywhere smear.
+  const centered = (Math.random() + Math.random()) / 2 - 0.5;
+  return {
+    angle: Math.random() * Math.PI * 2,
+    bandOffset: centered * DUST_BAND_WIDTH,
+    // Mostly fine dust, with a handful of bigger clumped specks for texture.
+    size: Math.random() < 0.12 ? 1.3 + Math.random() * 1.5 : 0.5 + Math.random() * 0.8,
+    twinklePhase: Math.random() * Math.PI * 2,
+    twinkleSpeed: 0.6 + Math.random() * 1.4,
+  };
+});
+// A few sine harmonics with fixed random phases give the dust band's
 // silhouette organic, uneven "lobes" instead of a perfect circle or
-// uniformly random noise.
-const boundaryHarmonics = [3, 5, 8].map((freq) => ({
+// uniformly random noise — the higher frequency adds finer jaggedness on
+// top of the two broad ones.
+const boundaryHarmonics = [3, 5, 8, 13].map((freq) => ({
   freq,
   phase: Math.random() * Math.PI * 2,
-  amp: 0.5 + Math.random() * 0.5,
+  amp: freq <= 5 ? 0.5 + Math.random() * 0.5 : 0.25 + Math.random() * 0.25,
 }));
 
 function boundaryRadiusFactor(angle) {
   let n = 0;
   for (const h of boundaryHarmonics) n += Math.sin(angle * h.freq + h.phase) * h.amp;
-  return 1 + (n / boundaryHarmonics.length) * 0.09;
+  return 1 + (n / boundaryHarmonics.length) * 0.11;
 }
 
 function drawDustRing(cx, cy, ringR, spin, color, alpha) {
@@ -239,12 +253,12 @@ function drawDustRing(cx, cy, ringR, spin, color, alpha) {
   orbCtx.save();
   orbCtx.fillStyle = color;
   orbCtx.shadowColor = color;
-  orbCtx.shadowBlur = 4;
+  orbCtx.shadowBlur = 3;
   for (const p of dustParticles) {
     const angle = p.angle + spin * 0.4;
-    const r = ringR * boundaryRadiusFactor(angle) * (1 + p.jitter * 0.05);
-    const twinkle = 0.5 + 0.5 * Math.sin(t * 1.5 + p.twinklePhase);
-    orbCtx.globalAlpha = alpha * (0.3 + twinkle * 0.7);
+    const r = ringR * (boundaryRadiusFactor(angle) + p.bandOffset);
+    const twinkle = 0.5 + 0.5 * Math.sin(t * p.twinkleSpeed + p.twinklePhase);
+    orbCtx.globalAlpha = alpha * (0.25 + twinkle * 0.6);
     orbCtx.beginPath();
     orbCtx.arc(cx + Math.cos(angle) * r, cy + Math.sin(angle) * r, p.size, 0, Math.PI * 2);
     orbCtx.fill();
