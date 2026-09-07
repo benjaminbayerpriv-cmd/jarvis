@@ -15,48 +15,21 @@
 <body>
   <main class="stage" id="console">
 
-    <div class="jarvis-column">
-      <div class="orb-wrap">
-        <canvas id="orb" aria-hidden="true"></canvas>
-        <canvas id="subOrb" aria-hidden="true" hidden></canvas>
-      </div>
-
-      <!-- Icon-only, no labels — this row sits right under the orb, which
-           carries all the state a glance needs (colour = mic/speaking state).
-           Only one of startBtn/muteBtn is ever visible at a time. A normal
-           window has its own native close button, so there's no separate
-           quit control here. -->
-      <div class="control-row">
-        <button class="icon-btn" id="startBtn" aria-label="Mikrofon freigeben" title="Mikrofon freigeben">●</button>
-        <button class="icon-btn" id="muteBtn" aria-label="Mikro stumm/aktiv" title="Mikro stumm/aktiv" hidden>●</button>
-        <button class="icon-btn" id="stopBtn" aria-label="Denkprozess stoppen" title="Denkprozess stoppen">■</button>
-      </div>
-    </div>
-
-    <!-- Webcam + hand tracking: raw video is only ever a texture source for
-         the canvas (never shown itself), which draws the mirrored frame,
-         the MediaPipe hand skeleton, and a label for whatever COCO-SSD
-         detection is closest to the tracked hand. Only works in a normal
-         browser tab — the packaged desktop app's WKWebView on macOS has no
-         delegate method for media-capture permission requests at all, so
-         getUserMedia() is silently denied there (a real pywebview
-         limitation, not fixable from this project's code; a native-Python-
-         capture workaround was tried and abandoned — see git history). -->
-    <div class="cam-column">
-      <video id="camVideo" autoplay playsinline muted hidden></video>
-      <canvas id="camOverlay" aria-hidden="true"></canvas>
-      <button class="icon-btn" id="camStartBtn" aria-label="Kamera starten" title="Kamera starten">◎</button>
-      <p class="cam-hint" id="camHint"></p>
-    </div>
-
-    <!-- No visible transcript/chat panel anymore — the orb + the two
-         small controls above are the entire UI. The turn-by-turn record
-         that used to live in a toggleable sidebar here now goes to
-         backend/transcript.log instead (see backend/transcript_log.py).
-         This DOM is kept only because #log/#input are still written to
-         internally (tool-call/block rendering, text fallback input) even
-         with nothing on screen ever revealing them. -->
-    <aside class="hidden-chat" id="debugPanel" hidden>
+    <!-- Chat panel: the same #log/#input/composer that already existed
+         (previously built but never actually shown to the user) now made
+         visible as an actual small chat window, collapsed by default.
+         Same collapse mechanic as the camera column: a fixed
+         top-left toggle outside the panel itself, plus a .collapsed class
+         on the panel that animates its flex-basis to 0 instead of an
+         off-screen slide, so Jarvis (next to it) can react to the width
+         change instead of the panel just floating over everything. -->
+    <button class="icon-btn chat-toggle-btn" id="chatToggleBtn" aria-label="Chatfenster ausklappen" title="Chatfenster ausklappen">
+      <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M2 3.5h12v7H6.3L3.3 13.2v-2.7H2z"/>
+        <line class="chat-slash" x1="1.5" y1="1.5" x2="14.5" y2="14.5"/>
+      </svg>
+    </button>
+    <aside class="chat-column collapsed" id="debugPanel">
       <header class="deck-head">
         <span class="wordmark">Jarvis</span>
         <span class="state-pill" id="statePill">
@@ -79,6 +52,67 @@
         <button type="submit" class="send" aria-label="Senden">↵</button>
       </form>
     </aside>
+
+    <div class="jarvis-column">
+      <div class="orb-wrap">
+        <canvas id="orb" aria-hidden="true"></canvas>
+        <canvas id="subOrb" aria-hidden="true" hidden></canvas>
+      </div>
+
+      <!-- Icon-only, no labels — this row sits right under the orb, which
+           carries all the state a glance needs (colour = mic/speaking state).
+           Only one of startBtn/muteBtn is ever visible at a time. A normal
+           window has its own native close button, so there's no separate
+           quit control here. -->
+      <div class="control-row">
+        <button class="icon-btn" id="startBtn" aria-label="Mikrofon freigeben" title="Mikrofon freigeben">
+          <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="5.5" y="1.3" width="5" height="8" rx="2.5"/>
+            <path d="M3 7.3a5 5 0 0 0 10 0"/>
+            <line x1="8" y1="12.3" x2="8" y2="14.3"/>
+            <line x1="5" y1="14.3" x2="11" y2="14.3"/>
+          </svg>
+        </button>
+        <button class="icon-btn" id="muteBtn" aria-label="Mikro stumm/aktiv" title="Mikro stumm/aktiv" hidden>
+          <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="5.5" y="1.3" width="5" height="8" rx="2.5"/>
+            <path d="M3 7.3a5 5 0 0 0 10 0"/>
+            <line x1="8" y1="12.3" x2="8" y2="14.3"/>
+            <line x1="5" y1="14.3" x2="11" y2="14.3"/>
+            <line class="mic-slash" x1="1.5" y1="1.5" x2="14.5" y2="14.5"/>
+          </svg>
+        </button>
+        <button class="icon-btn" id="stopBtn" aria-label="Denkprozess stoppen" title="Denkprozess stoppen">■</button>
+      </div>
+    </div>
+
+    <!-- Webcam + hand tracking: raw video is only ever a texture source for
+         the canvas (never shown itself), which draws the mirrored frame,
+         the MediaPipe hand skeleton, and a label for whatever COCO-SSD
+         detection is closest to the tracked hand. Only works in a normal
+         browser tab — the packaged desktop app's WKWebView on macOS has no
+         delegate method for media-capture permission requests at all, so
+         getUserMedia() is silently denied there (a real pywebview
+         limitation, not fixable from this project's code; a native-Python-
+         capture workaround was tried and abandoned — see git history).
+
+         Collapsed by default (see .cam-column.collapsed) — the toggle sits
+         fixed to the page's top-right corner rather than inside the column
+         itself, so it stays put and clickable whether the column is
+         expanded or collapsed to nothing. -->
+    <button class="icon-btn cam-toggle-btn" id="camToggleBtn" aria-label="Kamerafenster ausklappen" title="Kamerafenster ausklappen">
+      <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M2 5.3h2.2l1-1.5h5.6l1 1.5H14v8.2H2z"/>
+        <circle cx="8" cy="9.4" r="2.3"/>
+        <line class="cam-slash" x1="1.5" y1="1.5" x2="14.5" y2="14.5"/>
+      </svg>
+    </button>
+    <div class="cam-column collapsed" id="camColumn">
+      <video id="camVideo" autoplay playsinline muted hidden></video>
+      <canvas id="camOverlay" aria-hidden="true"></canvas>
+      <button class="icon-btn" id="camStartBtn" aria-label="Kamera starten" title="Kamera starten">◎</button>
+      <p class="cam-hint" id="camHint"></p>
+    </div>
 
   </main>
   <script src="/static/app.js"></script>

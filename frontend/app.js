@@ -7,11 +7,22 @@ const startBtn = document.getElementById("startBtn");
 const muteBtn = document.getElementById("muteBtn");
 const stopBtn = document.getElementById("stopBtn");
 
-// The old debug/chat sidebar (and its toggle button) is gone — a window
-// sized for just the floating orb has no room for one, and the turn-by-turn
-// record it showed now goes to backend/transcript.log instead. #log and
-// #input still exist in the DOM (see index.html) and this code still
-// writes to them below, but nothing ever reveals that container on screen.
+// #log/#input/composer are the small chat panel (id="debugPanel", see
+// index.html) — collapsed by default, toggled open by chatToggleBtn below.
+// The turn-by-turn record also always goes to backend/transcript.log
+// regardless of whether this panel is ever opened.
+const chatColumn = document.getElementById("debugPanel");
+const chatToggleBtn = document.getElementById("chatToggleBtn");
+
+chatToggleBtn.addEventListener("click", () => {
+  const collapsed = chatColumn.classList.toggle("collapsed");
+  // .open drives the bubble icon's slash (see style.css) — plain while
+  // expanded, crossed out while collapsed.
+  chatToggleBtn.classList.toggle("open", !collapsed);
+  chatToggleBtn.title = chatToggleBtn.ariaLabel =
+    collapsed ? "Chatfenster ausklappen" : "Chatfenster einklappen";
+  if (!collapsed) inputEl.focus();
+});
 
 let history = [];
 
@@ -1240,6 +1251,22 @@ const camCanvas = document.getElementById("camOverlay");
 const camCtx = camCanvas.getContext("2d");
 const camStartBtn = document.getElementById("camStartBtn");
 const camHint = document.getElementById("camHint");
+const camColumn = document.getElementById("camColumn");
+const camToggleBtn = document.getElementById("camToggleBtn");
+
+// Collapsed by default (see index.html) — toggling just flips the CSS
+// class; camStartBtn/camStream/the tracking loop are untouched, so a
+// camera already running keeps running quietly behind a collapsed column.
+camToggleBtn.addEventListener("click", () => {
+  const collapsed = camColumn.classList.toggle("collapsed");
+  document.body.classList.toggle("cam-expanded", !collapsed);
+  // .open drives the camera icon's slash (see style.css) — plain while
+  // expanded, crossed out while collapsed.
+  camToggleBtn.classList.toggle("open", !collapsed);
+  camToggleBtn.title = camToggleBtn.ariaLabel =
+    collapsed ? "Kamerafenster ausklappen" : "Kamerafenster einklappen";
+  if (!collapsed) resizeCamCanvas();
+});
 
 // COCO-SSD's 80 classes, in the order the model was trained on — kept as
 // a plain array so a detection's numeric classId (not exposed by the JS
