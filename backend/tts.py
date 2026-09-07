@@ -115,12 +115,54 @@ def _windows_say(text: str) -> bytes:
 # vierunddreißig"). ElevenLabs' API already handles this well on its own,
 # so this is only applied to the two engines that don't.
 #
-# Clock times and dates are left alone: "14:30" or "07.09.2026" already
-# read fine digit-by-digit in German and expanding them would need actual
-# date/time-aware wording (a much bigger feature) to sound right instead of
-# just different.
-_TIME_OR_DATE_RE = re.compile(r"\d{1,2}:\d{2}(?::\d{2})?|\d{1,2}\.\d{1,2}\.\d{2,4}")
-_NUMBER_RE = re.compile(r"(?<!\w)(\d{1,3}(?:\.\d{3})+|\d+)(?:,(\d+))?(?!\w)")
+# Clock times ("14:30") are left alone — that already reads fine
+# digit-by-digit in German. Dates are not: "07.09.2026" read digit-by-digit
+# says "sieben" for the day where German always uses an ordinal ("der
+# siebte September"), so dates get their own expansion (_spell_date) below
+# instead of being left untouched like times are. Math symbols get the
+# same treatment for the same reason — Supertonic's own normalizer either
+# drops "/" silently or passes "+ - * = %" straight through unpronounced.
+_TIME_RE = re.compile(r"\d{1,2}:\d{2}(?::\d{2})?")
+_DATE_RE = re.compile(r"\b(\d{1,2})\.(\d{1,2})\.(\d{2,4})\b")
+# The two extra lookarounds (before/after) keep this off a dotted token
+# that isn't actually German thousands-grouping, like a version number
+# ("3.11") — without them, the grouped-thousands alternative fails (its
+# groups must be exactly 3 digits), the plain \d+ alternative matches "3"
+# and "11" as two separate numbers instead, and the result reads as
+# "drei.elf" with the bare dot still sitting in between.
+_NUMBER_RE = re.compile(r"(?<!\d\.)(?<!\w)(\d{1,3}(?:\.\d{3})+|\d+)(?:,(\d+))?(?!\w)(?!\.\d)")
+
+_MONTH_NAMES = {
+    1: "Januar", 2: "Februar", 3: "März", 4: "April", 5: "Mai", 6: "Juni",
+    7: "Juli", 8: "August", 9: "September", 10: "Oktober", 11: "November", 12: "Dezember",
+}
+
+_MATH_SYMBOL_PATTERNS = [
+    (re.compile(r"(?<=\d)\s*\+\s*(?=\d)"), " plus "),
+    (re.compile(r"\+(?=\d)"), "plus "),
+    (re.compile(r"(?<=\d)\s*-\s*(?=\d)"), " minus "),
+    (re.compile(r"(?<![\w.,])-(?=\d)"), "minus "),
+    (re.compile(r"(?<=\d)\s*[*xX]\s*(?=\d)"), " mal "),
+    (re.compile(r"(?<=\d)\s*/\s*(?=\d)"), " durch "),
+    (re.compile(r"(?<=\d)\s*=\s*(?=\d)"), " gleich "),
+    (re.compile(r"(?<=\d)\s*%"), " Prozent"),
+]
+
+
+def _expand_math_symbols_for_speech(text: str) -> str:
+    for pattern, replacement in _MATH_SYMBOL_PATTERNS:
+        text = pattern.sub(replacement, text)
+    return text
+
+
+def _spell_date(match: re.Match) -> str:
+    day, month, year = (int(g) for g in match.groups())
+    if not (1 <= day <= 31 and 1 <= month <= 12):
+        return match.group(0)  # not actually a date (e.g. a version number)
+    day_words = num2words(day, lang="de", to="ordinal")
+    month_name = _MONTH_NAMES[month]
+    year_words = num2words(year, lang="de")
+    return f"{day_words} {month_name} {year_words}"
 
 
 def _spell_number(match: re.Match) -> str:
@@ -152,7 +194,13 @@ def _expand_numbers_for_speech(text: str) -> str:
     # boundary check — a single fixed marker with no digits in it sidesteps
     # that entirely, restored in order since re.sub visits matches
     # left-to-right in the same order they were shielded.
-    shielded = _TIME_OR_DATE_RE.sub(shield, text)
+    shielded = _TIME_RE.sub(shield, text)
+    shielded = _DATE_RE.sub(_spell_date, shielded)
+    # Math symbols expand to words before numbers do, so e.g. "12+34"
+    # becomes "12 plus 34" first — still cleanly digit-bounded for
+    # _NUMBER_RE right after, since "plus"/"minus"/etc. are word characters
+    # that its (?<!\w)/(?!\w) boundaries respect either way.
+    shielded = _expand_math_symbols_for_speech(shielded)
     expanded = _NUMBER_RE.sub(_spell_number, shielded)
     protected_iter = iter(protected)
     return re.sub(_PLACEHOLDER, lambda _m: next(protected_iter), expanded)
