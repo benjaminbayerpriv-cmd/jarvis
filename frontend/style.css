@@ -1,7 +1,10 @@
-/* Jarvis — an instrument console, not a chat window.
-   Colour carries machine state: green when you speak, amber when Jarvis
-   speaks, red when the mic is off. Mono is the machine's voice, Avenir is
-   the conversation's. */
+/* Jarvis — a floating widget, not a chat window.
+   One colour (blue) for every active state — listening, thinking, and
+   speaking are told apart by how the orb *moves*, not by hue, so it stays
+   recognizable at a glance instead of relying on a green/amber/red code
+   that barely showed up against a busy desktop background. Grey is the
+   one deliberate exception: mic off. Mono is the machine's voice, Avenir
+   is the conversation's. */
 
 :root {
   color-scheme: dark;
@@ -16,10 +19,9 @@
   --dim: #8b8676;
   --faint: #5d594d;
 
-  --sig-in: #7fd86b;    /* you are speaking */
-  --sig-out: #e3a63c;   /* Jarvis is speaking */
-  --sig-work: #c9a227;  /* thinking */
-  --alert: #d9634a;     /* mic off */
+  --sig-active: #4a9eff; /* listening / thinking / speaking */
+  --muted: #9a9aa2;      /* mic off */
+  --alert: #d9634a;      /* destructive-only now (quit button hover) */
 
   --mono: ui-monospace, "SF Mono", Menlo, monospace;
   --sans: "Avenir Next", "Helvetica Neue", system-ui, sans-serif;
@@ -54,7 +56,7 @@ html.widget-mode .hidden-chat {
 button { font-family: var(--mono); cursor: pointer; }
 
 :focus-visible {
-  outline: 2px solid var(--sig-out);
+  outline: 2px solid var(--sig-active);
   outline-offset: 2px;
 }
 
@@ -87,7 +89,7 @@ button { font-family: var(--mono); cursor: pointer; }
   bottom: 6%;
   width: 22%;
   height: 22%;
-  filter: drop-shadow(0 0 6px color-mix(in srgb, var(--sig-out) 55%, transparent));
+  filter: drop-shadow(0 0 6px color-mix(in srgb, var(--sig-active) 55%, transparent));
 }
 
 /* Shared look for every small, icon-only control (mic, quit, debug) — a
@@ -117,11 +119,13 @@ button { font-family: var(--mono); cursor: pointer; }
 
 .icon-btn#quitBtn:hover { color: var(--alert); border-color: var(--alert); }
 .icon-btn#quitBtn { font-size: 17px; }
-.icon-btn#muteBtn.off { color: var(--alert); border-color: color-mix(in srgb, var(--alert) 45%, var(--line)); opacity: 1; }
+.icon-btn#muteBtn.off { color: var(--muted); border-color: color-mix(in srgb, var(--muted) 45%, var(--line)); opacity: 1; }
 
 /* Sits right under the orb — offset scales with the orb's own min(vh,vw)
    sizing so the gap stays proportional instead of colliding on a very
-   short window. */
+   short window. Hidden until the pointer is anywhere over the widget —
+   the orb alone is the resting-state UI, these are secondary controls
+   that only need to exist when you're actually about to use them. */
 .control-row {
   position: absolute;
   left: 50%;
@@ -129,6 +133,14 @@ button { font-family: var(--mono); cursor: pointer; }
   transform: translateX(-50%);
   display: flex;
   gap: 8px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 160ms ease;
+}
+
+.stage:hover .control-row {
+  opacity: 1;
+  pointer-events: auto;
 }
 
 /* Debug sidebar: the full transcript plus verbose tool-call log — the same
@@ -207,15 +219,15 @@ button { font-family: var(--mono); cursor: pointer; }
 }
 
 .turn.you .said { color: var(--dim); }
-.turn.you .who { color: color-mix(in srgb, var(--sig-in) 60%, var(--faint)); }
-.turn.jarvis .who { color: color-mix(in srgb, var(--sig-out) 60%, var(--faint)); }
+.turn.you .who { color: color-mix(in srgb, var(--sig-active) 60%, var(--faint)); }
+.turn.jarvis .who { color: color-mix(in srgb, var(--sig-active) 60%, var(--faint)); }
 
 .turn.pending .said::after {
   content: "";
   display: inline-block;
   width: 7px; height: 14px;
   margin-left: 3px;
-  background: var(--sig-out);
+  background: var(--sig-active);
   vertical-align: text-bottom;
   animation: caret 1s steps(2) infinite;
 }
@@ -234,7 +246,7 @@ button { font-family: var(--mono); cursor: pointer; }
   border-radius: 12px;
 }
 
-.composer:focus-within { border-color: color-mix(in srgb, var(--sig-out) 40%, var(--line)); }
+.composer:focus-within { border-color: color-mix(in srgb, var(--sig-active) 40%, var(--line)); }
 
 .composer input {
   flex: 1;
@@ -259,7 +271,7 @@ button { font-family: var(--mono); cursor: pointer; }
   transition: color 160ms, border-color 160ms;
 }
 
-.send:hover { color: var(--sig-out); border-color: var(--sig-out); }
+.send:hover { color: var(--sig-active); border-color: var(--sig-active); }
 
 /* ---------- controls ---------- */
 
@@ -297,9 +309,9 @@ button { font-family: var(--mono); cursor: pointer; }
 
 .tool .call { display: flex; gap: 7px; align-items: baseline; }
 
-.tool .bullet { color: var(--sig-work); }
+.tool .bullet { color: var(--sig-active); }
 .tool.running .bullet { animation: breathe 1.1s ease-in-out infinite; }
-.tool.ok .bullet { color: var(--sig-out); }
+.tool.ok .bullet { color: var(--sig-active); }
 .tool.fail .bullet { color: #e77d7d; }
 
 .tool .name { color: var(--dim); }
@@ -397,7 +409,7 @@ button { font-family: var(--mono); cursor: pointer; }
 .block a {
   display: block;
   padding: 13px 14px;
-  color: var(--sig-out);
+  color: var(--sig-active);
   font-family: var(--mono);
   font-size: 12.5px;
   text-decoration: none;
