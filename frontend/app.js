@@ -209,43 +209,29 @@ const RING_GAP_DEG = 46; // open gap at the top, like a loading-ring readout
 // individual segments don't flicker in and out.
 const ringSegmentSeeds = Array.from({ length: RING_SEGMENTS }, () => 0.35 + Math.random() * 0.65);
 
-// A dust *band*, not a thin ring of dots: each particle sits somewhere
-// across a radial band around the boundary rather than right on a single
-// jittered line, so the silhouette reads as a fuzzy, torn-edge texture
-// instead of a sparse necklace of individual points.
-const DUST_COUNT = 420;
-const DUST_BAND_WIDTH = 0.16; // fraction of ringR the band spans, inner to outer
-// Fixed per-particle angle/band-position/size/twinkle phase, so the jagged
-// boundary holds its shape and only rotates/twinkles rather than
-// reshuffling every frame.
-const dustParticles = Array.from({ length: DUST_COUNT }, () => {
-  // Averaging two uniform randoms approximates a triangular distribution —
-  // denser toward the band's centre line, thinning out at its inner and
-  // outer edges, rather than a flat, equally-likely-anywhere smear.
-  const centered = (Math.random() + Math.random()) / 2 - 0.5;
-  return {
-    angle: Math.random() * Math.PI * 2,
-    bandOffset: centered * DUST_BAND_WIDTH,
-    // Mostly fine dust, with a handful of bigger clumped specks for texture.
-    size: Math.random() < 0.12 ? 1.3 + Math.random() * 1.5 : 0.5 + Math.random() * 0.8,
-    twinklePhase: Math.random() * Math.PI * 2,
-    twinkleSpeed: 0.6 + Math.random() * 1.4,
-  };
-});
-// A few sine harmonics with fixed random phases give the dust band's
+const DUST_COUNT = 220;
+// Same idea for the outer dust ring: fixed per-particle angle/size/twinkle
+// phase, so the jagged boundary holds its shape and only rotates/twinkles
+// rather than reshuffling every frame.
+const dustParticles = Array.from({ length: DUST_COUNT }, () => ({
+  angle: Math.random() * Math.PI * 2,
+  jitter: (Math.random() - 0.5) * 2,
+  size: 0.6 + Math.random() * 1.6,
+  twinklePhase: Math.random() * Math.PI * 2,
+}));
+// A few sine harmonics with fixed random phases give the dust ring's
 // silhouette organic, uneven "lobes" instead of a perfect circle or
-// uniformly random noise — the higher frequency adds finer jaggedness on
-// top of the two broad ones.
-const boundaryHarmonics = [3, 5, 8, 13].map((freq) => ({
+// uniformly random noise.
+const boundaryHarmonics = [3, 5, 8].map((freq) => ({
   freq,
   phase: Math.random() * Math.PI * 2,
-  amp: freq <= 5 ? 0.5 + Math.random() * 0.5 : 0.25 + Math.random() * 0.25,
+  amp: 0.5 + Math.random() * 0.5,
 }));
 
 function boundaryRadiusFactor(angle) {
   let n = 0;
   for (const h of boundaryHarmonics) n += Math.sin(angle * h.freq + h.phase) * h.amp;
-  return 1 + (n / boundaryHarmonics.length) * 0.11;
+  return 1 + (n / boundaryHarmonics.length) * 0.09;
 }
 
 function drawDustRing(cx, cy, ringR, spin, color, alpha) {
@@ -253,12 +239,12 @@ function drawDustRing(cx, cy, ringR, spin, color, alpha) {
   orbCtx.save();
   orbCtx.fillStyle = color;
   orbCtx.shadowColor = color;
-  orbCtx.shadowBlur = 3;
+  orbCtx.shadowBlur = 4;
   for (const p of dustParticles) {
     const angle = p.angle + spin * 0.4;
-    const r = ringR * (boundaryRadiusFactor(angle) + p.bandOffset);
-    const twinkle = 0.5 + 0.5 * Math.sin(t * p.twinkleSpeed + p.twinklePhase);
-    orbCtx.globalAlpha = alpha * (0.25 + twinkle * 0.6);
+    const r = ringR * boundaryRadiusFactor(angle) * (1 + p.jitter * 0.05);
+    const twinkle = 0.5 + 0.5 * Math.sin(t * 1.5 + p.twinklePhase);
+    orbCtx.globalAlpha = alpha * (0.3 + twinkle * 0.7);
     orbCtx.beginPath();
     orbCtx.arc(cx + Math.cos(angle) * r, cy + Math.sin(angle) * r, p.size, 0, Math.PI * 2);
     orbCtx.fill();
@@ -288,75 +274,6 @@ function drawSegmentRing(cx, cy, ringR, spin, color, level, alpha) {
     orbCtx.lineTo(cx + Math.cos(angle) * (rInner + len), cy + Math.sin(angle) * (rInner + len));
     orbCtx.stroke();
   }
-  orbCtx.restore();
-}
-
-// ---------- DNA ring: a single double-helix band right at the outer edge -
-//
-// Two strands wound around one circle (a sine-wobbled radius, 180° out of
-// phase with each other) plus regular connecting "rungs" — the classic
-// double-helix ladder, wrapped into a ring instead of running straight.
-// Deliberately flat 2D (just orbSpin, none of the sphere's own tilt/spin
-// matrix) and sized to sit right at the outer boundary: it must not dip
-// through the middle over the sphere the way the earlier tilted-rings
-// version did.
-const DNA_TWISTS = 10; // full sine oscillations per lap — how tightly wound the helix looks
-const DNA_SAMPLES = 200;
-const DNA_RUNGS = 26;
-
-function drawDnaRing(cx, cy, outerR, spin, color, alpha) {
-  const t = Date.now() / 1000;
-  const ringR = outerR * 1.06;
-  const amp = outerR * 0.045;
-  // Twisting independently of the ring's own rotation — spin alone would
-  // just carry a frozen wave pattern around; this makes the strands
-  // visibly crawl over/under each other as they go, the actual "hereindreht"
-  // motion that was asked for.
-  const twistPhase = t * 0.8;
-  const radiusAt = (theta, strandOffset) =>
-    ringR + amp * Math.sin(theta * DNA_TWISTS + twistPhase + strandOffset);
-
-  orbCtx.save();
-  orbCtx.lineCap = "round";
-  orbCtx.shadowColor = color;
-  orbCtx.shadowBlur = 5;
-  orbCtx.strokeStyle = color;
-  orbCtx.lineWidth = Math.max(1.5, outerR * 0.016);
-
-  for (const strandOffset of [0, Math.PI]) {
-    let prev = null;
-    for (let i = 0; i <= DNA_SAMPLES; i++) {
-      const theta = spin + (Math.PI * 2 * i) / DNA_SAMPLES;
-      const r = radiusAt(theta, strandOffset);
-      const sx = cx + Math.cos(theta) * r, sy = cy + Math.sin(theta) * r;
-      if (prev) {
-        // The strand nearer the viewer (larger radius, bulging outward at
-        // this point in its twist) reads as "in front" — brighter — the
-        // one currently pulled inward as passing behind it.
-        const bulge = (r - ringR) / amp; // -1..1
-        orbCtx.globalAlpha = alpha * (0.45 + Math.max(0, bulge) * 0.55);
-        orbCtx.beginPath();
-        orbCtx.moveTo(prev.sx, prev.sy);
-        orbCtx.lineTo(sx, sy);
-        orbCtx.stroke();
-      }
-      prev = { sx, sy };
-    }
-  }
-
-  // Base-pair rungs between the two strands at regular intervals.
-  orbCtx.lineWidth = Math.max(1, outerR * 0.008);
-  for (let i = 0; i < DNA_RUNGS; i++) {
-    const theta = spin + (Math.PI * 2 * i) / DNA_RUNGS;
-    const rA = radiusAt(theta, 0);
-    const rB = radiusAt(theta, Math.PI);
-    orbCtx.globalAlpha = alpha * 0.4;
-    orbCtx.beginPath();
-    orbCtx.moveTo(cx + Math.cos(theta) * rA, cy + Math.sin(theta) * rA);
-    orbCtx.lineTo(cx + Math.cos(theta) * rB, cy + Math.sin(theta) * rB);
-    orbCtx.stroke();
-  }
-
   orbCtx.restore();
 }
 
@@ -437,7 +354,6 @@ function renderOrb(level, stateName) {
   // flat 2D circles, independent of the sphere's own 3D tilt/spin below.
   drawDustRing(cx, cy, outerR, orbSpin, ringColor, 0.55 * listenPulse);
   drawSegmentRing(cx, cy, outerR * 0.82, orbSpin, ringColor, level, 0.75 * listenPulse);
-  drawDnaRing(cx, cy, outerR, orbSpin, ringColor, 0.8 * listenPulse);
 
   const projected = orbVerts.map((v) => {
     const ripple = Math.sin(v.x * 4 + t * 1.6) * Math.cos(v.y * 4 - t * 1.1);
