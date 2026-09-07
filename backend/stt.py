@@ -21,22 +21,27 @@ def _add_nvidia_dll_dirs() -> None:
     loadable on Windows.
 
     Those packages ship the DLLs under site-packages/nvidia/<name>/bin, but
-    pip install alone doesn't put that on PATH and ctranslate2 has no
-    knowledge of it (unlike PyTorch, which patches its own DLL search path
-    for exactly this) — without this, WhisperModel(device="cuda") loads
-    fine but the first real transcribe() fails with "Library cublas64_12.dll
-    is not found or cannot be loaded", silently returning empty text.
+    pip install alone doesn't put that anywhere ctranslate2 can find it.
+    os.add_dll_directory() looks like the right fix and silently does
+    *nothing* here: it only affects LoadLibraryEx calls made with the
+    LOAD_LIBRARY_SEARCH_* flags, and ctranslate2's C++ core loads cuBLAS/
+    cuDNN via a plain LoadLibrary, which only ever consults PATH (plus the
+    classic system/application directories) — confirmed by reproducing the
+    failure with add_dll_directory in place and fixing it only once these
+    same folders were prepended to PATH instead. Without this, GPU
+    transcription loads fine but the first real (non-silence) utterance
+    fails with "Library cublas64_12.dll is not found or cannot be loaded",
+    and that failure is swallowed by main.py's /stt handler into an empty
+    transcript — heard by the user as "voice input doesn't work".
     """
     if os.name != "nt":
         return
     nvidia_root = Path(sys.prefix) / "Lib" / "site-packages" / "nvidia"
     if not nvidia_root.is_dir():
         return
-    for bin_dir in nvidia_root.glob("*/bin"):
-        try:
-            os.add_dll_directory(str(bin_dir))
-        except OSError:
-            pass
+    bin_dirs = [str(p) for p in nvidia_root.glob("*/bin")]
+    if bin_dirs:
+        os.environ["PATH"] = os.pathsep.join(bin_dirs) + os.pathsep + os.environ.get("PATH", "")
 
 
 _add_nvidia_dll_dirs()
