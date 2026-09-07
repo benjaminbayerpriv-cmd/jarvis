@@ -4,14 +4,17 @@ Supertonic is the primary voice: a local, offline, unlimited neural TTS
 model that sounds far better than the old OS-builtin voice ever did, with
 no per-character cost or quota. If it can't load (e.g. first run with no
 internet to fetch the model), this falls back to ElevenLabs when a key is
-configured, and finally to the voice built into the operating system —
-worse sounding, but free, offline and always available. Silence is the one
-outcome that makes Jarvis look broken.
+configured (free tier is 10k characters a month and runs dry without
+warning), and finally to the voice built into the operating system — worse
+sounding, but free, offline and always available: macOS's built-in `say`,
+the SAPI synthesizer (via PowerShell, no extra dependency needed) on
+Windows. Silence is the one outcome that makes Jarvis look broken.
 """
 
 from __future__ import annotations
 
 import io
+import platform
 import subprocess
 import tempfile
 import threading
@@ -28,6 +31,8 @@ ELEVENLABS_URL = "https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
 
 MACOS_VOICE = "Anna"
 
+IS_WINDOWS = platform.system() == "Windows"
+
 # Set once ElevenLabs reports quota exhaustion, so we stop paying the
 # latency of a doomed request on every single sentence.
 _elevenlabs_blocked = False
@@ -37,6 +42,15 @@ _elevenlabs_blocked = False
 _supertonic_lock = threading.Lock()
 _supertonic_tts: TTS | None = None
 _supertonic_style = None
+
+# File extension + mime type produced by each engine, so callers (the /tts
+# route, the filler cache) don't need their own platform checks.
+ENGINE_MEDIA = {
+    "supertonic": ("wav", "audio/wav"),
+    "elevenlabs": ("mp3", "audio/mpeg"),
+    "macos": ("m4a", "audio/mp4"),
+    "windows": ("wav", "audio/wav"),
+}
 
 
 class VoiceInfo:
@@ -64,15 +78,25 @@ def _macos_say(text: str) -> bytes:
 
 
 def _windows_say(text: str) -> bytes:
-    out = Path(tempfile.mkdtemp()) / "jarvis.wav"
-    quoted_path = "'" + str(out).replace("'", "''") + "'"
-    quoted_text = "'" + text.replace("'", "''") + "'"
+    """Render text via the SAPI synthesizer built into Windows. The text is
+    piped over stdin (rather than interpolated into the script) so quotes
+    and special characters in it can't break out of the PowerShell command."""
+    out = Path(tempfile.mkdtemp()) / "say.wav"
     script = (
         "Add-Type -AssemblyName System.Speech; "
-        "$s=New-Object System.Speech.Synthesis.SpeechSynthesizer; "
-        f"$s.SetOutputToWaveFile({quoted_path}); $s.Speak({quoted_text}); $s.Dispose()"
+        "$s = New-Object System.Speech.Synthesis.SpeechSynthesizer; "
+        f"$s.SetOutputToWaveFile('{out}'); "
+        "$s.Speak([Console]::In.ReadToEnd()); "
+        "$s.Dispose()"
     )
-    subprocess.run(platform_utils.powershell(script), check=True, capture_output=True, timeout=60)
+    subprocess.run(
+        platform_utils.powershell(script),
+        input=text,
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
     data = out.read_bytes()
     try:
         out.unlink()
@@ -80,6 +104,14 @@ def _windows_say(text: str) -> bytes:
     except OSError:
         pass
     return data
+
+
+def _local_say(text: str) -> bytes:
+    if IS_WINDOWS:
+        VoiceInfo.engine = "windows"
+        return _windows_say(text)
+    VoiceInfo.engine = "macos"
+    return _macos_say(text)
 
 
 def _elevenlabs(text: str) -> bytes:
@@ -167,12 +199,8 @@ def synthesize(text: str) -> bytes:
             # a 401 with quota_exceeded in the body.
             if status in (401, 402, 429) or "quota" in body.lower():
                 _elevenlabs_blocked = True
-                print(f"[tts] ElevenLabs nicht verfügbar ({status}), nutze System-Stimme. {body}")
+                print(f"[tts] ElevenLabs nicht verfügbar ({status}), nutze lokale Stimme. {body}")
         except requests.RequestException as exc:
-            print(f"[tts] ElevenLabs Netzwerkfehler, nutze System-Stimme: {exc}")
+            print(f"[tts] ElevenLabs Netzwerkfehler, nutze lokale Stimme: {exc}")
 
-    if platform_utils.is_windows():
-        VoiceInfo.engine = "windows"
-        return _windows_say(text)
-    VoiceInfo.engine = "macos"
-    return _macos_say(text)
+    return _local_say(text)

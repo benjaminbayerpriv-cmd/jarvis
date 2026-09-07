@@ -153,19 +153,13 @@ async def summarize(req: SummarizeRequest):
     return SummarizeResponse(summary=summary)
 
 
-def _tts_mime(engine: str) -> str:
-    return {"macos": "audio/mp4", "windows": "audio/wav", "supertonic": "audio/wav"}.get(
-        engine, "audio/mpeg"
-    )
-
-
 @app.post("/tts")
 def speak(req: ChatResponse):
     try:
         audio = tts.synthesize(req.reply)
     except Exception:
         return Response(status_code=502, content=b"")
-    mime = _tts_mime(tts.VoiceInfo.engine)
+    _, mime = tts.ENGINE_MEDIA.get(tts.VoiceInfo.engine, ("mp3", "audio/mpeg"))
     return Response(content=audio, media_type=mime)
 
 
@@ -211,7 +205,7 @@ def chat_stream(req: ChatRequest):
                     try:
                         audio = tts.synthesize(text)
                         audio_b64 = base64.b64encode(audio).decode("ascii")
-                        mime = _tts_mime(tts.VoiceInfo.engine)
+                        _, mime = tts.ENGINE_MEDIA.get(tts.VoiceInfo.engine, ("mp3", "audio/mpeg"))
                     except Exception as exc:  # noqa: BLE001 - never mute the reply
                         print(f"[tts] Sprachausgabe fehlgeschlagen: {exc}")
                     yield json.dumps(

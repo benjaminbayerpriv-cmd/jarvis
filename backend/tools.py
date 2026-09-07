@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime
 import os
+import platform
 import re
 import shutil
 import subprocess
@@ -11,6 +12,8 @@ from pathlib import Path
 import requests
 
 from . import browser_agent, coder, config, confirm, last_target, memory, panel, platform_utils
+
+IS_WINDOWS = platform.system() == "Windows"
 
 TOOL_SCHEMAS = [
     {
@@ -314,6 +317,11 @@ _BLOCKED = [
     r">\s*/dev/(disk|sd)",
     r"\bdiskutil\s+(erase|reformat)",
     r"\bchmod\s+-R\s+777\s+/(\s|$)",
+    # Windows equivalents of the above.
+    r"\bformat\s+[a-z]:",
+    r"\bdel\s+/[a-z]*\s+.*[a-z]:\\\\?\s*$",
+    r"remove-item\s+.*-recurse\b.*[a-z]:\\\\?\s*$",
+    r"\bvssadmin\s+delete\b",
 ]
 
 
@@ -412,7 +420,7 @@ def _browser_tabs() -> str:
     return browser_agent.agent.command("list_tabs", {})
 
 
-def _resolve_app(name: str) -> str | None:
+def _resolve_app_macos(name: str) -> str | None:
     """Find an app bundle by the name a German speaker would actually say.
 
     `open -a Rechner` fails because the bundle is Calculator.app — the German
@@ -437,11 +445,7 @@ def _resolve_app(name: str) -> str | None:
         return None
 
 
-def _open_app(name: str) -> str:
-    name = name.strip()
-    if not name:
-        return "Welches Programm soll ich öffnen?"
-
+def _open_app_macos(name: str) -> str:
     try:
         if platform_utils.is_windows():
             aliases = {
@@ -464,12 +468,64 @@ def _open_app(name: str) -> str:
         if proc.returncode == 0:
             return f"{name} geöffnet."
 
-        resolved = _resolve_app(name)
+        resolved = _resolve_app_macos(name)
         if resolved:
             proc = subprocess.run(["open", resolved], capture_output=True, text=True, timeout=20)
             if proc.returncode == 0:
                 return f"{name} geöffnet."
         return f"Konnte '{name}' nicht finden. Heißt das Programm vielleicht anders?"
+    except Exception as exc:
+        return f"Konnte '{name}' nicht öffnen: {exc}"
+
+
+def _find_start_menu_shortcut(name: str) -> str | None:
+    """Windows has no Spotlight, but every installed program gets a .lnk
+    shortcut in one of the (per-user or all-users) Start Menu folders —
+    close enough to a name lookup."""
+    roots = [
+        Path(os.environ.get("ProgramData", "")) / "Microsoft/Windows/Start Menu/Programs",
+        Path(os.environ.get("APPDATA", "")) / "Microsoft/Windows/Start Menu/Programs",
+    ]
+    name_lower = name.lower()
+    hits = []
+    for root in roots:
+        if not root.is_dir():
+            continue
+        for f in root.rglob("*.lnk"):
+            if name_lower in f.stem.lower():
+                hits.append(f)
+    if not hits:
+        return None
+    hits.sort(key=lambda p: len(p.stem))
+    return str(hits[0])
+
+
+def _open_app_windows(name: str) -> str:
+    # os.startfile resolves anything Windows itself would know how to run:
+    # an exe on PATH, a registered "App Path", a URL, a document.
+    try:
+        os.startfile(name)  # noqa: S606 - name comes from the LLM's tool call, not raw shell input
+        return f"{name} geöffnet."
+    except OSError:
+        pass
+
+    resolved = _find_start_menu_shortcut(name)
+    if resolved:
+        try:
+            os.startfile(resolved)
+            return f"{name} geöffnet."
+        except OSError:
+            pass
+
+    return f"Konnte '{name}' nicht finden. Heißt das Programm vielleicht anders?"
+
+
+def _open_app(name: str) -> str:
+    name = name.strip()
+    if not name:
+        return "Welches Programm soll ich öffnen?"
+    try:
+        return _open_app_windows(name) if IS_WINDOWS else _open_app_macos(name)
     except Exception as exc:
         return f"Konnte '{name}' nicht öffnen: {exc}"
 
