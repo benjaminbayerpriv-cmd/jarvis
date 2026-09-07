@@ -33,6 +33,7 @@ const WASM_ROOT = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.17/
 
 let landmarker = null;
 let readyPromise = null;
+let activeDelegate = null; // "GPU" or "CPU" — whichever actually initialized
 
 async function createLandmarker(delegate) {
   const vision = await FilesetResolver.forVisionTasks(WASM_ROOT);
@@ -48,15 +49,20 @@ async function createLandmarker(delegate) {
 function ensureReady() {
   if (!readyPromise) {
     readyPromise = (async () => {
+      // GPU vs. CPU delegate is a 10-20x difference for this model (measured:
+      // ~50ms/frame on GPU vs. 250-1300ms/frame on CPU) — logged clearly
+      // since a silent fallback here is exactly what makes tracking feel
+      // broken/laggy for no visible reason.
       try {
         landmarker = await createLandmarker("GPU");
-      } catch (_) {
-        // Not every machine/browser can give a Worker a GPU context for
-        // this — CPU delegate still keeps the *isolation* benefit (nothing
-        // here ever touches the main thread), just slower per frame.
+        activeDelegate = "GPU";
+      } catch (err) {
+        console.warn("[tracking-worker] GPU delegate failed, falling back to CPU (10-20x slower):", err);
         landmarker = await createLandmarker("CPU");
+        activeDelegate = "CPU";
       }
-      self.postMessage({ type: "ready" });
+      console.log(`[tracking-worker] ready, using ${activeDelegate} delegate`);
+      self.postMessage({ type: "ready", delegate: activeDelegate });
     })();
   }
   return readyPromise;
@@ -68,11 +74,14 @@ self.onmessage = async (e) => {
   if (type !== "detect") return;
   try {
     await ensureReady();
+    const t0 = performance.now();
     const result = landmarker.detectForVideo(bitmap, timestamp);
+    const ms = performance.now() - t0;
     bitmap.close();
     self.postMessage({
       type: "result",
       id,
+      ms,
       pose: (result.poseLandmarks && result.poseLandmarks[0]) || null,
       leftHand: (result.leftHandLandmarks && result.leftHandLandmarks[0]) || null,
       rightHand: (result.rightHandLandmarks && result.rightHandLandmarks[0]) || null,

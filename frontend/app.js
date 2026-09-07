@@ -1265,6 +1265,8 @@ const trackingReadyPromise = new Promise((resolve) => { trackingReadyResolve = r
 let trackingRequestId = 0;
 const pendingTrackingResolvers = new Map();
 let trackingBusy = false;
+let trackingFrameCount = 0;
+let trackingMsTotal = 0;
 
 function ensureTrackingWorker() {
   if (trackingWorker) return;
@@ -1273,6 +1275,9 @@ function ensureTrackingWorker() {
     const { type, id } = e.data;
     if (type === "ready") {
       trackingReady = true;
+      // GPU vs. CPU delegate is a 10-20x speed difference for this model —
+      // if tracking feels slow/laggy, check this line first.
+      console.log(`[tracking-worker] ready, delegate: ${e.data.delegate}`);
       trackingReadyResolve();
       return;
     }
@@ -1283,6 +1288,14 @@ function ensureTrackingWorker() {
       console.error("[tracking-worker]", e.data.error);
       resolve(null);
     } else {
+      trackingFrameCount++;
+      trackingMsTotal += e.data.ms || 0;
+      if (trackingFrameCount % 30 === 0) {
+        console.log(
+          `[tracking-worker] avg ${(trackingMsTotal / trackingFrameCount).toFixed(1)}ms/frame ` +
+          `over ${trackingFrameCount} frames (last: ${(e.data.ms || 0).toFixed(1)}ms)`
+        );
+      }
       resolve(e.data);
     }
   };
