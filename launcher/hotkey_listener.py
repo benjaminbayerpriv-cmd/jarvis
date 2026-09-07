@@ -13,7 +13,6 @@ foreground windows can block a hotkey from a non-elevated listener — run
 this the same way (elevated or not) as whatever you're using it to control.
 """
 
-import platform
 import sys
 from pathlib import Path
 
@@ -21,15 +20,13 @@ import requests
 from pynput import keyboard
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from backend import config  # noqa: E402
+from backend import config, platform_utils  # noqa: E402
 
 TRIGGER_URL = f"http://{config.JARVIS_HOST}:{config.JARVIS_PORT}/trigger"
 
-IS_MACOS = platform.system() == "Darwin"
-MODIFIER_KEY = keyboard.Key.cmd if IS_MACOS else keyboard.Key.ctrl
-HOTKEY_LABEL = "Cmd+Shift+J" if IS_MACOS else "Ctrl+Shift+J"
-
-COMBO = {MODIFIER_KEY, keyboard.Key.shift, keyboard.KeyCode.from_char("j")}
+MODIFIER = keyboard.Key.ctrl if platform_utils.is_windows() else keyboard.Key.cmd
+HOTKEY_LABEL = "Ctrl+Shift+J" if platform_utils.is_windows() else "Cmd+Shift+J"
+COMBO = {MODIFIER, keyboard.Key.shift, keyboard.KeyCode.from_char("j")}
 current_keys = set()
 
 

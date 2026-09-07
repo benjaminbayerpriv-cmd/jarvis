@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import datetime
 import os
 import platform
@@ -9,7 +11,7 @@ from pathlib import Path
 
 import requests
 
-from . import coder, config, mouse, panel, vision
+from . import browser_agent, coder, config, confirm, last_target, memory, panel, platform_utils
 
 IS_WINDOWS = platform.system() == "Windows"
 
@@ -68,6 +70,37 @@ TOOL_SCHEMAS = [
     {
         "type": "function",
         "function": {
+            "name": "youtube_search",
+            "description": "Öffnet die YouTube-Ergebnisliste für eine Suchanfrage im verbundenen Chrome.",
+            "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "web_search",
+            "description": (
+                "Sucht im Web nach einer Anfrage und liefert echte Ergebnisse "
+                "(Titel, Kurzbeschreibung, URL) zum Vorlesen/Zusammenfassen zurück. "
+                "NUR für aktuelle oder unsichere Informationen (Preise, News, "
+                "Öffnungszeiten, Fakten, die du wirklich nicht kennst). NICHT für "
+                "Allgemeinwissen wie Hauptstädte, Geschichte, Mathematik oder Definitionen "
+                "— das beantwortest du direkt aus eigenem Wissen, ohne dieses Tool."
+            ),
+            "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "browser_tabs",
+            "description": "Listet die offenen Chrome-Tabs des verbundenen Browser-Agenten auf.",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "open_app",
             "description": (
                 "Ein Programm auf dem Computer öffnen, z.B. Spotify, Obsidian, Terminal, "
@@ -92,28 +125,45 @@ TOOL_SCHEMAS = [
     {
         "type": "function",
         "function": {
-            "name": "see_screen",
-            # Deliberately plain: quotes, apostrophes and dashes in this
-            # description were measured to trigger a real LM Studio /
-            # llama.cpp bug (grammar-constrained decoding for this schema
-            # corrupts the first tokens of the reply, reproducible with
-            # tools=false absent and streaming irrelevant). Plain wording
-            # measurably lowers, though does not eliminate, the failure
-            # rate — stream_reply retries on detection as a backstop.
+            "name": "open_folder",
             "description": (
-                "Schaut auf den Bildschirm des Nutzers und beschreibt oder analysiert was "
-                "dort zu sehen ist. Nutze dieses Tool bei jeder Frage zum aktuellen "
-                "Bildschirminhalt, zum Beispiel schau mal, guck mal, was siehst du, was "
-                "zeigt der Bildschirm, oder bei Hilfe zu einem sichtbaren Fehler."
+                "Öffnet einen Ordner SICHTBAR im Finder/Explorer, z.B. 'Projekte auf "
+                "dem Desktop' oder 'Rechnungen in den Dokumenten'. Nutze das nur, wenn "
+                "der Nutzer den Ordner selbst sehen/durchsuchen will. Willst du "
+                "stattdessen NUR wissen, was drin liegt, um es zu sagen, nutze "
+                "list_folder — niemals open_app für Ordner verwenden."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "question": {
+                    "description": {
                         "type": "string",
-                        "description": "Was am Bildschirm herausgefunden werden soll",
+                        "description": "Ordnername und, falls genannt, sein Ort — genau wie der Nutzer es gesagt hat",
                     }
                 },
+                "required": ["description"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_folder",
+            "description": (
+                "Sagt, was in einem Ordner liegt (Dateinamen als Text), OHNE etwas zu "
+                "öffnen. Nutze das bei 'was liegt in X', 'was ist in X drin', 'zeig mir "
+                "den Inhalt von X', 'guck in X'. Für 'Dokumente', 'Desktop', 'Downloads' "
+                "reicht der Name allein — nicht nach dem genauen Pfad fragen."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "description": {
+                        "type": "string",
+                        "description": "Ordnername und, falls genannt, sein Ort — genau wie der Nutzer es gesagt hat",
+                    }
+                },
+                "required": ["description"],
             },
         },
     },
@@ -130,6 +180,70 @@ TOOL_SCHEMAS = [
                 "type": "object",
                 "properties": {"command": {"type": "string", "description": "Der Shell-Befehl"}},
                 "required": ["command"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "move_file",
+            "description": (
+                "Verschiebt eine Datei oder einen Ordner von einem Ort zum anderen. "
+                "Nutze das immer, wenn der Nutzer etwas 'verschieben', 'bewegen' oder "
+                "'in einen anderen Ordner legen' will. 'source' ist der komplette Pfad "
+                "der Datei, 'destination' der Zielordner oder Zielpfad."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "source": {"type": "string", "description": "Der vollständige Pfad der Datei, z.B. ~/Desktop/bild.png"},
+                    "destination": {"type": "string", "description": "Der Zielordner, z.B. ~/Documents oder ein Zielpfad"},
+                },
+                "required": ["source", "destination"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "write_file",
+            "description": (
+                "Schreibt Text in eine Datei — legt sie neu an oder überschreibt sie, "
+                "legt fehlende Ordner automatisch an. Nutze das für 'schreib eine Datei', "
+                "'speicher das als', 'leg eine Konfig-Datei an' und ähnliches."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Zielpfad, z.B. ~/Desktop/notiz.txt"},
+                    "content": {"type": "string", "description": "Der zu schreibende Inhalt"},
+                },
+                "required": ["path", "content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "delete_path",
+            "description": (
+                "Verschiebt eine Datei oder einen Ordner in den Papierkorb (reversibel, "
+                "kein endgültiges Löschen). Nutze das für JEDE Lösch-Anfrage ('lösch den "
+                "Ordner X', 'entferne die Datei Y') — niemals rm über run_shell, das kann "
+                "bei einem falschen oder nicht existierenden Pfad fälschlich Erfolg "
+                "vortäuschen. Das Tool fragt selbst automatisch nach Bestätigung und löscht "
+                "erst, wenn der Nutzer zustimmt — ruf es einfach direkt auf, du musst nicht "
+                "selbst vorher nachfragen oder dir merken, worauf sich ein späteres 'ja' bezieht."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "description": {
+                        "type": "string",
+                        "description": "Name/Beschreibung der Datei oder des Ordners, z.B. 'Ordner Machs auf dem Desktop' oder 'notiz.txt in Dokumente'.",
+                    },
+                },
+                "required": ["description"],
             },
         },
     },
@@ -182,59 +296,6 @@ TOOL_SCHEMAS = [
                     },
                 },
                 "required": ["title", "content"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "click_on_screen",
-            "description": (
-                "Schaut auf den Bildschirm, findet ein sichtbares Element anhand seiner "
-                "Beschreibung und klickt darauf — z.B. 'den Speichern-Button', 'das "
-                "Suchfeld', 'den ersten Link'. Nutze das, wenn der Nutzer dich bittet, "
-                "etwas auf dem Bildschirm anzuklicken. Die Zielerkennung ist ungefähr, "
-                "nicht pixelgenau — bei kleinen oder dicht beieinanderliegenden "
-                "Elementen kann es danebengehen."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "description": {
-                        "type": "string",
-                        "description": "Was angeklickt werden soll, so wie der Nutzer es beschrieben hat",
-                    },
-                    "action": {
-                        "type": "string",
-                        "enum": ["click", "double_click", "right_click", "move"],
-                        "description": "Standardmäßig 'click'",
-                    },
-                },
-                "required": ["description"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "mouse_action",
-            "description": (
-                "Bewegt die Maus zu exakten Bildschirm-Koordinaten oder zieht von einer "
-                "Koordinate zu einer anderen. Nur nutzen, wenn die Koordinaten bereits "
-                "bekannt sind (z.B. aus einer vorherigen click_on_screen-Antwort) — sonst "
-                "click_on_screen verwenden, das die Position selbst herausfindet."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "action": {"type": "string", "enum": ["move", "click", "drag", "scroll"]},
-                    "x": {"type": "number"},
-                    "y": {"type": "number"},
-                    "x2": {"type": "number", "description": "Zielpunkt, nur für 'drag'"},
-                    "y2": {"type": "number", "description": "Zielpunkt, nur für 'drag'"},
-                    "button": {"type": "string", "enum": ["left", "right"]},
-                },
-                "required": ["action"],
             },
         },
     },
@@ -306,19 +367,57 @@ def _get_time() -> str:
 
 
 def _add_note(text: str) -> str:
-    config.NOTES_FILE.touch(exist_ok=True)
-    with config.NOTES_FILE.open("a", encoding="utf-8") as f:
-        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
-        f.write(f"- [{timestamp}] {text}\n")
-    return "Notiz gespeichert."
+    return memory.add_note(text)
 
 
 def _open_url(url: str) -> str:
     if not (url.startswith("http://") or url.startswith("https://")):
         url = "https://" + url
+    if browser_agent.agent.connected():
+        result = browser_agent.agent.command("open_url", {"url": url})
+        if not result.startswith("Browser-Agent nicht verbunden"):
+            return result
     webbrowser.open(url)
     panel.push("link", title="Geöffnet", url=url)
     return f"{url} geöffnet."
+
+
+def _youtube_search(query: str) -> str:
+    return browser_agent.agent.youtube_search(query)
+
+
+def _web_search(query: str) -> str:
+    """Real search when a Tavily key is configured; otherwise the old
+    behaviour (open a results page in the connected browser) so this still
+    works, just without spoken answers, when nobody has set up a key."""
+    if not config.TAVILY_API_KEY:
+        return browser_agent.agent.web_search(query)
+
+    try:
+        resp = requests.post(
+            "https://api.tavily.com/search",
+            headers={"Authorization": f"Bearer {config.TAVILY_API_KEY}", "Content-Type": "application/json"},
+            json={"query": query, "max_results": 5, "include_answer": True},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        if data.get("answer"):
+            return data["answer"]
+        results = data.get("results", [])
+        if not results:
+            return f"Keine Suchergebnisse für '{query}' gefunden."
+        lines = [
+            f"{r.get('title', '')}: {r.get('content', '')} ({r.get('url', '')})"
+            for r in results[:5]
+        ]
+        return "\n".join(lines)
+    except Exception as exc:
+        return f"Suche fehlgeschlagen: {exc}"
+
+
+def _browser_tabs() -> str:
+    return browser_agent.agent.command("list_tabs", {})
 
 
 def _resolve_app_macos(name: str) -> str | None:
@@ -328,6 +427,8 @@ def _resolve_app_macos(name: str) -> str | None:
     name only exists as a localized display name. Spotlight indexes those, so
     it can map what the user said onto the real bundle.
     """
+    if not platform_utils.is_macos():
+        return None
     query = (
         "kMDItemContentType == 'com.apple.application-bundle' && "
         f"kMDItemDisplayName == '{name}*'c"
@@ -346,6 +447,23 @@ def _resolve_app_macos(name: str) -> str | None:
 
 def _open_app_macos(name: str) -> str:
     try:
+        if platform_utils.is_windows():
+            aliases = {
+                "rechner": "calc.exe", "taschenrechner": "calc.exe", "notizen": "notepad.exe",
+                "editor": "notepad.exe", "explorer": "explorer.exe", "datei explorer": "explorer.exe",
+            }
+            target = aliases.get(name.lower(), name)
+            # A PowerShell single-quoted literal keeps a spoken app name from
+            # becoming PowerShell syntax.
+            safe_target = "'" + target.replace("'", "''") + "'"
+            proc = subprocess.run(
+                platform_utils.powershell(f"Start-Process -FilePath {safe_target}"),
+                capture_output=True, text=True, timeout=20,
+            )
+            if proc.returncode == 0:
+                return f"{name} geöffnet."
+            return f"Konnte '{name}' nicht finden. Heißt das Programm vielleicht anders?"
+
         proc = subprocess.run(["open", "-a", name], capture_output=True, text=True, timeout=20)
         if proc.returncode == 0:
             return f"{name} geöffnet."
@@ -412,6 +530,108 @@ def _open_app(name: str) -> str:
         return f"Konnte '{name}' nicht öffnen: {exc}"
 
 
+# Common macOS home folders, keyed by every German/English word a spoken
+# request might use for them.
+_LOCATION_ALIASES = {
+    "desktop": "~/Desktop", "schreibtisch": "~/Desktop",
+    "dokumente": "~/Documents", "documents": "~/Documents", "papiere": "~/Documents",
+    "downloads": "~/Downloads",
+}
+
+# Filler words stripped out to isolate the actual folder name from a spoken
+# request like "den Ordner Projekte auf dem Desktop".
+_FOLDER_STOPWORDS = {
+    "den", "die", "das", "der", "dem", "einen", "ordner", "order", "verzeichnis",
+    "folder", "auf", "im", "in", "vom", "von", "meinem", "meiner", "mir",
+    *_LOCATION_ALIASES.keys(),
+}
+
+
+def _resolve_fs_path(description: str, *, require_dir: bool) -> tuple[Path | None, str]:
+    """Resolve a spoken file/folder reference to a real path deterministically.
+
+    Vision-based clicking is approximate and struggles with small desktop
+    icons; a named request ("Ordner Projekte auf dem Desktop") has an exact
+    answer on disk, so this resolves it directly instead of guessing pixel
+    coordinates. Returns (path or None, the resolved/attempted name) —
+    shared by every tool that takes a spoken folder/file reference, so they
+    all fail the same way.
+    """
+    text = (description or "").strip()
+    if not text:
+        return None, ""
+
+    lowered = text.lower()
+    base = Path.home() / "Desktop"
+    for word, path in _LOCATION_ALIASES.items():
+        if re.search(rf"\b{re.escape(word)}\b", lowered):
+            base = Path(os.path.expanduser(path))
+            break
+
+    # "." kept so a spoken filename with an extension ("notiz.txt") survives
+    # as one token instead of splitting into "notiz" + "txt".
+    words = [w for w in re.findall(r"[\wÄÖÜäöüß.-]+", text) if w.lower() not in _FOLDER_STOPWORDS]
+    name = " ".join(words).strip()
+
+    target = base if not name else base / name
+    if not target.exists() and base.is_dir():
+        matches = [p for p in base.iterdir() if p.name.lower() == name.lower()]
+        if matches:
+            target = matches[0]
+
+    if not target.exists() or (require_dir and not target.is_dir()):
+        return None, name or base.name
+    last_target.remember(target)
+    return target, target.name
+
+
+def _resolve_folder_path(description: str) -> tuple[Path | None, str]:
+    return _resolve_fs_path(description, require_dir=True)
+
+
+def _open_folder(description: str) -> str:
+    target, name = _resolve_folder_path(description)
+    if not (description or "").strip():
+        return "Welchen Ordner soll ich öffnen?"
+    if target is None:
+        return f"Konnte den Ordner '{name}' nicht finden."
+
+    try:
+        if platform_utils.is_windows():
+            subprocess.run(["explorer", str(target)], timeout=10)
+        elif platform_utils.is_macos():
+            subprocess.run(["open", str(target)], check=True, timeout=10)
+        else:
+            subprocess.run(["xdg-open", str(target)], timeout=10)
+    except Exception as exc:
+        return f"Konnte '{target.name}' nicht öffnen: {exc}"
+    return f"Ordner '{target.name}' geöffnet."
+
+
+def _list_folder(description: str) -> str:
+    """Return a folder's contents as text, without opening anything.
+
+    Answers "was liegt in Ordner X" honestly — open_folder only opens
+    Finder/Explorer and tells Jarvis nothing back, which was leading to
+    hallucinated "der Ordner existiert nicht" claims for folders that were
+    never actually checked.
+    """
+    if not (description or "").strip():
+        return "Welchen Ordner soll ich mir ansehen?"
+    target, name = _resolve_folder_path(description)
+    if target is None:
+        return f"Konnte den Ordner '{name}' nicht finden."
+
+    entries = sorted(target.iterdir(), key=lambda p: p.name.lower())
+    if not entries:
+        return f"'{target.name}' ist leer."
+    shown = [f"{p.name}/" if p.is_dir() else p.name for p in entries[:40]]
+    listing = ", ".join(shown)
+    if len(entries) > 40:
+        listing += f", … und {len(entries) - 40} weitere"
+    return f"Inhalt von '{target.name}': {listing}"
+
+
 def _run_shell(command: str) -> str:
     if _is_blocked(command):
         return "Diesen Befehl führe ich nicht aus, der könnte das System beschädigen."
@@ -445,6 +665,77 @@ def _build_project(location: str, description: str) -> str:
     return coder.start_build(location, description)
 
 
+def _move_file(source: str, destination: str) -> str:
+    """Move a file or folder; safer than a raw `mv` via run_shell."""
+    import shutil
+
+    src = Path(os.path.expanduser((source or "").strip().strip("\"'")))
+    dst = Path(os.path.expanduser((destination or "").strip().strip("\"'")))
+
+    if not src.exists():
+        return f"Konnte '{source}' nicht finden."
+
+    # "in die Dokumente" → move into the folder, keeping the filename.
+    if dst.is_dir():
+        dst = dst / src.name
+    else:
+        # A destination like "~/Documents" that doesn't exist yet is almost
+        # always meant as the Documents folder, not a renamed file.
+        if dst.suffix == "" and not dst.exists():
+            dst = dst / src.name
+
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(src), str(dst))
+    return f"'{src.name}' nach '{dst.parent}' verschoben."
+
+
+def _delete_path(description: str) -> str:
+    """Ask for confirmation, then move a file or folder to the Trash.
+
+    Two things that used to go wrong here: a raw `rm -rf` run through
+    run_shell silently no-ops on a missing target (that's what -f means),
+    with the exact same empty output and exit code as a real deletion —
+    Jarvis once confidently claimed to have deleted a folder that was never
+    there. And the confirm/execute split used to be pure prose: the model
+    asked "Soll ich das löschen?" in plain text, then had to correctly
+    remember and re-resolve what "das" meant when the user said "ja" a turn
+    later — which a small local model reliably failed at.
+
+    Both are fixed the same way: nothing here is inferred from conversation
+    text. send2trash raises for a path that doesn't exist (existence is
+    checked again after, too), and the confirmation itself is registered as
+    real state via confirm.propose — resolved deterministically in code the
+    moment the user answers, never re-derived by the model.
+    """
+    if not (description or "").strip():
+        return "Was genau soll ich löschen?"
+
+    target, name = _resolve_fs_path(description, require_dir=False)
+    if target is None:
+        return f"Konnte '{name}' nicht finden — da ist nichts zu löschen."
+
+    def _do_delete() -> str:
+        try:
+            from send2trash import send2trash
+            send2trash(str(target))
+        except Exception as exc:
+            return f"Konnte '{target.name}' nicht löschen: {exc}"
+        if target.exists():
+            return f"'{target.name}' konnte nicht in den Papierkorb verschoben werden."
+        return f"'{target.name}' wurde in den Papierkorb verschoben."
+
+    return confirm.propose(f"Soll ich '{target.name}' wirklich in den Papierkorb verschieben?", _do_delete)
+
+
+def _write_file(path: str, content: str) -> str:
+    target = Path(os.path.expanduser((path or "").strip().strip("\"'")))
+    if not str(target):
+        return "Welche Datei soll ich schreiben?"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(content or "")
+    return f"Datei geschrieben: {target} ({len(content or '')} Zeichen)."
+
+
 def _show_on_screen(title: str, content: str, language: str = "") -> str:
     if language:
         panel.push("code", title=title, language=language, text=content)
@@ -453,53 +744,25 @@ def _show_on_screen(title: str, content: str, language: str = "") -> str:
     return f"Ich hab '{title}' im Interface angezeigt."
 
 
-def _click_on_screen(description: str, action: str = "click") -> str:
-    if not description.strip():
-        return "Was soll ich anklicken?"
-    return mouse.click_on_screen(description, action or "click")
-
-
-def _mouse_action(a: dict) -> str:
-    action = a.get("action", "")
-    w, h = mouse.screen_size()
-
-    def clamp(v, lo, hi):
-        return max(lo, min(hi, v))
-
-    x = clamp(float(a.get("x", 0)), 0, w)
-    y = clamp(float(a.get("y", 0)), 0, h)
-
-    if action == "move":
-        mouse.move(x, y)
-        return f"Maus zu ({int(x)}, {int(y)}) bewegt."
-    if action == "click":
-        mouse.click(x, y, button=a.get("button", "left"))
-        return f"Bei ({int(x)}, {int(y)}) geklickt."
-    if action == "drag":
-        x2 = clamp(float(a.get("x2", x)), 0, w)
-        y2 = clamp(float(a.get("y2", y)), 0, h)
-        mouse.drag(x, y, x2, y2)
-        return f"Von ({int(x)}, {int(y)}) nach ({int(x2)}, {int(y2)}) gezogen."
-    if action == "scroll":
-        mouse.scroll(dy=int(a.get("y", 0)))
-        return "Gescrollt."
-    return f"Unbekannte Mausaktion: {action}"
-
-
 DISPATCH = {
     "get_weather": lambda a: _get_weather(a.get("city", "")),
     "get_time": lambda a: _get_time(),
     "add_note": lambda a: _add_note(a.get("text", "")),
     "open_url": lambda a: _open_url(a.get("url", "")),
+    "youtube_search": lambda a: _youtube_search(a.get("query", "")),
+    "web_search": lambda a: _web_search(a.get("query", "")),
+    "browser_tabs": lambda a: _browser_tabs(),
     "open_app": lambda a: _open_app(a.get("name", "")),
-    "see_screen": lambda a: vision.look_at_screen(a.get("question", "")),
+    "open_folder": lambda a: _open_folder(a.get("description", "")),
+    "list_folder": lambda a: _list_folder(a.get("description", "")),
     "run_shell": lambda a: _run_shell(a.get("command", "")),
     "build_project": lambda a: _build_project(a.get("location", ""), a.get("description", "")),
     "show_on_screen": lambda a: _show_on_screen(
         a.get("title", "Info"), a.get("content", ""), a.get("language", "")
     ),
-    "click_on_screen": lambda a: _click_on_screen(a.get("description", ""), a.get("action", "click")),
-    "mouse_action": _mouse_action,
+    "move_file": lambda a: _move_file(a.get("source", ""), a.get("destination", "")),
+    "write_file": lambda a: _write_file(a.get("path", ""), a.get("content", "")),
+    "delete_path": lambda a: _delete_path(a.get("description", "")),
 }
 
 
@@ -507,7 +770,14 @@ def call_tool(name: str, arguments: dict) -> str:
     handler = DISPATCH.get(name)
     if handler is None:
         return f"Unbekanntes Tool: {name}"
+    action_id = f"tool-{datetime.datetime.now().strftime('%H%M%S%f')}"
+    panel.push("action", id=action_id, action=name, status="läuft", target=arguments)
     try:
-        return handler(arguments)
+        result = handler(arguments)
+        failed = result.lower().startswith(("fehler", "konnte", "unbekannt", "browser-agent nicht verbunden", "browser-aktion fehlgeschlagen"))
+        panel.push("action", id=action_id, action=name, status="fehlgeschlagen" if failed else "erfolgreich", detail=result)
+        return result
     except Exception as exc:
-        return f"Fehler beim Ausführen von {name}: {exc}"
+        result = f"Fehler beim Ausführen von {name}: {exc}"
+        panel.push("action", id=action_id, action=name, status="fehlgeschlagen", detail=result)
+        return result

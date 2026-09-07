@@ -1,21 +1,31 @@
-"""Speech output, with a fallback that keeps Jarvis talking.
+"""Speech output, with fallbacks that keep Jarvis talking.
 
-ElevenLabs sounds far better, but its free tier is 10k characters a month and
-runs dry without warning. A mute assistant is useless, so when ElevenLabs
-refuses (quota, bad key, no network) this falls back to the operating
-system's own voice: worse sounding, but free, offline and unlimited —
-macOS's built-in `say` on macOS, the SAPI synthesizer (via PowerShell, no
-extra dependency needed) on Windows.
+Supertonic is the primary voice: a local, offline, unlimited neural TTS
+model that sounds far better than the old OS-builtin voice ever did, with
+no per-character cost or quota. If it can't load (e.g. first run with no
+internet to fetch the model), this falls back to ElevenLabs when a key is
+configured (free tier is 10k characters a month and runs dry without
+warning), and finally to the voice built into the operating system — worse
+sounding, but free, offline and always available: macOS's built-in `say`,
+the SAPI synthesizer (via PowerShell, no extra dependency needed) on
+Windows. Silence is the one outcome that makes Jarvis look broken.
 """
 
+from __future__ import annotations
+
+import io
 import platform
 import subprocess
 import tempfile
+import threading
+import wave
 from pathlib import Path
 
+import numpy as np
 import requests
+from supertonic import TTS
 
-from . import config
+from . import config, platform_utils
 
 ELEVENLABS_URL = "https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
 
@@ -27,9 +37,16 @@ IS_WINDOWS = platform.system() == "Windows"
 # latency of a doomed request on every single sentence.
 _elevenlabs_blocked = False
 
+# Supertonic loads a model from disk (slow-ish), so it's built once, lazily,
+# and reused for every request rather than per-call.
+_supertonic_lock = threading.Lock()
+_supertonic_tts: TTS | None = None
+_supertonic_style = None
+
 # File extension + mime type produced by each engine, so callers (the /tts
 # route, the filler cache) don't need their own platform checks.
 ENGINE_MEDIA = {
+    "supertonic": ("wav", "audio/wav"),
     "elevenlabs": ("mp3", "audio/mpeg"),
     "macos": ("m4a", "audio/mp4"),
     "windows": ("wav", "audio/wav"),
@@ -73,7 +90,7 @@ def _windows_say(text: str) -> bytes:
         "$s.Dispose()"
     )
     subprocess.run(
-        ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+        platform_utils.powershell(script),
         input=text,
         check=True,
         capture_output=True,
@@ -121,10 +138,54 @@ def _elevenlabs(text: str) -> bytes:
     return resp.content
 
 
+def _get_supertonic() -> tuple[TTS, object]:
+    """Load the Supertonic model and voice style once, then reuse them.
+    Thread-safe since FastAPI's sync endpoints run each request in a
+    worker thread."""
+    global _supertonic_tts, _supertonic_style
+    if _supertonic_tts is None:
+        with _supertonic_lock:
+            if _supertonic_tts is None:
+                tts = TTS(auto_download=True)
+                _supertonic_style = tts.get_voice_style(voice_name=config.SUPERTONIC_VOICE)
+                _supertonic_tts = tts
+    return _supertonic_tts, _supertonic_style
+
+
+def _supertonic_say(text: str) -> bytes:
+    tts, style = _get_supertonic()
+    # FastAPI runs sync endpoints in a thread pool, and it's undocumented
+    # whether one Supertonic engine tolerates concurrent synthesize() calls
+    # from different threads — e.g. the startup filler-generation pass
+    # overlapping a live chat reply. Observed live: intermittent silent
+    # failures here that fell through to the macOS voice. Serializing every
+    # call through the one shared engine costs nothing perceptible (each
+    # call is already sub-second) and removes the race entirely.
+    with _supertonic_lock:
+        wav, _duration = tts.synthesize(text=text, lang=config.SUPERTONIC_LANG, voice_style=style)
+    samples = np.clip(np.asarray(wav).squeeze(), -1.0, 1.0)
+    pcm16 = (samples * 32767).astype(np.int16)
+
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(tts.sample_rate)
+        wf.writeframes(pcm16.tobytes())
+    return buf.getvalue()
+
+
 def synthesize(text: str) -> bytes:
     """Return spoken audio for `text`. Never raises for ordinary failures —
     silence is the one outcome that makes Jarvis look broken."""
     global _elevenlabs_blocked
+
+    try:
+        audio = _supertonic_say(text)
+        VoiceInfo.engine = "supertonic"
+        return audio
+    except Exception as exc:  # noqa: BLE001 - fall through to ElevenLabs/OS
+        print(f"[tts] Supertonic nicht verfügbar, nutze Ausweich-Stimme: {exc}")
 
     if config.ELEVENLABS_API_KEY and not _elevenlabs_blocked:
         try:

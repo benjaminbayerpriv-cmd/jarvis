@@ -1,30 +1,23 @@
-"""Real coding, delegated to the Claude Code CLI.
+"""Real coding, done by Jarvis's own model — no external CLI involved.
 
-A local 7B model can hold a conversation but it cannot reliably build a
-working project. Rather than pretend otherwise, Jarvis hands coding work to
-the `claude` CLI that's already installed on this machine: it gets a
-directory and a description, works there with full file access, and Jarvis
-reports back and opens the result.
+Asks the active text model (DeepSeek/LM Studio, same fallback chain as the
+voice loop — see llm_client.generate_files) to write out every file for the
+project as plain text, then writes them to disk itself. A small local model
+won't match a dedicated coding agent, but Jarvis builds it itself rather
+than delegating to another program.
 
-Builds run on a background thread — they take minutes, and blocking the
+Builds run on a background thread — they can take a while, and blocking the
 voice loop that long would make Jarvis feel dead.
 """
 
 import os
-import platform
 import shutil
 import subprocess
 import threading
+import uuid
 from pathlib import Path
 
-from . import panel
-
-IS_WINDOWS = platform.system() == "Windows"
-
-CLAUDE_BIN = shutil.which("claude") or str(
-    (Path.home() / "AppData/Roaming/npm/claude.cmd") if IS_WINDOWS else (Path.home() / ".local/bin/claude")
-)
-BUILD_TIMEOUT_S = 1800  # 30 min
+from . import llm_client, panel, platform_utils
 
 # Interesting files to surface in the panel once a build finishes.
 _CODE_SUFFIXES = {".py", ".js", ".ts", ".jsx", ".tsx", ".html", ".css", ".json",
@@ -54,27 +47,25 @@ def expand(location: str) -> Path:
     return Path.home() / "Desktop" / p
 
 
-def _open_native(target: Path) -> None:
-    if IS_WINDOWS:
-        os.startfile(str(target))  # noqa: S606 - target is a path we just built/checked, not user shell input
-    else:
-        subprocess.run(["open", str(target)], timeout=30, capture_output=True)
-
-
 def open_path(path: Path) -> None:
     """Show the result: editor for the folder, browser for a web page."""
     try:
         if shutil.which("code"):
             subprocess.run(["code", str(path)], timeout=30, capture_output=True)
+        elif platform_utils.is_windows():
+            os.startfile(str(path))
         else:
-            _open_native(path)
+            subprocess.run(["open", str(path)], timeout=30, capture_output=True)
     except Exception:
         pass
 
     index = path / "index.html"
     if index.exists():
         try:
-            _open_native(index)
+            if platform_utils.is_windows():
+                os.startfile(str(index))
+            else:
+                subprocess.run(["open", str(index)], timeout=30, capture_output=True)
         except Exception:
             pass
 
@@ -104,62 +95,44 @@ def _summarize_result(path: Path) -> None:
             break
 
 
-def _run_build(path: Path, description: str) -> None:
+def _run_build(task_id: str, path: Path, description: str) -> None:
     path.mkdir(parents=True, exist_ok=True)
 
-    prompt = (
-        f"{description}\n\n"
-        "Baue das vollständig und lauffähig in diesem Verzeichnis. "
-        "Erstelle alle nötigen Dateien. Wenn es eine Web-Oberfläche ist, "
-        "erstelle eine index.html, die direkt im Browser funktioniert. "
-        "Antworte am Ende mit maximal zwei Sätzen, was du gebaut hast."
-    )
-
-    before = {p for p in path.rglob("*") if p.is_file()}
-
     try:
-        proc = subprocess.run(
-            [CLAUDE_BIN, "-p", prompt, "--dangerously-skip-permissions"],
-            cwd=str(path),
-            capture_output=True,
-            text=True,
-            timeout=BUILD_TIMEOUT_S,
-        )
-    except subprocess.TimeoutExpired:
-        panel.push("notify", text="Der Build hat zu lange gedauert und wurde abgebrochen.")
-        return
+        files = llm_client.generate_files(description)
     except Exception as exc:
-        panel.push("notify", text=f"Build fehlgeschlagen: {exc}")
+        panel.push("task", id=task_id, status="failed")
+        panel.push("notify", text=f"Build fehlgeschlagen, konnte kein Modell erreichen: {exc}")
         return
 
-    summary = (proc.stdout or "").strip()
-
-    # A non-zero exit means it failed even when something was printed — the
-    # auth-failure message arrives on stdout, and reporting "fertig" over an
-    # empty folder is the worst possible outcome.
-    if proc.returncode != 0:
-        detail = (proc.stderr or "").strip() or summary or "Unbekannter Fehler"
-        panel.push("markdown", title="Build fehlgeschlagen", text=detail[:1500])
-        spoken = "Der Build ist fehlgeschlagen, Details stehen im Interface."
-        if "authenticate" in detail.lower() or "oauth" in detail.lower():
-            spoken = ("Ich komme nicht an Claude Code ran, die Anmeldung ist abgelaufen. "
-                      "Melde dich im Terminal mit claude einmal neu an.")
-        panel.push("notify", text=spoken)
+    if not files:
+        panel.push("task", id=task_id, status="failed")
+        panel.push("markdown", title="Nichts gebaut", text="Das Modell hat keine Dateien im erwarteten Format geliefert.")
+        panel.push("notify", text="Es wurden keine Dateien erstellt. Schau ins Interface.")
         return
 
-    # Exit 0 but nothing written is still a failure worth admitting.
-    created = {p for p in path.rglob("*") if p.is_file()} - before
-    if not created:
-        panel.push("markdown", title="Nichts gebaut", text=summary[:1500] or "Keine Ausgabe.")
+    written = []
+    for rel_path, content in files.items():
+        try:
+            target = path / rel_path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content)
+            written.append(rel_path)
+        except Exception as exc:
+            panel.push("notify", text=f"Konnte '{rel_path}' nicht schreiben: {exc}")
+
+    if not written:
+        panel.push("task", id=task_id, status="failed")
         panel.push("notify", text="Es wurden keine Dateien erstellt. Schau ins Interface.")
         return
 
     _summarize_result(path)
-    if summary:
-        panel.push("markdown", title="Claude Code", text=summary[:4000])
-
     open_path(path)
-    panel.push("notify", text=f"Fertig. Ich hab es in {path.name} gebaut und dir geöffnet.")
+    panel.push("task", id=task_id, status="done")
+    panel.push(
+        "notify",
+        text=f"Fertig. Ich hab {len(written)} Datei(en) in {path.name} gebaut und dir geöffnet.",
+    )
 
 
 def start_build(location: str, description: str) -> str:
@@ -168,8 +141,13 @@ def start_build(location: str, description: str) -> str:
         return "Ich brauche noch einen Ordner, wo ich das bauen soll."
 
     path = expand(location)
-    threading.Thread(target=_run_build, args=(path, description), daemon=True).start()
+    task_id = uuid.uuid4().hex[:8]
+    # Announced immediately so the UI can show a second, small "working"
+    # orb for the duration of the build — the voice reply below moves on
+    # right away, but the build itself keeps running on this thread.
+    panel.push("task", id=task_id, status="started", label=f"Baut {path.name}")
+    threading.Thread(target=_run_build, args=(task_id, path, description), daemon=True).start()
     return (
         f"Alles klar, ich baue das in {path}. "
-        "Das dauert ein paar Minuten, ich sag Bescheid wenn es fertig ist."
+        "Das dauert einen Moment, ich sag Bescheid wenn es fertig ist."
     )

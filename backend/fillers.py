@@ -23,9 +23,9 @@ def ensure_fillers() -> list[str]:
     FILLER_DIR.mkdir(parents=True, exist_ok=True)
     urls = []
     for i, phrase in enumerate(PHRASES):
-        # The extension depends on which engine produced the clip (mp3 for
-        # ElevenLabs, m4a on macOS's fallback, wav on Windows's), so look for
-        # any cached file for this index regardless of extension.
+        # The extension depends on which engine produced the clip (wav for
+        # Supertonic/Windows, mp3 for ElevenLabs, m4a on macOS's fallback),
+        # so look for any cached file for this index regardless of extension.
         path = next(FILLER_DIR.glob(f"filler_{i}.*"), None)
         if path is None:
             try:
