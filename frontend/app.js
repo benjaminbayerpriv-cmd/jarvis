@@ -5,12 +5,24 @@ const composer = document.getElementById("composer");
 const inputEl = document.getElementById("input");
 const startBtn = document.getElementById("startBtn");
 const muteBtn = document.getElementById("muteBtn");
+const stopBtn = document.getElementById("stopBtn");
 
-// The old debug/chat sidebar (and its toggle button) is gone — a window
-// sized for just the floating orb has no room for one, and the turn-by-turn
-// record it showed now goes to backend/transcript.log instead. #log and
-// #input still exist in the DOM (see index.html) and this code still
-// writes to them below, but nothing ever reveals that container on screen.
+// #log/#input/composer are the small chat panel (id="debugPanel", see
+// index.html) — collapsed by default, toggled open by chatToggleBtn below.
+// The turn-by-turn record also always goes to backend/transcript.log
+// regardless of whether this panel is ever opened.
+const chatColumn = document.getElementById("debugPanel");
+const chatToggleBtn = document.getElementById("chatToggleBtn");
+
+chatToggleBtn.addEventListener("click", () => {
+  const collapsed = chatColumn.classList.toggle("collapsed");
+  // .open drives the bubble icon's slash (see style.css) — plain while
+  // expanded, crossed out while collapsed.
+  chatToggleBtn.classList.toggle("open", !collapsed);
+  chatToggleBtn.title = chatToggleBtn.ariaLabel =
+    collapsed ? "Chatfenster ausklappen" : "Chatfenster einklappen";
+  if (!collapsed) inputEl.focus();
+});
 
 let history = [];
 
@@ -759,6 +771,10 @@ function playClip(blob, turn) {
   src.connect(analyser);
   analyser.connect(ctx.destination);
   outputAnalyser = analyser;
+  // audio.pause() alone leaves already-buffered samples playing out through
+  // the hardware for a beat — disconnecting the graph node is what actually
+  // makes a stop-button click silence things instantly (see interruptActiveTurn).
+  if (turn) turn.audioSrc = src;
 
   return new Promise((resolve) => {
     let done = false;
@@ -797,11 +813,24 @@ function interruptActiveTurn() {
   const turn = activeTurn;
   turn.aborted = true;
   stopFiller(turn);
+  if (turn.audioSrc) { try { turn.audioSrc.disconnect(); } catch (_) {} }
   if (turn.audio) turn.audio.pause();
   outputAnalyser = null;
   activeTurn = null;
   busy = false;
   settle();
+  // Dropping the fetch only stops *this* side from listening — a tool call
+  // (open_url, ...) runs synchronously on the backend with no point in
+  // between where it'd notice the connection is gone, so it finishes
+  // regardless. This tells the backend explicitly to skip the next tool
+  // call for this turn instead, best-effort (nothing to do if it's too
+  // slow or fails — the fetch abort above is still the fast path for
+  // audio/UI).
+  fetch("/chat/cancel", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ turn_id: String(turn.id) }),
+  }).catch(() => {});
 }
 
 async function handleUserMessage(text) {
@@ -828,7 +857,7 @@ async function handleUserMessage(text) {
     const resp = await fetch("/chat/stream", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message: text, history }),
+      body: JSON.stringify({ message: text, history, turn_id: String(turn.id) }),
     });
     if (turn.aborted) return;
     if (!resp.ok) {
@@ -1164,6 +1193,8 @@ startBtn.addEventListener("click", async () => {
 
 muteBtn.addEventListener("click", () => setMuted(!muted));
 
+stopBtn.addEventListener("click", () => { if (busy) interruptActiveTurn(); });
+
 // Cmd+Shift+J on macOS, Ctrl+Shift+J on Windows — matching
 // launcher/hotkey_listener.py's own platform check for the equivalent
 // global hotkey. e.metaKey is the Windows key on Windows, essentially
@@ -1220,6 +1251,22 @@ const camCanvas = document.getElementById("camOverlay");
 const camCtx = camCanvas.getContext("2d");
 const camStartBtn = document.getElementById("camStartBtn");
 const camHint = document.getElementById("camHint");
+const camColumn = document.getElementById("camColumn");
+const camToggleBtn = document.getElementById("camToggleBtn");
+
+// Collapsed by default (see index.html) — toggling just flips the CSS
+// class; camStartBtn/camStream/the tracking loop are untouched, so a
+// camera already running keeps running quietly behind a collapsed column.
+camToggleBtn.addEventListener("click", () => {
+  const collapsed = camColumn.classList.toggle("collapsed");
+  document.body.classList.toggle("cam-expanded", !collapsed);
+  // .open drives the camera icon's slash (see style.css) — plain while
+  // expanded, crossed out while collapsed.
+  camToggleBtn.classList.toggle("open", !collapsed);
+  camToggleBtn.title = camToggleBtn.ariaLabel =
+    collapsed ? "Kamerafenster ausklappen" : "Kamerafenster einklappen";
+  if (!collapsed) resizeCamCanvas();
+});
 
 // MediaPipe's 21 hand landmarks, connected into the standard skeleton —
 // index numbering per the official hand-landmark model (0 = wrist). Used

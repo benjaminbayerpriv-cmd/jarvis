@@ -970,7 +970,38 @@ def _is_repetition_loop(text: str) -> bool:
     return False
 
 
-def stream_reply(user_message: str, history: list | None = None):
+# Turn ids the stop button has cancelled. A tool call (open_url, run_shell,
+# ...) runs synchronously inside stream_reply's generator with no yield
+# point around it, so aborting the frontend's fetch can't interrupt one
+# already underway — dropping the HTTP connection is invisible to code that
+# hasn't yielded back to the ASGI layer yet. Checking this flag right
+# before each tools.call_tool() is the only place a cancellation can
+# actually still take effect.
+_cancelled_turns: set[str] = set()
+
+
+def cancel_turn(turn_id: str | None) -> None:
+    if turn_id:
+        _cancelled_turns.add(turn_id)
+
+
+def _turn_cancelled(turn_id: str | None) -> bool:
+    return bool(turn_id) and turn_id in _cancelled_turns
+
+
+def stream_reply(user_message: str, history: list | None = None, turn_id: str | None = None):
+    """Thin wrapper around _stream_reply_impl that guarantees turn_id gets
+    dropped from _cancelled_turns once the turn ends, cancelled or not —
+    otherwise every turn_id a client ever sends would sit in that set
+    forever."""
+    try:
+        yield from _stream_reply_impl(user_message, history, turn_id)
+    finally:
+        if turn_id:
+            _cancelled_turns.discard(turn_id)
+
+
+def _stream_reply_impl(user_message: str, history: list | None = None, turn_id: str | None = None):
     """Generator yielding {"type": "sentence", "text": ...} as soon as each
     sentence of the reply is complete, then a final {"type": "done"}.
 
@@ -1154,6 +1185,9 @@ def stream_reply(user_message: str, history: list | None = None):
                 }
             )
             for c in ordered_calls:
+                if _turn_cancelled(turn_id):
+                    yield {"type": "done", "full_text": ""}
+                    return
                 try:
                     args = json.loads(c["arguments"] or "{}")
                 except json.JSONDecodeError:
@@ -1183,6 +1217,9 @@ def stream_reply(user_message: str, history: list | None = None):
         if trailing_suspect and trailing_suspect != "corrupt":
             recovered_trailing = _recover_leaked_call(trailing_suspect_text)
             if recovered_trailing:
+                if _turn_cancelled(turn_id):
+                    yield {"type": "done", "full_text": ""}
+                    return
                 name, args = recovered_trailing
                 result = tools.call_tool(name, args)
                 tools_used.append(name)
@@ -1224,6 +1261,9 @@ def stream_reply(user_message: str, history: list | None = None):
         # stream. Always attempt recovery once the full response is present.
         recovered = _recover_leaked_call(content_acc)
         if recovered:
+            if _turn_cancelled(turn_id):
+                yield {"type": "done", "full_text": ""}
+                return
             name, args = recovered
             result = tools.call_tool(name, args)
             tools_used.append(name)
