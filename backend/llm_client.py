@@ -902,6 +902,44 @@ def _looks_like_tool_text(text: str) -> bool:
     return bool(re.search(rf"\b(?:{names})\s*\(", text or "", re.IGNORECASE))
 
 
+# A small local model can occasionally fall into a degenerate loop, echoing
+# one fragment over and over instead of a real answer — the same failure
+# mode documented in Nous Research's Hermes Agent (MIT-licensed;
+# https://github.com/NousResearch/hermes-agent, agent/repetition_guard.py),
+# whose detection approach this reimplements: only long (60+ char) verbatim
+# repeats covering a majority of the text count, so ordinary phrasing reuse
+# (a repeated heading, similar-looking sentences) never trips it.
+_REPEAT_WINDOW = 60
+_MIN_REPEAT_COUNT = 5
+_REPEAT_DOMINANCE_RATIO = 0.5
+_REPEAT_MIN_TEXT_LENGTH = 400
+
+
+def _is_repetition_loop(text: str) -> bool:
+    """True when `text` is dominated by one verbatim-repeated fragment.
+
+    Deliberately conservative — texts shorter than a few hundred characters
+    can trivially contain short repeated words/phrases as normal language,
+    so this only ever looks at longer replies and only flags a repeat once
+    it accounts for at least half the text.
+    """
+    text = text or ""
+    n = len(text)
+    if n < _REPEAT_MIN_TEXT_LENGTH:
+        return False
+
+    window = _REPEAT_WINDOW
+    needed = max(_MIN_REPEAT_COUNT, -(-int(n * _REPEAT_DOMINANCE_RATIO) // window))
+    counts: dict[str, int] = {}
+    for i in range(n - window + 1):
+        key = text[i : i + window]
+        c = counts.get(key, 0) + 1
+        if c >= needed:
+            return True
+        counts[key] = c
+    return False
+
+
 def stream_reply(user_message: str, history: list | None = None):
     """Generator yielding {"type": "sentence", "text": ...} as soon as each
     sentence of the reply is complete, then a final {"type": "done"}.
@@ -1159,6 +1197,8 @@ def stream_reply(user_message: str, history: list | None = None):
         spoken = " ".join(full_text_parts)
         if not tools_used and (_claims_action(spoken) or _looks_like_tool_text(spoken)):
             spoken = "Das habe ich nicht ausgeführt."
+        elif _is_repetition_loop(spoken):
+            spoken = "Da ist mir gerade etwas verrutscht, frag bitte nochmal."
 
         yield {"type": "sentence", "text": spoken}
         yield {"type": "done", "full_text": spoken}
