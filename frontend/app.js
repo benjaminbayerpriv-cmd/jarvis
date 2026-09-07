@@ -277,6 +277,62 @@ function drawSegmentRing(cx, cy, ringR, spin, color, level, alpha) {
   orbCtx.restore();
 }
 
+// ---------- wisp ring: soft flowing strands winding around the outer edge -
+//
+// Several thin, glowing strands drifting around the outer boundary,
+// twisting past and through each other — soft and organic (more like
+// flowing smoke or hair strands than a rigid geometric pattern), staying
+// entirely at the edge rather than crossing over the sphere in the middle.
+// Each strand sums two sine waves at different frequencies/phases (its own
+// fixed random seed) so its wobble looks irregular rather than a single
+// clean, mechanical sine, and drifts independently over time.
+const WISP_STRANDS = 4;
+const wispStrandParams = Array.from({ length: WISP_STRANDS }, (_, i) => ({
+  baseFreq: 3 + i * 1.6,
+  harmFreq: 7 + i * 2.1,
+  harmAmp: 0.3 + Math.random() * 0.3,
+  phase: Math.random() * Math.PI * 2,
+  speed: 0.12 + Math.random() * 0.22,
+  radiusOffset: (i - (WISP_STRANDS - 1) / 2) * 0.022,
+}));
+const WISP_SAMPLES = 160;
+
+function drawWispRing(cx, cy, outerR, spin, color, alpha) {
+  const t = Date.now() / 1000;
+  const baseR = outerR * 1.05;
+  const amp = outerR * 0.055;
+  orbCtx.save();
+  orbCtx.lineCap = "round";
+  orbCtx.shadowColor = color;
+  orbCtx.shadowBlur = 6;
+  orbCtx.strokeStyle = color;
+  for (const s of wispStrandParams) {
+    const phase = t * s.speed + s.phase;
+    let prev = null;
+    for (let i = 0; i <= WISP_SAMPLES; i++) {
+      const theta = spin * 0.5 + (Math.PI * 2 * i) / WISP_SAMPLES;
+      const wobble =
+        Math.sin(theta * s.baseFreq + phase) * 0.6 +
+        Math.sin(theta * s.harmFreq - phase * 1.3) * s.harmAmp;
+      const r = baseR * (1 + s.radiusOffset) + amp * wobble;
+      const sx = cx + Math.cos(theta) * r, sy = cy + Math.sin(theta) * r;
+      if (prev) {
+        // Width and brightness both breathe gently along the strand's own
+        // length — a uniform hairline read as a rigid ring, not a wisp.
+        const shimmer = 0.5 + 0.5 * Math.sin(theta * 5 + phase * 2);
+        orbCtx.lineWidth = Math.max(0.5, outerR * 0.006) * (0.4 + shimmer * 0.6);
+        orbCtx.globalAlpha = alpha * (0.2 + shimmer * 0.5);
+        orbCtx.beginPath();
+        orbCtx.moveTo(prev.sx, prev.sy);
+        orbCtx.lineTo(sx, sy);
+        orbCtx.stroke();
+      }
+      prev = { sx, sy };
+    }
+  }
+  orbCtx.restore();
+}
+
 // Muted state: a smooth noise field of grey shades flows across the sphere
 // instead of one flat color — evaluated in object-space (x,y,z before
 // rotation) so it turns with the sphere.
@@ -354,6 +410,7 @@ function renderOrb(level, stateName) {
   // flat 2D circles, independent of the sphere's own 3D tilt/spin below.
   drawDustRing(cx, cy, outerR, orbSpin, ringColor, 0.55 * listenPulse);
   drawSegmentRing(cx, cy, outerR * 0.82, orbSpin, ringColor, level, 0.75 * listenPulse);
+  drawWispRing(cx, cy, outerR, orbSpin, ringColor, 0.85 * listenPulse);
 
   const projected = orbVerts.map((v) => {
     const ripple = Math.sin(v.x * 4 + t * 1.6) * Math.cos(v.y * 4 - t * 1.1);
