@@ -1204,3 +1204,232 @@ function connectWs() {
 
 connectWs();
 setState("idle");
+
+/* ---------- camera: hand tracking + naming the object near the hand ---------- */
+//
+// MediaPipe Hands finds the 21-point hand skeleton every frame (cheap
+// enough to run at full framerate); COCO-SSD's object detector is much
+// heavier, so it only runs on its own slower interval and its last result
+// is reused for every frame in between — objects near a hand don't
+// teleport, so a few hundred ms of staleness is invisible in practice.
+// Both models run entirely in the browser (no data leaves the machine),
+// same as the rest of Jarvis.
+
+const camVideo = document.getElementById("camVideo");
+const camCanvas = document.getElementById("camOverlay");
+const camCtx = camCanvas.getContext("2d");
+const camStartBtn = document.getElementById("camStartBtn");
+const camHint = document.getElementById("camHint");
+
+// COCO-SSD's 80 classes, in the order the model was trained on — kept as
+// a plain array so a detection's numeric classId (not exposed by the JS
+// API, which only gives the already-English `class` name) isn't needed;
+// translating by name instead.
+const COCO_LABELS_DE = {
+  person: "Person", bicycle: "Fahrrad", car: "Auto", motorcycle: "Motorrad",
+  airplane: "Flugzeug", bus: "Bus", train: "Zug", truck: "Lkw", boat: "Boot",
+  "traffic light": "Ampel", "fire hydrant": "Hydrant", "stop sign": "Stoppschild",
+  "parking meter": "Parkuhr", bench: "Bank", bird: "Vogel", cat: "Katze",
+  dog: "Hund", horse: "Pferd", sheep: "Schaf", cow: "Kuh", elephant: "Elefant",
+  bear: "Bär", zebra: "Zebra", giraffe: "Giraffe", backpack: "Rucksack",
+  umbrella: "Regenschirm", handbag: "Handtasche", tie: "Krawatte",
+  suitcase: "Koffer", frisbee: "Frisbee", skis: "Skier", snowboard: "Snowboard",
+  "sports ball": "Ball", kite: "Drachen", "baseball bat": "Baseballschläger",
+  "baseball glove": "Baseballhandschuh", skateboard: "Skateboard",
+  surfboard: "Surfbrett", "tennis racket": "Tennisschläger", bottle: "Flasche",
+  "wine glass": "Weinglas", cup: "Tasse", fork: "Gabel", knife: "Messer",
+  spoon: "Löffel", bowl: "Schüssel", banana: "Banane", apple: "Apfel",
+  sandwich: "Sandwich", orange: "Orange", broccoli: "Brokkoli",
+  carrot: "Karotte", "hot dog": "Hotdog", pizza: "Pizza", donut: "Donut",
+  cake: "Kuchen", chair: "Stuhl", couch: "Sofa", "potted plant": "Topfpflanze",
+  bed: "Bett", "dining table": "Tisch", toilet: "Toilette", tv: "Fernseher",
+  laptop: "Laptop", mouse: "Maus", remote: "Fernbedienung",
+  keyboard: "Tastatur", "cell phone": "Handy", microwave: "Mikrowelle",
+  oven: "Backofen", toaster: "Toaster", sink: "Spüle",
+  refrigerator: "Kühlschrank", book: "Buch", clock: "Uhr", vase: "Vase",
+  scissors: "Schere", "teddy bear": "Teddybär", "hair drier": "Föhn",
+  toothbrush: "Zahnbürste",
+};
+
+// MediaPipe's 21 hand landmarks, connected into the standard skeleton —
+// index numbering per the official hand-landmark model (0 = wrist).
+const HAND_CONNECTIONS = [
+  [0, 1], [1, 2], [2, 3], [3, 4],
+  [0, 5], [5, 6], [6, 7], [7, 8],
+  [5, 9], [9, 10], [10, 11], [11, 12],
+  [9, 13], [13, 14], [14, 15], [15, 16],
+  [13, 17], [17, 18], [18, 19], [19, 20],
+  [0, 17],
+];
+
+let camStream = null;
+let handsModel = null;
+let cocoModel = null;
+let camLoopRunning = false;
+let latestHandLandmarks = null; // MediaPipe's raw landmark list, or null
+let latestDetections = [];      // COCO-SSD's last result
+let detectingObjects = false;
+
+function resizeCamCanvas() {
+  const rect = camCanvas.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  camCanvas.width = Math.max(1, rect.width * dpr);
+  camCanvas.height = Math.max(1, rect.height * dpr);
+  camCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+window.addEventListener("resize", resizeCamCanvas);
+
+camStartBtn.addEventListener("click", startCamera);
+
+async function startCamera() {
+  if (camStream) return;
+  camHint.textContent = "Starte Kamera …";
+  try {
+    camStream = await navigator.mediaDevices.getUserMedia({
+      video: { width: 1280, height: 720 },
+    });
+    camVideo.srcObject = camStream;
+    await camVideo.play();
+    resizeCamCanvas();
+    camStartBtn.hidden = true;
+    camHint.textContent = "Lade Modelle …";
+
+    if (!handsModel) {
+      handsModel = new Hands({
+        locateFile: (file) =>
+          `https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/${file}`,
+      });
+      handsModel.setOptions({
+        maxNumHands: 1,
+        modelComplexity: 0,
+        minDetectionConfidence: 0.6,
+        minTrackingConfidence: 0.5,
+      });
+      handsModel.onResults((results) => {
+        latestHandLandmarks =
+          (results.multiHandLandmarks && results.multiHandLandmarks[0]) || null;
+      });
+    }
+    if (!cocoModel) {
+      cocoModel = await cocoSsd.load({ base: "lite_mobilenet_v2" });
+    }
+
+    camHint.textContent = "";
+    camLoopRunning = true;
+    requestAnimationFrame(camLoop);
+    setInterval(runObjectDetection, 700);
+  } catch (err) {
+    console.error(err);
+    camHint.textContent = "Kamera abgelehnt oder Modelle nicht ladbar.";
+    camStartBtn.hidden = false;
+    camStream = null;
+  }
+}
+
+async function camLoop() {
+  if (!camLoopRunning) return;
+  if (handsModel && camVideo.readyState >= 2) {
+    await handsModel.send({ image: camVideo });
+  }
+  drawCamOverlay();
+  requestAnimationFrame(camLoop);
+}
+
+async function runObjectDetection() {
+  if (!cocoModel || detectingObjects || camVideo.readyState < 2) return;
+  detectingObjects = true;
+  try {
+    latestDetections = await cocoModel.detect(camVideo);
+  } catch (_) {
+    // Transient (e.g. a frame mid-resize) — the next interval tick retries.
+  } finally {
+    detectingObjects = false;
+  }
+}
+
+// Everything drawn on the canvas — video, hand skeleton, detection label —
+// shares one mirrored transform (front-camera convention) so a hand
+// reaching from the right of the *frame* still appears to reach from the
+// right on screen, matching what looking at your own hand feels like.
+function drawCamOverlay() {
+  const w = camCanvas.clientWidth, h = camCanvas.clientHeight;
+  if (!w || !h || !camVideo.videoWidth) return;
+
+  camCtx.save();
+  camCtx.clearRect(0, 0, w, h);
+  camCtx.translate(w, 0);
+  camCtx.scale(-1, 1);
+  camCtx.drawImage(camVideo, 0, 0, w, h);
+
+  let handNorm = null;
+  if (latestHandLandmarks) {
+    camCtx.strokeStyle = "#2be2e2";
+    camCtx.fillStyle = "#2be2e2";
+    camCtx.lineWidth = 2;
+    for (const [a, b] of HAND_CONNECTIONS) {
+      const pa = latestHandLandmarks[a], pb = latestHandLandmarks[b];
+      camCtx.beginPath();
+      camCtx.moveTo(pa.x * w, pa.y * h);
+      camCtx.lineTo(pb.x * w, pb.y * h);
+      camCtx.stroke();
+    }
+    for (const p of latestHandLandmarks) {
+      camCtx.beginPath();
+      camCtx.arc(p.x * w, p.y * h, 3, 0, Math.PI * 2);
+      camCtx.fill();
+    }
+    // Landmark 9 (base of the middle finger) sits roughly at the palm's
+    // centre — a steadier reference point for "where the hand is" than
+    // the wrist (0), which shifts a lot as the wrist bends.
+    handNorm = { x: latestHandLandmarks[9].x, y: latestHandLandmarks[9].y };
+  }
+
+  const nearby = handNorm ? findObjectNearHand(handNorm) : null;
+  if (nearby) {
+    const label = COCO_LABELS_DE[nearby.class] || nearby.class;
+    const labelX = handNorm.x * w;
+    const labelY = handNorm.y * h - 26;
+    camCtx.save();
+    // Text needs to read left-to-right — undo the mirroring just for the
+    // label itself, translating first so it still lands at the hand.
+    camCtx.translate(labelX, labelY);
+    camCtx.scale(-1, 1);
+    camCtx.font = "600 15px " + getComputedStyle(document.body).fontFamily;
+    const textWidth = camCtx.measureText(label).width;
+    camCtx.fillStyle = "rgba(18, 18, 15, 0.85)";
+    camCtx.fillRect(-textWidth / 2 - 8, -20, textWidth + 16, 26);
+    camCtx.fillStyle = "#2be2e2";
+    camCtx.textAlign = "center";
+    camCtx.fillText(label, 0, -2);
+    camCtx.restore();
+  }
+
+  camCtx.restore();
+}
+
+// Matches the hand's position (normalized 0..1, same space as MediaPipe's
+// landmarks) against COCO-SSD's detections (bbox in the video's native
+// pixel size) — a hand literally over a box wins outright; otherwise the
+// nearest box counts only if it's still reasonably close, so an object on
+// the far side of the frame never gets mislabeled as "at the hand".
+function findObjectNearHand(handNorm) {
+  if (!latestDetections.length || !camVideo.videoWidth) return null;
+  const vw = camVideo.videoWidth, vh = camVideo.videoHeight;
+  let best = null;
+  let bestDist = Infinity;
+  for (const det of latestDetections) {
+    const [x, y, bw, bh] = det.bbox;
+    const nx = x / vw, ny = y / vh, nw = bw / vw, nh = bh / vh;
+    const inside =
+      handNorm.x >= nx && handNorm.x <= nx + nw &&
+      handNorm.y >= ny && handNorm.y <= ny + nh;
+    if (inside) return det;
+    const cx = nx + nw / 2, cy = ny + nh / 2;
+    const dist = Math.hypot(handNorm.x - cx, handNorm.y - cy);
+    if (dist < bestDist) {
+      bestDist = dist;
+      best = det;
+    }
+  }
+  return bestDist < 0.35 ? best : null;
+}

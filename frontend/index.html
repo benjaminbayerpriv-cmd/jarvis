@@ -5,23 +5,47 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Jarvis</title>
   <link rel="stylesheet" href="/static/style.css" />
+  <!-- Hand tracking (MediaPipe Hands) + object labels near the hand
+       (COCO-SSD via TensorFlow.js) — see the "camera" section in app.js.
+       Loaded from cdnjs/jsdelivr; both are pinned to an exact version. -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/hands.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js"></script>
 </head>
 <body>
   <main class="stage" id="console">
 
-    <div class="orb-wrap">
-      <canvas id="orb" aria-hidden="true"></canvas>
-      <canvas id="subOrb" aria-hidden="true" hidden></canvas>
+    <div class="jarvis-column">
+      <div class="orb-wrap">
+        <canvas id="orb" aria-hidden="true"></canvas>
+        <canvas id="subOrb" aria-hidden="true" hidden></canvas>
+      </div>
+
+      <!-- Icon-only, no labels — this row sits right under the orb, which
+           carries all the state a glance needs (colour = mic/speaking state).
+           Only one of startBtn/muteBtn is ever visible at a time. A normal
+           window has its own native close button, so there's no separate
+           quit control here. -->
+      <div class="control-row">
+        <button class="icon-btn" id="startBtn" aria-label="Mikrofon freigeben" title="Mikrofon freigeben">●</button>
+        <button class="icon-btn" id="muteBtn" aria-label="Mikro stumm/aktiv" title="Mikro stumm/aktiv" hidden>●</button>
+      </div>
     </div>
 
-    <!-- Icon-only, no labels — this row sits right under the orb, which
-         carries all the state a glance needs (colour = mic/speaking state).
-         Only one of startBtn/muteBtn is ever visible at a time. A normal
-         window has its own native close button, so there's no separate
-         quit control here. -->
-    <div class="control-row">
-      <button class="icon-btn" id="startBtn" aria-label="Mikrofon freigeben" title="Mikrofon freigeben">●</button>
-      <button class="icon-btn" id="muteBtn" aria-label="Mikro stumm/aktiv" title="Mikro stumm/aktiv" hidden>●</button>
+    <!-- Webcam + hand tracking: raw video is only ever a texture source for
+         the canvas (never shown itself), which draws the mirrored frame,
+         the MediaPipe hand skeleton, and a label for whatever COCO-SSD
+         detection is closest to the tracked hand. Only works in a normal
+         browser tab — the packaged desktop app's WKWebView on macOS has no
+         delegate method for media-capture permission requests at all, so
+         getUserMedia() is silently denied there (a real pywebview
+         limitation, not fixable from this project's code; a native-Python-
+         capture workaround was tried and abandoned — see git history). -->
+    <div class="cam-column">
+      <video id="camVideo" autoplay playsinline muted hidden></video>
+      <canvas id="camOverlay" aria-hidden="true"></canvas>
+      <button class="icon-btn" id="camStartBtn" aria-label="Kamera starten" title="Kamera starten">◎</button>
+      <p class="cam-hint" id="camHint"></p>
     </div>
 
     <!-- No visible transcript/chat panel anymore — the orb + the two

@@ -23,6 +23,11 @@ fi
 PLIST="launcher/dist/Jarvis.app/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Add :NSMicrophoneUsageDescription string 'Jarvis braucht Mikrofonzugriff, um dir zuzuhoeren.'" "$PLIST" 2>/dev/null \
   || /usr/libexec/PlistBuddy -c "Set :NSMicrophoneUsageDescription 'Jarvis braucht Mikrofonzugriff, um dir zuzuhoeren.'" "$PLIST"
+# Same story for the camera (hand-tracking view) — without
+# NSCameraUsageDescription, getUserMedia({video: true}) is silently denied
+# too, same failure mode as the microphone case above.
+/usr/libexec/PlistBuddy -c "Add :NSCameraUsageDescription string 'Jarvis braucht Kamerazugriff, um deine Hand zu verfolgen.'" "$PLIST" 2>/dev/null \
+  || /usr/libexec/PlistBuddy -c "Set :NSCameraUsageDescription 'Jarvis braucht Kamerazugriff, um deine Hand zu verfolgen.'" "$PLIST"
 
 echo
 echo "Fertig: launcher/dist/Jarvis.app"
