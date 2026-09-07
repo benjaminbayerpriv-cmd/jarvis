@@ -31,6 +31,13 @@ const { HolisticLandmarker, FilesetResolver } = self.$mediapipe;
 const MODEL_URL = "https://storage.googleapis.com/mediapipe-assets/holistic_landmarker.task";
 const WASM_ROOT = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.17/wasm";
 
+// A real photo (a person with both hands raised) used only to warm the
+// model up before the caller ever gets a "ready" message — see the
+// comment on warmUp() below for why this matters. This is MediaPipe's own
+// public hand_landmarker demo asset, already fetched from Google's CDN the
+// same way the .task model files above are.
+const WARMUP_IMAGE_URL = "https://storage.googleapis.com/mediapipe-tasks/hand_landmarker/woman_hands.jpg";
+
 let landmarker = null;
 let readyPromise = null;
 let activeDelegate = null; // "GPU" or "CPU" — whichever actually initialized
@@ -44,6 +51,33 @@ async function createLandmarker(delegate) {
     minPoseDetectionConfidence: 0.5,
     minHandLandmarksConfidence: 0.5,
   });
+}
+
+// MediaPipe/TFLite's GPU delegate compiles its shaders lazily, per code
+// path, the first time that path actually runs — not once at model-load
+// time. "Pose detected", "hand detected", "hand tracked from last frame"
+// are each a different path. A blank/synthetic warmup image never
+// triggers most of these (there's nothing in it to detect), so the *real*
+// first-ever frame with an actual hand/body in it is the one that pays
+// the compile cost — measured live at over a second for that single
+// frame, vs. ~70-100ms once warm. Running a few passes over a real photo
+// with a visible hand and body *before* signaling ready moves that one-
+// time cost out of the user's first few seconds of actually using the
+// camera.
+async function warmUp() {
+  try {
+    const blob = await fetch(WARMUP_IMAGE_URL).then((r) => r.blob());
+    const bitmap = await createImageBitmap(blob);
+    for (let i = 0; i < 3; i++) {
+      const warmupBitmap = i === 0 ? bitmap : await createImageBitmap(blob);
+      landmarker.detectForVideo(warmupBitmap, i + 1);
+      warmupBitmap.close();
+    }
+  } catch (err) {
+    // Not fatal — worst case the first real frame just pays the cost this
+    // was meant to avoid.
+    console.warn("[tracking-worker] warmup pass failed (non-fatal):", err);
+  }
 }
 
 function ensureReady() {
@@ -61,6 +95,7 @@ function ensureReady() {
         landmarker = await createLandmarker("CPU");
         activeDelegate = "CPU";
       }
+      await warmUp();
       console.log(`[tracking-worker] ready, using ${activeDelegate} delegate`);
       self.postMessage({ type: "ready", delegate: activeDelegate });
     })();
