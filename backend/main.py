@@ -72,8 +72,11 @@ async def on_startup():
     loop = asyncio.get_event_loop()
     loop.run_in_executor(None, _generate)
     # Whisper's first load takes ~15s — do it now instead of on the user's
-    # first spoken sentence.
-    loop.run_in_executor(None, stt._get_model)
+    # first spoken sentence. selftest() (not just _get_model()) also runs a
+    # real transcription so a broken GPU setup (e.g. a missing cuBLAS DLL)
+    # surfaces here, in the log, rather than on the user's first sentence —
+    # model construction alone never touches cuBLAS/cuDNN.
+    loop.run_in_executor(None, stt.selftest)
     loop.create_task(_pump_panel())
 
 

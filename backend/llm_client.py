@@ -213,15 +213,33 @@ MAX_TOOL_ROUNDS = 4
 
 
 def _build_messages(user_message: str, history: list | None) -> list:
-    messages = [{"role": "system", "content": _system_prompt()}]
+    # Qwen3.5's chat template rejects the request outright ("System message
+    # must be at the beginning") the moment more than one system-role entry
+    # shows up anywhere in the list — which used to happen constantly here:
+    # the base prompt, memory context and target hint were each their own
+    # system message, and trimHistory() (frontend/app.js) inserts another
+    # one for the summarized conversation tail once history gets long. All
+    # of that is folded into exactly one leading system message instead;
+    # any system-role entry surviving in `history` (the summary) is merged
+    # in here rather than passed through as its own message.
+    system_parts = [_system_prompt()]
     remembered = memory.context_for(user_message)
     if remembered:
-        messages.append({"role": "system", "content": f"Relevantes lokales Gedächtnis:\n{remembered}"})
+        system_parts.append(f"Relevantes lokales Gedächtnis:\n{remembered}")
     target_hint = last_target.hint()
     if target_hint:
-        messages.append({"role": "system", "content": target_hint})
-    if history:
-        messages.extend(history)
+        system_parts.append(target_hint)
+
+    conversation = []
+    for entry in history or []:
+        if entry.get("role") == "system":
+            if entry.get("content"):
+                system_parts.append(entry["content"])
+        else:
+            conversation.append(entry)
+
+    messages = [{"role": "system", "content": "\n\n".join(system_parts)}]
+    messages.extend(conversation)
     messages.append({"role": "user", "content": user_message})
     return messages
 

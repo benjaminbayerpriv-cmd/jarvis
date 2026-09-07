@@ -87,20 +87,95 @@ _HALLUCINATION_PHRASES = {
 _NO_SPEECH_THRESHOLD = 0.6
 
 
+# Once a real GPU failure is seen (as opposed to WhisperModel(cuda) simply
+# never having been asked to compute anything yet — model construction
+# alone doesn't touch cuBLAS/cuDNN), every later call goes straight to CPU
+# instead of re-attempting and failing GPU init each time. Model
+# construction succeeding is not proof the GPU path actually works: that
+# was exactly how the cublas64_12.dll bug hid behind a silent-looking
+# "success" for a VAD-filtered silent clip, only surfacing on real speech.
+_gpu_broken = False
+
+
+def _build_model(device: str) -> WhisperModel:
+    compute_type = "float16" if device == "cuda" else "int8"
+    return WhisperModel(config.WHISPER_MODEL, device=device, compute_type=compute_type)
+
+
 def _get_model() -> WhisperModel:
     global _model
     if _model is None:
         with _lock:
             if _model is None:
-                try:
-                    # float16 on GPU: several times faster than CPU int8,
-                    # and this model is reloaded only once per process, so
-                    # the one-time GPU init cost is irrelevant afterwards.
-                    _model = WhisperModel(config.WHISPER_MODEL, device="cuda", compute_type="float16")
-                except Exception as exc:
-                    print(f"[stt] CUDA nicht verfügbar, falle auf CPU zurück: {exc}")
-                    _model = WhisperModel(config.WHISPER_MODEL, device="cpu", compute_type="int8")
+                if _gpu_broken:
+                    _model = _build_model("cpu")
+                else:
+                    try:
+                        # float16 on GPU: several times faster than CPU
+                        # int8, and this model is reloaded only once per
+                        # process, so the one-time GPU init cost is
+                        # irrelevant afterwards.
+                        _model = _build_model("cuda")
+                    except Exception as exc:
+                        print(f"[stt] CUDA nicht verfügbar, falle auf CPU zurück: {exc}")
+                        _model = _build_model("cpu")
     return _model
+
+
+def _run_transcribe(model: WhisperModel, path: str) -> str:
+    segments, _info = model.transcribe(
+        path,
+        language="de",
+        vad_filter=True,
+        # A hallucinated segment tends to seed the next one with the
+        # same invented text otherwise — this stops each segment
+        # from being conditioned on a previous hallucination.
+        condition_on_previous_text=False,
+    )
+    kept = [seg.text.strip() for seg in segments if seg.no_speech_prob < _NO_SPEECH_THRESHOLD]
+    return " ".join(kept).strip()
+
+
+def selftest() -> None:
+    """Actually exercise the GPU compute path at startup instead of only
+    constructing the model (see the on_startup warmup call in main.py).
+
+    Model construction alone never touches cuBLAS/cuDNN — that only happens
+    once real encoder/decoder math runs — so it can't catch a broken GPU
+    setup. A plain silent/tone clip can't either, since vad_filter=True
+    (the default used everywhere else) strips it before it ever reaches the
+    model, letting a real bug (the cublas64_12.dll case) hide until the
+    first genuine spoken utterance. Random noise with vad_filter=False
+    forces the real computation to run, so a failure here — and the
+    automatic CPU fallback below — happens at boot, in the log, instead of
+    silently on the user's first sentence.
+    """
+    import numpy as np
+
+    model = _get_model()
+    fd, path = tempfile.mkstemp(suffix=".wav")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            import wave
+
+            rng = np.random.default_rng(0)
+            samples = (rng.standard_normal(16000) * 3000).astype("int16")
+            with wave.open(f, "wb") as w:
+                w.setnchannels(1)
+                w.setsampwidth(2)
+                w.setframerate(16000)
+                w.writeframes(samples.tobytes())
+        with _lock:
+            list(model.transcribe(path, language="de", vad_filter=False)[0])
+        print(f"[stt] Selbsttest ok ({model.model.device}).")
+    except Exception as exc:
+        global _model, _gpu_broken
+        print(f"[stt] Selbsttest fehlgeschlagen, wechsle dauerhaft auf CPU: {exc}")
+        _gpu_broken = True
+        with _lock:
+            _model = _build_model("cpu")
+    finally:
+        os.remove(path)
 
 
 def transcribe(audio_bytes: bytes) -> str:
@@ -112,7 +187,8 @@ def transcribe(audio_bytes: bytes) -> str:
     calls from different threads is undocumented, and a browser sends one
     utterance at a time anyway.
     """
-    model = _get_model()
+    global _model, _gpu_broken
+
     # delete=False + a manual close before transcribe: on Windows, a file
     # opened via NamedTemporaryFile is held exclusively, so passing its name
     # to model.transcribe() while the handle is still open fails with
@@ -122,18 +198,25 @@ def transcribe(audio_bytes: bytes) -> str:
     try:
         with os.fdopen(fd, "wb") as f:
             f.write(audio_bytes)
-        with _lock:
-            segments, _info = model.transcribe(
-                path,
-                language="de",
-                vad_filter=True,
-                # A hallucinated segment tends to seed the next one with the
-                # same invented text otherwise — this stops each segment
-                # from being conditioned on a previous hallucination.
-                condition_on_previous_text=False,
-            )
-            kept = [seg.text.strip() for seg in segments if seg.no_speech_prob < _NO_SPEECH_THRESHOLD]
-        text = " ".join(kept).strip()
+        model = _get_model()
+        try:
+            with _lock:
+                text = _run_transcribe(model, path)
+        except Exception as exc:
+            # A GPU failure here (driver hiccup, VRAM pressure from
+            # whatever else is running, a missing DLL that only breaks on
+            # this particular batch shape) used to just vanish into an
+            # empty transcript with a log line nobody was watching — heard
+            # by the user as "voice input doesn't work". Recover instead:
+            # fall back to CPU permanently and actually finish this
+            # utterance rather than dropping it.
+            if _gpu_broken:
+                raise
+            print(f"[stt] GPU-Transkription fehlgeschlagen, wechsle dauerhaft auf CPU: {exc}")
+            _gpu_broken = True
+            with _lock:
+                _model = _build_model("cpu")
+                text = _run_transcribe(_model, path)
     finally:
         os.remove(path)
 
