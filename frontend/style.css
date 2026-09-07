@@ -115,6 +115,10 @@ button { font-family: var(--mono); cursor: pointer; }
   font-size: 15px;
   opacity: .4;
   transition: opacity 160ms, color 160ms, border-color 160ms;
+  /* Above .hidden-chat's z-index: 6 — otherwise the open panel (fixed,
+     covering this exact top-right corner) sits on top and swallows every
+     click meant for this button, making it impossible to close again. */
+  z-index: 7;
 }
 
 .debug-toggle:hover { opacity: 1; color: var(--text); border-color: var(--dim); }

@@ -14,9 +14,23 @@ const debugToggle = document.getElementById("debugToggle");
 // while debugging, not flicker away the moment focus moves to "Senden".
 let debugOpen = false;
 
+// Relying on the CSS transform alone to hide the panel broke in the
+// packaged app's embedded webview (pywebview's WKWebView rendered it
+// on-screen at all times, unlike every real browser tested) — toggling
+// the `hidden` attribute too makes "closed" mean display:none regardless
+// of how a given engine handles the slide-out transform.
 function setDebugOpen(open) {
   debugOpen = open;
-  debugPanel.classList.toggle("open", open);
+  if (open) {
+    debugPanel.hidden = false;
+    // rAF so the browser paints the un-hidden, still-off-screen state
+    // first — otherwise adding "open" in the same frame skips the slide
+    // transition straight to its end state.
+    requestAnimationFrame(() => debugPanel.classList.add("open"));
+  } else {
+    debugPanel.classList.remove("open");
+    setTimeout(() => { debugPanel.hidden = true; }, 220); // matches the CSS transition duration
+  }
 }
 
 debugToggle.addEventListener("click", () => setDebugOpen(!debugOpen));
@@ -199,6 +213,13 @@ function resizeOrbCanvas() {
 }
 window.addEventListener("resize", resizeOrbCanvas);
 resizeOrbCanvas();
+// The packaged desktop app's embedded webview (pywebview) doesn't always
+// report a correct viewport size on the very first layout pass — the orb
+// measured 0×0 and stayed blank until *something* fired a real resize
+// event. A real browser tab never needed this, but re-measuring a couple
+// of times shortly after load is a harmless no-op there and fixes it here.
+window.addEventListener("load", resizeOrbCanvas);
+setTimeout(resizeOrbCanvas, 300);
 
 let orbSpin = 0;
 
