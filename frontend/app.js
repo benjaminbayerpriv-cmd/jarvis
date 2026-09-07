@@ -1221,35 +1221,6 @@ const camCtx = camCanvas.getContext("2d");
 const camStartBtn = document.getElementById("camStartBtn");
 const camHint = document.getElementById("camHint");
 
-// The 80 COCO classes, in the exact order both COCO-SSD and YOLOv8 were
-// trained on — this order is what makes COCO_LABELS_DE_ARR below (built by
-// object-insertion order) line up with YOLOv8's numeric label ids.
-const COCO_LABELS_DE = {
-  person: "Person", bicycle: "Fahrrad", car: "Auto", motorcycle: "Motorrad",
-  airplane: "Flugzeug", bus: "Bus", train: "Zug", truck: "Lkw", boat: "Boot",
-  "traffic light": "Ampel", "fire hydrant": "Hydrant", "stop sign": "Stoppschild",
-  "parking meter": "Parkuhr", bench: "Bank", bird: "Vogel", cat: "Katze",
-  dog: "Hund", horse: "Pferd", sheep: "Schaf", cow: "Kuh", elephant: "Elefant",
-  bear: "Bär", zebra: "Zebra", giraffe: "Giraffe", backpack: "Rucksack",
-  umbrella: "Regenschirm", handbag: "Handtasche", tie: "Krawatte",
-  suitcase: "Koffer", frisbee: "Frisbee", skis: "Skier", snowboard: "Snowboard",
-  "sports ball": "Ball", kite: "Drachen", "baseball bat": "Baseballschläger",
-  "baseball glove": "Baseballhandschuh", skateboard: "Skateboard",
-  surfboard: "Surfbrett", "tennis racket": "Tennisschläger", bottle: "Flasche",
-  "wine glass": "Weinglas", cup: "Tasse", fork: "Gabel", knife: "Messer",
-  spoon: "Löffel", bowl: "Schüssel", banana: "Banane", apple: "Apfel",
-  sandwich: "Sandwich", orange: "Orange", broccoli: "Brokkoli",
-  carrot: "Karotte", "hot dog": "Hotdog", pizza: "Pizza", donut: "Donut",
-  cake: "Kuchen", chair: "Stuhl", couch: "Sofa", "potted plant": "Topfpflanze",
-  bed: "Bett", "dining table": "Tisch", toilet: "Toilette", tv: "Fernseher",
-  laptop: "Laptop", mouse: "Maus", remote: "Fernbedienung",
-  keyboard: "Tastatur", "cell phone": "Handy", microwave: "Mikrowelle",
-  oven: "Backofen", toaster: "Toaster", sink: "Spüle",
-  refrigerator: "Kühlschrank", book: "Buch", clock: "Uhr", vase: "Vase",
-  scissors: "Schere", "teddy bear": "Teddybär", "hair drier": "Föhn",
-  toothbrush: "Zahnbürste",
-};
-
 // MediaPipe's 21 hand landmarks, connected into the standard skeleton —
 // index numbering per the official hand-landmark model (0 = wrist).
 const HAND_CONNECTIONS = [
@@ -1261,55 +1232,9 @@ const HAND_CONNECTIONS = [
   [0, 17],
 ];
 
-// Same 80-class order as labels.json in the YOLOv8 reference this is ported
-// from — index into this by the model's numeric label id.
-const COCO_LABELS_DE_ARR = Object.values(COCO_LABELS_DE);
-
-// YOLOv8n via onnxruntime-web + a companion ONNX NMS model, replacing the
-// earlier COCO-SSD (TensorFlow.js) detector — that one kept missing objects
-// or mislabeling them in testing. Same 80 COCO classes, a genuinely more
-// accurate model, and (via @techstark/opencv-js) actual OpenCV.js for
-// preprocessing — ported from github.com/Hyuto/yolov8-onnxruntime-web. The
-// whole cv+onnx pipeline runs in detect-worker.js, not here: a single
-// CPU/WASM inference pass can take hundreds of ms to over a second, and
-// running that on the main thread blocks everything else with it — the orb
-// animation, the audio meter, even the video draw loop, not just the
-// detection overlay. Only a Worker keeps the rest of the app responsive
-// while a detection is in flight.
 let camStream = null;
 let camLoopRunning = false;
 let latestHandLandmarks = null; // {x,y,z}[21] normalized, or null
-let latestDetections = [];      // YOLOv8's last result: {bbox, label, score}[]
-
-let detectWorker = null;
-let yoloReady = false;
-let yoloReadyResolve;
-const yoloReadyPromise = new Promise((resolve) => { yoloReadyResolve = resolve; });
-let detectRequestId = 0;
-const pendingDetectResolvers = new Map();
-let detectBusy = false;
-
-function ensureDetectWorker() {
-  if (detectWorker) return;
-  detectWorker = new Worker("/static/detect-worker.js");
-  detectWorker.onmessage = (e) => {
-    const { type, id } = e.data;
-    if (type === "ready") {
-      yoloReady = true;
-      yoloReadyResolve();
-      return;
-    }
-    const resolve = pendingDetectResolvers.get(id);
-    if (!resolve) return;
-    pendingDetectResolvers.delete(id);
-    if (type === "error") {
-      console.error("[detect-worker]", e.data.error);
-      resolve([]);
-    } else {
-      resolve(e.data.detections);
-    }
-  };
-}
 
 // Hand tracking (MediaPipe Tasks HandLandmarker) in its own worker — see
 // the long comment at the top of hands-worker.js for why this has to be a
@@ -1373,14 +1298,12 @@ async function startCamera() {
     camHint.textContent = "Lade Modelle …";
 
     ensureHandsWorker();
-    ensureDetectWorker();
-    await Promise.all([handsReadyPromise, yoloReadyPromise]);
+    await handsReadyPromise;
 
     camHint.textContent = "";
     camLoopRunning = true;
     requestAnimationFrame(drawLoop);
     handsLoop();
-    detectLoop();
   } catch (err) {
     console.error(err);
     camHint.textContent = "Kamera abgelehnt oder Modelle nicht ladbar.";
@@ -1401,8 +1324,8 @@ function drawLoop() {
 }
 
 // Hand tracking self-throttles to whatever rate the worker can actually
-// sustain, same pattern as detectLoop below: a new request only starts
-// once the previous one's response has arrived, so on a slow machine this
+// sustain: a new request only starts once the previous one's response has
+// arrived, so on a slow machine this
 // naturally runs slower while drawLoop above keeps drawing the video at
 // the full 30/60fps the camera and display can do — the skeleton overlay
 // just updates less often, it never holds the video itself back (and,
@@ -1433,45 +1356,10 @@ async function detectHands() {
   latestHandLandmarks = landmarks;
 }
 
-// Self-throttles like handsLoop above: a new detection pass only starts
-// once the previous one has fully finished, so a slow machine just detects
-// less often — drawLoop keeps the video itself at full FPS regardless, and
-// (unlike an earlier version of this) the orb/audio-meter on the rest of
-// the page stay responsive too, since the actual cv+onnx work now happens
-// in detect-worker.js rather than blocking this thread.
-function detectLoop() {
-  if (!camLoopRunning) return;
-  if (yoloReady && !detectBusy && camVideo.readyState >= 2) {
-    detectBusy = true;
-    detectObjects().finally(() => {
-      detectBusy = false;
-    });
-  }
-  setTimeout(detectLoop, 30);
-}
-
-async function detectObjects() {
-  if (!camVideo.videoWidth || !camVideo.videoHeight) return;
-  // createImageBitmap decodes the current frame off-thread and hands the
-  // worker a plain bitmap it can draw from — no DOM, no video element
-  // needed inside the worker. Transferred (not copied) into postMessage.
-  const bitmap = await createImageBitmap(camVideo);
-  const id = ++detectRequestId;
-  const detections = await new Promise((resolve) => {
-    pendingDetectResolvers.set(id, resolve);
-    detectWorker.postMessage({ type: "detect", id, bitmap }, [bitmap]);
-  });
-  latestDetections = detections.map((d) => ({
-    bbox: d.bbox,
-    label: COCO_LABELS_DE_ARR[d.labelId] || `Klasse ${d.labelId}`,
-    score: d.score,
-  }));
-}
-
-// Everything drawn on the canvas — video, hand skeleton, detection boxes —
-// shares one mirrored transform (front-camera convention) so a hand
-// reaching from the right of the *frame* still appears to reach from the
-// right on screen, matching what looking at your own hand feels like.
+// Everything drawn on the canvas — video and hand skeleton — shares one
+// mirrored transform (front-camera convention) so a hand reaching from the
+// right of the *frame* still appears to reach from the right on screen,
+// matching what looking at your own hand feels like.
 function drawCamOverlay() {
   const w = camCanvas.clientWidth, h = camCanvas.clientHeight;
   if (!w || !h || !camVideo.videoWidth) return;
@@ -1481,15 +1369,6 @@ function drawCamOverlay() {
   camCtx.translate(w, 0);
   camCtx.scale(-1, 1);
   camCtx.drawImage(camVideo, 0, 0, w, h);
-
-  // Every object YOLOv8 currently sees anywhere in the frame — not just
-  // whatever's closest to the hand — each with its own box and label.
-  if (latestDetections.length && camVideo.videoWidth) {
-    const vw = camVideo.videoWidth, vh = camVideo.videoHeight;
-    for (const det of latestDetections) {
-      drawDetectionBox(det, vw, vh, w, h);
-    }
-  }
 
   if (latestHandLandmarks) {
     camCtx.strokeStyle = "#2be2e2";
@@ -1509,34 +1388,6 @@ function drawCamOverlay() {
     }
   }
 
-  camCtx.restore();
-}
-
-// Draws one YOLOv8 detection's box plus its (German) label. `det.bbox` is
-// in the video's native pixel size, so it's scaled into the canvas's own
-// (possibly different) pixel size first.
-function drawDetectionBox(det, vw, vh, w, h) {
-  const [x, y, bw, bh] = det.bbox;
-  const scaleX = w / vw, scaleY = h / vh;
-  const bx = x * scaleX, by = y * scaleY, bwPx = bw * scaleX, bhPx = bh * scaleY;
-  const label = det.label;
-
-  camCtx.strokeStyle = "#2be2e2";
-  camCtx.lineWidth = 2;
-  camCtx.strokeRect(bx, by, bwPx, bhPx);
-
-  // Text needs to read left-to-right — undo the mirroring just for the
-  // label itself, translating first so it still lands at the box.
-  camCtx.save();
-  camCtx.translate(bx + bwPx, by);
-  camCtx.scale(-1, 1);
-  camCtx.font = "600 13px " + getComputedStyle(document.body).fontFamily;
-  camCtx.textAlign = "left";
-  const textWidth = camCtx.measureText(label).width;
-  camCtx.fillStyle = "rgba(18, 18, 15, 0.85)";
-  camCtx.fillRect(0, -20, textWidth + 12, 20);
-  camCtx.fillStyle = "#2be2e2";
-  camCtx.fillText(label, 6, -5);
   camCtx.restore();
 }
 

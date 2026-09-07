@@ -5,16 +5,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Jarvis</title>
   <link rel="stylesheet" href="/static/style.css" />
-  <!-- Hand tracking (MediaPipe Tasks HandLandmarker) + object detection
-       across the whole frame (YOLOv8n via onnxruntime-web, preprocessed
-       with real OpenCV.js — @techstark/opencv-js's WASM build). Neither
-       pipeline runs here on the main thread — both MediaPipe's own docs
-       and onnxruntime-web's CPU/WASM execution are confirmed *synchronous,
-       main-thread-blocking* calls, so each one freezes the whole page (orb
-       included) for however long a detection pass takes if run directly.
-       They're offloaded to frontend/hands-worker.js and
-       frontend/detect-worker.js instead. See the "camera" section in
-       app.js. -->
+  <!-- Hand tracking (MediaPipe Tasks HandLandmarker). Doesn't run here on
+       the main thread — MediaPipe's own docs confirm detect()/
+       detectForVideo() are *synchronous, main-thread-blocking* calls, so a
+       tracking pass would otherwise freeze the whole page (orb included)
+       for however long it takes. It's offloaded to frontend/hands-worker.js
+       instead. See the "camera" section in app.js. -->
 
 </head>
 <body>
@@ -38,10 +34,8 @@
     </div>
 
     <!-- Webcam + hand tracking: raw video is only ever a texture source for
-         the canvas (never shown itself), which draws the mirrored frame,
-         the MediaPipe hand skeleton, and a box+label for every object
-         YOLOv8n finds anywhere in the frame (not just near the hand).
-         Only works in a normal
+         the canvas (never shown itself), which draws the mirrored frame
+         plus the MediaPipe hand skeleton. Only works in a normal
          browser tab — the packaged desktop app's WKWebView on macOS has no
          delegate method for media-capture permission requests at all, so
          getUserMedia() is silently denied there (a real pywebview

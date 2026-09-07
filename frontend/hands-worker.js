@@ -1,10 +1,8 @@
-// Runs hand landmark tracking off the main thread, for the same reason
-// detect-worker.js exists: MediaPipe's own docs confirm both the old
-// solutions API (Hands.send()) and the current Tasks API's detect() /
-// detectForVideo() run *synchronously and block the main thread* — every
-// hand-tracking pass freezes the whole page (orb, audio meter, the video
-// draw loop) for however long it takes, exactly the bug detect-worker.js
-// fixes for object detection. See:
+// Runs hand landmark tracking off the main thread. MediaPipe's own docs
+// confirm both the old solutions API (Hands.send()) and the current Tasks
+// API's detect()/detectForVideo() run *synchronously and block the main
+// thread* — every hand-tracking pass would otherwise freeze the whole page
+// (orb, audio meter, the video draw loop) for however long it takes. See:
 // https://developers.google.com/mediapipe/solutions/vision/hand_landmarker/web_js
 //
 // This has to be a *classic* worker, not a module one, even though
