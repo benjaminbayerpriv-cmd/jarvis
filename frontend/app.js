@@ -5,6 +5,7 @@ const composer = document.getElementById("composer");
 const inputEl = document.getElementById("input");
 const startBtn = document.getElementById("startBtn");
 const muteBtn = document.getElementById("muteBtn");
+const stopBtn = document.getElementById("stopBtn");
 
 // The old debug/chat sidebar (and its toggle button) is gone — a window
 // sized for just the floating orb has no room for one, and the turn-by-turn
@@ -759,6 +760,10 @@ function playClip(blob, turn) {
   src.connect(analyser);
   analyser.connect(ctx.destination);
   outputAnalyser = analyser;
+  // audio.pause() alone leaves already-buffered samples playing out through
+  // the hardware for a beat — disconnecting the graph node is what actually
+  // makes a stop-button click silence things instantly (see interruptActiveTurn).
+  if (turn) turn.audioSrc = src;
 
   return new Promise((resolve) => {
     let done = false;
@@ -797,11 +802,24 @@ function interruptActiveTurn() {
   const turn = activeTurn;
   turn.aborted = true;
   stopFiller(turn);
+  if (turn.audioSrc) { try { turn.audioSrc.disconnect(); } catch (_) {} }
   if (turn.audio) turn.audio.pause();
   outputAnalyser = null;
   activeTurn = null;
   busy = false;
   settle();
+  // Dropping the fetch only stops *this* side from listening — a tool call
+  // (open_url, ...) runs synchronously on the backend with no point in
+  // between where it'd notice the connection is gone, so it finishes
+  // regardless. This tells the backend explicitly to skip the next tool
+  // call for this turn instead, best-effort (nothing to do if it's too
+  // slow or fails — the fetch abort above is still the fast path for
+  // audio/UI).
+  fetch("/chat/cancel", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ turn_id: String(turn.id) }),
+  }).catch(() => {});
 }
 
 async function handleUserMessage(text) {
@@ -828,7 +846,7 @@ async function handleUserMessage(text) {
     const resp = await fetch("/chat/stream", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message: text, history }),
+      body: JSON.stringify({ message: text, history, turn_id: String(turn.id) }),
     });
     if (turn.aborted) return;
     if (!resp.ok) {
@@ -1163,6 +1181,8 @@ startBtn.addEventListener("click", async () => {
 });
 
 muteBtn.addEventListener("click", () => setMuted(!muted));
+
+stopBtn.addEventListener("click", () => { if (busy) interruptActiveTurn(); });
 
 // Cmd+Shift+J on macOS, Ctrl+Shift+J on Windows — matching
 // launcher/hotkey_listener.py's own platform check for the equivalent
