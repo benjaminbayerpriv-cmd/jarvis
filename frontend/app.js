@@ -291,21 +291,23 @@ function drawSegmentRing(cx, cy, ringR, spin, color, level, alpha) {
   orbCtx.restore();
 }
 
-// ---------- orbit trails: comet-like streaks swooping around the sphere ---
+// ---------- orbit trails: comet-like streaks out at the outermost ring ----
 //
 // Each ring is a circle in its own tilted local plane, orbiting at its own
 // speed — then run through the exact same cosY/sinY/cosX/sinX rotation the
-// sphere itself uses below, so the trails genuinely tumble together with
-// it in 3D (turn edge-on, dip behind it) instead of just being flat
-// decoration layered on top.
+// sphere itself uses below, so the trails genuinely tumble in 3D (turn
+// edge-on, dip behind the sphere) instead of just being flat decoration.
+// radiusFactor is relative to the outer HUD radius (outerR), not the inner
+// sphere — these live out at the dust ring, weaving in and out of it,
+// rather than orbiting close in around the sphere.
 const ORBIT_RINGS = [
-  { tiltX: 0.9, tiltZ: 0.25, speed: 0.5, radiusFactor: 1.18, trailLen: 1.15 },
-  { tiltX: -0.55, tiltZ: 1.15, speed: -0.38, radiusFactor: 1.32, trailLen: 0.85 },
-  { tiltX: 0.15, tiltZ: -0.85, speed: 0.3, radiusFactor: 1.48, trailLen: 1.5 },
+  { tiltX: 0.9, tiltZ: 0.25, speed: 0.5, radiusFactor: 0.98, trailLen: 1.15 },
+  { tiltX: -0.55, tiltZ: 1.15, speed: -0.38, radiusFactor: 1.06, trailLen: 0.85 },
+  { tiltX: 0.15, tiltZ: -0.85, speed: 0.3, radiusFactor: 1.14, trailLen: 1.5 },
 ];
 const ORBIT_SAMPLES = 36;
 
-function drawOrbitTrails(cx, cy, baseR, cosY, sinY, cosX, sinX, color, alpha) {
+function drawOrbitTrails(cx, cy, outerR, cosY, sinY, cosX, sinX, color, alpha) {
   const t = Date.now() / 1000;
   orbCtx.save();
   orbCtx.lineCap = "round";
@@ -314,7 +316,7 @@ function drawOrbitTrails(cx, cy, baseR, cosY, sinY, cosX, sinX, color, alpha) {
   orbCtx.strokeStyle = color;
   for (const ring of ORBIT_RINGS) {
     const headAngle = t * ring.speed;
-    const r = baseR * ring.radiusFactor;
+    const r = outerR * ring.radiusFactor;
     const ctz = Math.cos(ring.tiltZ), stz = Math.sin(ring.tiltZ);
     const ctx2 = Math.cos(ring.tiltX), stx = Math.sin(ring.tiltX);
     let prev = null;
@@ -341,7 +343,7 @@ function drawOrbitTrails(cx, cy, baseR, cosY, sinY, cosX, sinX, color, alpha) {
       if (prev) {
         const front = Math.max(0, 1 - (gz + 1) / 2); // ~0 behind sphere .. ~1 in front
         orbCtx.globalAlpha = alpha * frac * frac * (0.15 + front * 0.85);
-        orbCtx.lineWidth = Math.max(0.5, baseR * 0.012) * (0.3 + frac * 0.7);
+        orbCtx.lineWidth = Math.max(0.5, outerR * 0.012) * (0.3 + frac * 0.7);
         orbCtx.beginPath();
         orbCtx.moveTo(prev.sx, prev.sy);
         orbCtx.lineTo(sx, sy);
@@ -430,7 +432,7 @@ function renderOrb(level, stateName) {
   // flat 2D circles, independent of the sphere's own 3D tilt/spin below.
   drawDustRing(cx, cy, outerR, orbSpin, ringColor, 0.55 * listenPulse);
   drawSegmentRing(cx, cy, outerR * 0.82, orbSpin, ringColor, level, 0.75 * listenPulse);
-  drawOrbitTrails(cx, cy, baseR, cosY, sinY, cosX, sinX, ringColor, 0.8 * listenPulse);
+  drawOrbitTrails(cx, cy, outerR, cosY, sinY, cosX, sinX, ringColor, 0.8 * listenPulse);
 
   const projected = orbVerts.map((v) => {
     const ripple = Math.sin(v.x * 4 + t * 1.6) * Math.cos(v.y * 4 - t * 1.1);
