@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import io
 import platform
+import re
 import subprocess
 import tempfile
 import threading
@@ -23,6 +24,7 @@ from pathlib import Path
 
 import numpy as np
 import requests
+from num2words import num2words
 from supertonic import TTS
 
 from . import config, platform_utils
@@ -106,7 +108,58 @@ def _windows_say(text: str) -> bytes:
     return data
 
 
+# Neither Supertonic nor the OS voices do any real number normalization —
+# they feed digits straight to the model's grapheme frontend, which reads
+# anything beyond a couple of digits one character at a time instead of as
+# a number ("eins-zwei-drei-vier..." instead of "eintausendzweihundert-
+# vierunddreißig"). ElevenLabs' API already handles this well on its own,
+# so this is only applied to the two engines that don't.
+#
+# Clock times and dates are left alone: "14:30" or "07.09.2026" already
+# read fine digit-by-digit in German and expanding them would need actual
+# date/time-aware wording (a much bigger feature) to sound right instead of
+# just different.
+_TIME_OR_DATE_RE = re.compile(r"\d{1,2}:\d{2}(?::\d{2})?|\d{1,2}\.\d{1,2}\.\d{2,4}")
+_NUMBER_RE = re.compile(r"(?<!\w)(\d{1,3}(?:\.\d{3})+|\d+)(?:,(\d+))?(?!\w)")
+
+
+def _spell_number(match: re.Match) -> str:
+    integer_part = match.group(1).replace(".", "")
+    fraction = match.group(2)
+    try:
+        words = num2words(int(integer_part), lang="de")
+    except (ValueError, OverflowError):
+        return match.group(0)
+    if fraction:
+        digit_words = " ".join(num2words(int(d), lang="de") for d in fraction)
+        words += f" Komma {digit_words}"
+    return words
+
+
+_PLACEHOLDER = ""
+
+
+def _expand_numbers_for_speech(text: str) -> str:
+    protected = []
+
+    def shield(m: re.Match) -> str:
+        protected.append(m.group(0))
+        return _PLACEHOLDER
+
+    # A placeholder embedding its own index as digits (e.g. "\x0007\x00")
+    # would just get re-matched and mangled by _NUMBER_RE right below, since
+    # \x00 isn't a word character and so doesn't block the (?<!\w)/(?!\w)
+    # boundary check — a single fixed marker with no digits in it sidesteps
+    # that entirely, restored in order since re.sub visits matches
+    # left-to-right in the same order they were shielded.
+    shielded = _TIME_OR_DATE_RE.sub(shield, text)
+    expanded = _NUMBER_RE.sub(_spell_number, shielded)
+    protected_iter = iter(protected)
+    return re.sub(_PLACEHOLDER, lambda _m: next(protected_iter), expanded)
+
+
 def _local_say(text: str) -> bytes:
+    text = _expand_numbers_for_speech(text)
     if IS_WINDOWS:
         VoiceInfo.engine = "windows"
         return _windows_say(text)
@@ -153,6 +206,7 @@ def _get_supertonic() -> tuple[TTS, object]:
 
 
 def _supertonic_say(text: str) -> bytes:
+    text = _expand_numbers_for_speech(text)
     tts, style = _get_supertonic()
     # FastAPI runs sync endpoints in a thread pool, and it's undocumented
     # whether one Supertonic engine tolerates concurrent synthesize() calls

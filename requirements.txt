@@ -17,6 +17,11 @@ faster-whisper==1.2.1
 # of a raw `rm -rf`, so a deletion is reversible and never silently no-ops.
 send2trash==1.8.3
 
+# Spells out large numbers for the local voices (backend/tts.py) — Supertonic
+# and the OS voices read raw digit strings one character at a time instead
+# of as a number otherwise.
+num2words==0.5.14
+
 # Only used by backend/live_voice_test.py (Gemini Live speech-to-speech
 # proof-of-concept, not part of the normal Jarvis pipeline).
 sounddevice==0.5.6
