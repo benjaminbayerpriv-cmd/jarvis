@@ -5,12 +5,15 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Jarvis</title>
   <link rel="stylesheet" href="/static/style.css" />
-  <!-- Hand tracking (MediaPipe Hands) + object labels near the hand
-       (COCO-SSD via TensorFlow.js) — see the "camera" section in app.js.
-       Loaded from cdnjs/jsdelivr; both are pinned to an exact version. -->
+  <!-- Hand tracking (MediaPipe Hands, on the main thread — fast enough not
+       to need one) + object detection across the whole frame (YOLOv8n via
+       onnxruntime-web, preprocessed with real OpenCV.js —
+       @techstark/opencv-js's WASM build). The YOLOv8/OpenCV pipeline itself
+       runs in frontend/detect-worker.js, not here — a single CPU inference
+       pass is slow enough to freeze the whole page (orb included) if run
+       on the main thread, so it's offloaded to a Worker instead. See the
+       "camera" section in app.js. -->
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/hands.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js"></script>
 </head>
 <body>
   <main class="stage" id="console">
@@ -34,8 +37,9 @@
 
     <!-- Webcam + hand tracking: raw video is only ever a texture source for
          the canvas (never shown itself), which draws the mirrored frame,
-         the MediaPipe hand skeleton, and a label for whatever COCO-SSD
-         detection is closest to the tracked hand. Only works in a normal
+         the MediaPipe hand skeleton, and a box+label for every object
+         YOLOv8n finds anywhere in the frame (not just near the hand).
+         Only works in a normal
          browser tab — the packaged desktop app's WKWebView on macOS has no
          delegate method for media-capture permission requests at all, so
          getUserMedia() is silently denied there (a real pywebview

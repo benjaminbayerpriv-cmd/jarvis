@@ -1221,10 +1221,9 @@ const camCtx = camCanvas.getContext("2d");
 const camStartBtn = document.getElementById("camStartBtn");
 const camHint = document.getElementById("camHint");
 
-// COCO-SSD's 80 classes, in the order the model was trained on — kept as
-// a plain array so a detection's numeric classId (not exposed by the JS
-// API, which only gives the already-English `class` name) isn't needed;
-// translating by name instead.
+// The 80 COCO classes, in the exact order both COCO-SSD and YOLOv8 were
+// trained on — this order is what makes COCO_LABELS_DE_ARR below (built by
+// object-insertion order) line up with YOLOv8's numeric label ids.
 const COCO_LABELS_DE = {
   person: "Person", bicycle: "Fahrrad", car: "Auto", motorcycle: "Motorrad",
   airplane: "Flugzeug", bus: "Bus", train: "Zug", truck: "Lkw", boat: "Boot",
@@ -1262,13 +1261,57 @@ const HAND_CONNECTIONS = [
   [0, 17],
 ];
 
+// Same 80-class order as labels.json in the YOLOv8 reference this is ported
+// from — index into this by the model's numeric label id.
+const COCO_LABELS_DE_ARR = Object.values(COCO_LABELS_DE);
+
+// YOLOv8n via onnxruntime-web + a companion ONNX NMS model, replacing the
+// earlier COCO-SSD (TensorFlow.js) detector — that one kept missing objects
+// or mislabeling them in testing. Same 80 COCO classes, a genuinely more
+// accurate model, and (via @techstark/opencv-js) actual OpenCV.js for
+// preprocessing — ported from github.com/Hyuto/yolov8-onnxruntime-web. The
+// whole cv+onnx pipeline runs in detect-worker.js, not here: a single
+// CPU/WASM inference pass can take hundreds of ms to over a second, and
+// running that on the main thread blocks everything else with it — the orb
+// animation, the audio meter, even the video draw loop, not just the
+// detection overlay. Only a Worker keeps the rest of the app responsive
+// while a detection is in flight.
 let camStream = null;
 let handsModel = null;
-let cocoModel = null;
 let camLoopRunning = false;
 let latestHandLandmarks = null; // MediaPipe's raw landmark list, or null
-let latestDetections = [];      // COCO-SSD's last result
-let detectingObjects = false;
+let latestDetections = [];      // YOLOv8's last result: {bbox, label, score}[]
+let handsBusy = false;
+
+let detectWorker = null;
+let yoloReady = false;
+let yoloReadyResolve;
+const yoloReadyPromise = new Promise((resolve) => { yoloReadyResolve = resolve; });
+let detectRequestId = 0;
+const pendingDetectResolvers = new Map();
+let detectBusy = false;
+
+function ensureDetectWorker() {
+  if (detectWorker) return;
+  detectWorker = new Worker("/static/detect-worker.js");
+  detectWorker.onmessage = (e) => {
+    const { type, id } = e.data;
+    if (type === "ready") {
+      yoloReady = true;
+      yoloReadyResolve();
+      return;
+    }
+    const resolve = pendingDetectResolvers.get(id);
+    if (!resolve) return;
+    pendingDetectResolvers.delete(id);
+    if (type === "error") {
+      console.error("[detect-worker]", e.data.error);
+      resolve([]);
+    } else {
+      resolve(e.data.detections);
+    }
+  };
+}
 
 function resizeCamCanvas() {
   const rect = camCanvas.getBoundingClientRect();
@@ -1313,22 +1356,14 @@ async function startCamera() {
           (results.multiHandLandmarks && results.multiHandLandmarks[0]) || null;
       });
     }
-    if (!cocoModel) {
-      // mobilenet_v2 over the lighter lite_mobilenet_v2 — noticeably more
-      // accurate at recognizing what's actually in frame, still fast
-      // enough to run on the slower interval this checks on (see
-      // runObjectDetection / setInterval below). Still limited to
-      // COCO's fixed 80 classes either way — no COCO-SSD accuracy tuning
-      // fixes that, only a different (much heavier, not browser-viable —
-      // see SAM 3, ~3.4GB) open-vocabulary model would.
-      cocoModel = await cocoSsd.load({ base: "mobilenet_v2" });
-    }
+    ensureDetectWorker();
+    await yoloReadyPromise;
 
     camHint.textContent = "";
     camLoopRunning = true;
     requestAnimationFrame(drawLoop);
     requestAnimationFrame(handsLoop);
-    setInterval(runObjectDetection, 700);
+    detectLoop();
   } catch (err) {
     console.error(err);
     camHint.textContent = "Kamera abgelehnt oder Modelle nicht ladbar.";
@@ -1354,8 +1389,6 @@ function drawLoop() {
 // drawLoop above keeps drawing the video at the full 30/60fps the camera
 // and display can do — the skeleton overlay just updates less often, it
 // never holds the video itself back.
-let handsBusy = false;
-
 async function handsLoop() {
   if (!camLoopRunning) return;
   if (handsModel && !handsBusy && camVideo.readyState >= 2) {
@@ -1369,16 +1402,39 @@ async function handsLoop() {
   requestAnimationFrame(handsLoop);
 }
 
-async function runObjectDetection() {
-  if (!cocoModel || detectingObjects || camVideo.readyState < 2) return;
-  detectingObjects = true;
-  try {
-    latestDetections = await cocoModel.detect(camVideo);
-  } catch (_) {
-    // Transient (e.g. a frame mid-resize) — the next interval tick retries.
-  } finally {
-    detectingObjects = false;
+// Self-throttles like handsLoop above: a new detection pass only starts
+// once the previous one has fully finished, so a slow machine just detects
+// less often — drawLoop keeps the video itself at full FPS regardless, and
+// (unlike an earlier version of this) the orb/audio-meter on the rest of
+// the page stay responsive too, since the actual cv+onnx work now happens
+// in detect-worker.js rather than blocking this thread.
+function detectLoop() {
+  if (!camLoopRunning) return;
+  if (yoloReady && !detectBusy && camVideo.readyState >= 2) {
+    detectBusy = true;
+    detectObjects().finally(() => {
+      detectBusy = false;
+    });
   }
+  setTimeout(detectLoop, 30);
+}
+
+async function detectObjects() {
+  if (!camVideo.videoWidth || !camVideo.videoHeight) return;
+  // createImageBitmap decodes the current frame off-thread and hands the
+  // worker a plain bitmap it can draw from — no DOM, no video element
+  // needed inside the worker. Transferred (not copied) into postMessage.
+  const bitmap = await createImageBitmap(camVideo);
+  const id = ++detectRequestId;
+  const detections = await new Promise((resolve) => {
+    pendingDetectResolvers.set(id, resolve);
+    detectWorker.postMessage({ type: "detect", id, bitmap }, [bitmap]);
+  });
+  latestDetections = detections.map((d) => ({
+    bbox: d.bbox,
+    label: COCO_LABELS_DE_ARR[d.labelId] || `Klasse ${d.labelId}`,
+    score: d.score,
+  }));
 }
 
 // Everything drawn on the canvas — video, hand skeleton, detection boxes —
@@ -1395,7 +1451,7 @@ function drawCamOverlay() {
   camCtx.scale(-1, 1);
   camCtx.drawImage(camVideo, 0, 0, w, h);
 
-  // Every object COCO-SSD currently sees anywhere in the frame — not just
+  // Every object YOLOv8 currently sees anywhere in the frame — not just
   // whatever's closest to the hand — each with its own box and label.
   if (latestDetections.length && camVideo.videoWidth) {
     const vw = camVideo.videoWidth, vh = camVideo.videoHeight;
@@ -1425,14 +1481,14 @@ function drawCamOverlay() {
   camCtx.restore();
 }
 
-// Draws one COCO-SSD detection's box plus its (German) label. `det.bbox` is
+// Draws one YOLOv8 detection's box plus its (German) label. `det.bbox` is
 // in the video's native pixel size, so it's scaled into the canvas's own
 // (possibly different) pixel size first.
 function drawDetectionBox(det, vw, vh, w, h) {
   const [x, y, bw, bh] = det.bbox;
   const scaleX = w / vw, scaleY = h / vh;
   const bx = x * scaleX, by = y * scaleY, bwPx = bw * scaleX, bhPx = bh * scaleY;
-  const label = COCO_LABELS_DE[det.class] || det.class;
+  const label = det.label;
 
   camCtx.strokeStyle = "#2be2e2";
   camCtx.lineWidth = 2;
