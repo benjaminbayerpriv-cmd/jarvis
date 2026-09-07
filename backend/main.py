@@ -92,6 +92,10 @@ class CancelRequest(BaseModel):
     turn_id: str
 
 
+class SelectModelRequest(BaseModel):
+    model: str
+
+
 class ChatResponse(BaseModel):
     reply: str
 
@@ -274,6 +278,57 @@ def shutdown():
         os._exit(0)
 
     threading.Thread(target=_die, daemon=True).start()
+    return {"ok": True}
+
+
+@app.get("/transcript")
+def transcript():
+    """Scroll-back for the chat panel on open — backend/transcript.log is
+    already written on every turn regardless of whether this panel is ever
+    opened, so this just reads it back instead of the panel only ever
+    showing turns from the current page session."""
+    return {"turns": transcript_log.read_recent_turns()}
+
+
+@app.get("/models")
+def list_models():
+    try:
+        return {"models": llm_client.list_models(), "current": config.LM_STUDIO_MODEL}
+    except requests.RequestException as exc:
+        return {"models": [], "current": config.LM_STUDIO_MODEL, "error": str(exc)}
+
+
+@app.post("/models/select")
+def select_model(req: SelectModelRequest):
+    previous_model = config.LM_STUDIO_MODEL
+    config.set_model(req.model)
+    llm_client._note_active_target(config.LM_STUDIO_BASE_URL, req.model)
+
+    def _switch():
+        # A minimal completion request is what actually makes LM Studio's
+        # just-in-time loading load the new model — it won't otherwise
+        # happen until the next real chat turn. Only once that succeeds is
+        # the previous model explicitly ejected (see llm_client.eject_model)
+        # — JIT loading alone was observed to leave it resident in VRAM
+        # instead of reliably swapping it out, so without this, switching
+        # models left both loaded at the same time. Ejecting only after
+        # the new one is confirmed up avoids a gap with nothing loaded at
+        # all if the new model fails to load. All fire-and-forget in a
+        # background thread so this route returns immediately instead of
+        # blocking on however long the model takes to load.
+        try:
+            requests.post(
+                f"{config.LM_STUDIO_BASE_URL}/chat/completions",
+                json={"model": req.model, "messages": [{"role": "user", "content": "hi"}], "max_tokens": 1},
+                timeout=120,
+            ).raise_for_status()
+        except requests.RequestException as exc:
+            print(f"[model] Warmladen von {req.model} fehlgeschlagen: {exc}")
+            return
+        if previous_model and previous_model != req.model:
+            llm_client.eject_model(previous_model)
+
+    threading.Thread(target=_switch, daemon=True).start()
     return {"ok": True}
 
 

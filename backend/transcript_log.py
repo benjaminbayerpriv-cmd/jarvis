@@ -6,6 +6,7 @@ turn-by-turn record now goes here instead, on disk, next to the code."""
 from __future__ import annotations
 
 import datetime as dt
+import re
 import threading
 from pathlib import Path
 
@@ -19,6 +20,27 @@ def log_turn(user_text: str, assistant_text: str) -> None:
     with _lock:
         with LOG_FILE.open("a", encoding="utf-8") as f:
             f.write(entry)
+
+
+_TURN_RE = re.compile(r"^\[[^\]]+\] (DU|JARVIS): (.*)$")
+
+
+def read_recent_turns(limit: int = 40) -> list[dict]:
+    """The last `limit` DU/JARVIS lines, oldest first, for the chat panel's
+    scroll-back on open — PANEL[...] lines (tool calls, background
+    notifications) are internal debugging noise, not part of the
+    conversation, so they're skipped here rather than shown as turns."""
+    if not LOG_FILE.exists():
+        return []
+    with _lock:
+        lines = LOG_FILE.read_text(encoding="utf-8").splitlines()
+    turns = []
+    for line in lines:
+        m = _TURN_RE.match(line)
+        if m:
+            role, text = m.group(1), m.group(2)
+            turns.append({"role": "you" if role == "DU" else "jarvis", "text": text})
+    return turns[-limit:]
 
 
 def log_panel_event(kind: str, fields: dict) -> None:

@@ -1,3 +1,9 @@
+// Cmd+Shift+J on macOS, Ctrl+Shift+J elsewhere — matching
+// launcher/hotkey_listener.py's own platform check for the equivalent
+// global hotkey. Also decides whether the mic stream gets real echo
+// cancellation (see startBtn's handler and the VAD barge-in logic below).
+const IS_MAC = /Mac|iPod|iPhone|iPad/.test(navigator.platform);
+
 const stateLabel = document.getElementById("stateLabel");
 const hintEl = document.getElementById("hint");
 const logEl = document.getElementById("log");
@@ -34,7 +40,10 @@ chatToggleBtn.addEventListener("click", () => {
   chatToggleBtn.classList.toggle("open", !collapsed);
   chatToggleBtn.title = chatToggleBtn.ariaLabel =
     collapsed ? "Chatfenster ausklappen" : "Chatfenster einklappen";
-  if (!collapsed) inputEl.focus();
+  if (!collapsed) {
+    inputEl.focus();
+    loadTranscriptHistory();
+  }
 });
 
 let history = [];
@@ -579,7 +588,7 @@ requestAnimationFrame(meterLoop);
 
 /* ---------- conversation log ---------- */
 
-function addTurn(who, text) {
+function buildTurnEl(who, text) {
   const el = document.createElement("div");
   el.className = `turn ${who}`;
   const label = document.createElement("div");
@@ -589,9 +598,37 @@ function addTurn(who, text) {
   said.className = "said";
   said.textContent = text;
   el.append(label, said);
+  return el;
+}
+
+function addTurn(who, text) {
+  const el = buildTurnEl(who, text);
   logEl.appendChild(el);
   logEl.scrollTop = logEl.scrollHeight;
-  return said;
+  return el.querySelector(".said");
+}
+
+// Scroll-back: backend/transcript.log is written on every turn regardless
+// of whether this panel is ever opened (see backend/transcript_log.py), so
+// the first time it's opened this fetches that history instead of the
+// panel only ever showing turns from the current page session. Loaded
+// once per page load — historyLoaded is set before the fetch resolves so
+// two quick toggles can't both go fetch it.
+let historyLoaded = false;
+async function loadTranscriptHistory() {
+  if (historyLoaded) return;
+  historyLoaded = true;
+  try {
+    const r = await fetch("/transcript");
+    if (!r.ok) return;
+    const { turns } = await r.json();
+    const frag = document.createDocumentFragment();
+    for (const t of turns) frag.appendChild(buildTurnEl(t.role, t.text));
+    logEl.insertBefore(frag, logEl.firstChild);
+    logEl.scrollTop = logEl.scrollHeight;
+  } catch (_) {
+    historyLoaded = false; // transient failure — worth retrying next open
+  }
 }
 
 /* ---------- inline tool output (Claude Code-style verbose log) ---------- */
@@ -1097,21 +1134,16 @@ async function sendUtterance(chunks, startedAt) {
   }
 }
 
-/* ---------- VAD: drives recording; voice barge-in is off ---------- */
+/* ---------- VAD: drives recording, and (echo-cancelled) voice barge-in ---------- */
 //
-// This used to double as barge-in detection too, relying on the mic
-// stream's own echoCancellation to subtract Jarvis's speaker output back
-// out of the signal — so a level spike while Jarvis was talking reliably
-// meant a real person interrupting, not feedback. echoCancellation is off
-// now (see startBtn's handler — macOS's echo-cancelled "voice processing"
-// audio path was locking the mic exclusively for every other app on the
-// machine the whole time Jarvis was running), so that assumption no longer
-// holds: without it, Jarvis's own voice bleeding into a built-in mic reads
-// as a sustained level spike too, and would trigger this on every single
-// reply instead of on real interruptions. Voice barge-in is only ever
-// checked during "listening" below now; interrupting a reply in progress
-// still works, just via the hotkey (Cmd/Ctrl+Shift+J) instead of talking
-// over it.
+// Relies on the mic stream's own echoCancellation to subtract Jarvis's
+// speaker output back out of the signal — so a level spike while Jarvis is
+// talking reliably means a real person interrupting, not feedback. That's
+// only true where echoCancellation is actually on (see startBtn's handler:
+// off only on macOS, where it caused a worse problem — the mic getting
+// locked exclusively to Jarvis). On macOS a level spike while busy can't
+// be trusted, so barge-in there still only works via the hotkey
+// (Cmd/Ctrl+Shift+J) instead of talking over it.
 
 let vadAnalyser = null;
 let vadData = null;
@@ -1127,22 +1159,21 @@ function vadTick() {
   if (!vadAnalyser || muted) return;
   const rms = rmsFrom(vadAnalyser, vadData);
   const state = document.body.dataset.state;
+  const busy = state === "speaking" || state === "thinking";
+  // Barge-in while busy needs real echo cancellation to be trustworthy
+  // (see the comment above) — idle "listening" doesn't depend on that at
+  // all, since there's no Jarvis audio to confuse it with.
+  const listenable = state === "listening" || (busy && !IS_MAC);
 
-  // No voice-triggered barge-in while Jarvis is talking or thinking
-  // anymore — without echoCancellation, Jarvis's own voice bleeding into
-  // the mic would read as a level spike on every reply (see the comment
-  // above). Use the hotkey to interrupt instead.
-  if (state === "speaking") return;
-
-  if (state !== "listening") {
+  if (!listenable) {
     vadNoiseFloor = vadNoiseFloor * 0.98 + rms * 0.02;
     vadAbove = 0;
     if (isRecording()) cancelRecording();
     return;
   }
 
-  // Idle listening: use the same threshold logic to detect speech start,
-  // then track sustained silence to know when the utterance is over. The
+  // Speech-onset detection, shared between idle listening and (when
+  // echo-cancelled) barging in on a reply already in progress. The
   // VAD_SUSTAIN wait here is just a false-positive guard, not an audio-loss
   // window — beginUtterance() below seeds itself from the pre-roll buffer,
   // so whatever was said during this confirmation delay is not lost.
@@ -1152,6 +1183,11 @@ function vadTick() {
       vadAbove++;
       if (vadAbove >= VAD_SUSTAIN) {
         vadAbove = 0;
+        // A real interruption: silence Jarvis immediately rather than
+        // waiting for this new utterance to finish and get transcribed —
+        // handleUserMessage() would eventually call this too, but only
+        // once STT comes back, which'd mean talking over him for a while.
+        if (busy) interruptActiveTurn();
         beginUtterance();
       }
     } else {
@@ -1189,13 +1225,15 @@ function setMuted(next) {
 startBtn.addEventListener("click", async () => {
   if (micReady) return;
   try {
-    // echoCancellation off on purpose (see the VAD comment below) — with
+    // echoCancellation off only on macOS (see the VAD comment below) — with
     // built-in speakers + mic, macOS engages a "voice processing" audio
     // path for echo-cancelled input that claims the mic exclusively, so no
-    // other app can use it at all while Jarvis is running. Trading away
-    // voice barge-in for that was a deliberate call, not an oversight.
+    // other app can use it at all while Jarvis is running. Everywhere else
+    // that trade-off doesn't apply, so real AEC stays on — it's what lets
+    // vadTick tell a genuine interruption apart from Jarvis's own voice
+    // bleeding into the mic while it's talking.
     const stream = await navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation: false, noiseSuppression: true, autoGainControl: true },
+      audio: { echoCancellation: !IS_MAC, noiseSuppression: true, autoGainControl: true },
     });
     micReady = true;
     micStream = stream;
@@ -1213,12 +1251,69 @@ muteBtn.addEventListener("click", () => setMuted(!muted));
 
 stopBtn.addEventListener("click", () => { if (busy) interruptActiveTurn(); });
 
-// Cmd+Shift+J on macOS, Ctrl+Shift+J on Windows — matching
-// launcher/hotkey_listener.py's own platform check for the equivalent
-// global hotkey. e.metaKey is the Windows key on Windows, essentially
-// never pressed together with Shift+J, so without this branch the
-// in-page shortcut simply never fired there at all.
-const IS_MAC = /Mac|iPod|iPhone|iPad/.test(navigator.platform);
+/* ---------- model picker ---------- */
+//
+// Lets the model actually answering be switched from the running UI
+// instead of editing .env and restarting. Switching is a single click on
+// a model in the dropdown; the backend (see /models/select in
+// backend/main.py) both updates the live config and fires a minimal
+// completion request at LM Studio, which is what actually makes its own
+// just-in-time loading swap which model is resident in memory.
+
+const modelBtn = document.getElementById("modelBtn");
+const modelName = document.getElementById("modelName");
+const modelDropdown = document.getElementById("modelDropdown");
+let currentModel = null;
+
+function renderModelOptions(models) {
+  modelDropdown.innerHTML = "";
+  for (const id of models) {
+    const opt = document.createElement("button");
+    opt.type = "button";
+    opt.className = "model-option" + (id === currentModel ? " active" : "");
+    opt.textContent = id;
+    opt.title = id;
+    opt.addEventListener("click", () => selectModel(id));
+    modelDropdown.appendChild(opt);
+  }
+}
+
+async function refreshModels() {
+  try {
+    const r = await fetch("/models");
+    if (!r.ok) return;
+    const data = await r.json();
+    currentModel = data.current;
+    modelName.textContent = currentModel || "Modell";
+    modelBtn.title = currentModel || "Modell wechseln";
+    renderModelOptions(data.models || []);
+  } catch (_) {}
+}
+
+async function selectModel(id) {
+  modelDropdown.classList.add("collapsed");
+  modelBtn.classList.remove("open");
+  if (id === currentModel) return;
+  currentModel = id;
+  // Optimistic — the actual load happens in the background on LM Studio's
+  // side and can take a while for a large model; nothing here waits on it.
+  modelName.textContent = id;
+  try {
+    await fetch("/models/select", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: id }),
+    });
+  } catch (_) {}
+}
+
+modelBtn.addEventListener("click", () => {
+  const collapsed = modelDropdown.classList.toggle("collapsed");
+  modelBtn.classList.toggle("open", !collapsed);
+  if (!collapsed) refreshModels();
+});
+
+refreshModels(); // populate the button label on page load, not just on first open
 
 document.addEventListener("keydown", (e) => {
   const modifierPressed = IS_MAC ? e.metaKey : e.ctrlKey;
@@ -1253,264 +1348,3 @@ function connectWs() {
 
 connectWs();
 setState("idle");
-
-/* ---------- camera: hand tracking + naming the object near the hand ---------- */
-//
-// MediaPipe Hands finds the 21-point hand skeleton every frame (cheap
-// enough to run at full framerate); COCO-SSD's object detector is much
-// heavier, so it only runs on its own slower interval and its last result
-// is reused for every frame in between — objects near a hand don't
-// teleport, so a few hundred ms of staleness is invisible in practice.
-// Both models run entirely in the browser (no data leaves the machine),
-// same as the rest of Jarvis.
-
-const camVideo = document.getElementById("camVideo");
-const camCanvas = document.getElementById("camOverlay");
-const camCtx = camCanvas.getContext("2d");
-const camHint = document.getElementById("camHint");
-const camColumn = document.getElementById("camColumn");
-const camToggleBtn = document.getElementById("camToggleBtn");
-
-// Collapsed by default (see index.html) — expanding starts the camera
-// right away (startCamera no-ops if already running), collapsing stops
-// it outright (see stopCamera) instead of leaving it running behind a
-// hidden panel.
-camToggleBtn.addEventListener("click", () => {
-  const collapsed = camColumn.classList.toggle("collapsed");
-  document.body.classList.toggle("cam-expanded", !collapsed);
-  // .open drives the camera icon's slash (see style.css) — plain while
-  // expanded, crossed out while collapsed.
-  camToggleBtn.classList.toggle("open", !collapsed);
-  camToggleBtn.title = camToggleBtn.ariaLabel =
-    collapsed ? "Kamerafenster ausklappen" : "Kamerafenster einklappen";
-  if (collapsed) {
-    stopCamera();
-  } else {
-    resizeCamCanvas();
-    startCamera();
-  }
-});
-
-// MediaPipe's 21 hand landmarks, connected into the standard skeleton —
-// index numbering per the official hand-landmark model (0 = wrist). Used
-// for both the left and right hand.
-const HAND_CONNECTIONS = [
-  [0, 1], [1, 2], [2, 3], [3, 4],
-  [0, 5], [5, 6], [6, 7], [7, 8],
-  [5, 9], [9, 10], [10, 11], [11, 12],
-  [9, 13], [13, 14], [14, 15], [15, 16],
-  [13, 17], [17, 18], [18, 19], [19, 20],
-  [0, 17],
-];
-
-// The 33-point BlazePose body skeleton, restricted to shoulders/arms/hips/
-// legs/feet only — indices 0-10 (nose, eyes, ears, mouth) are the face
-// landmarks and are deliberately left out of both this list and anywhere
-// it's drawn, since a face overlay was never wanted here.
-const POSE_CONNECTIONS = [
-  [11, 12],
-  [11, 13], [13, 15],
-  [12, 14], [14, 16],
-  [11, 23], [12, 24], [23, 24],
-  [23, 25], [25, 27],
-  [24, 26], [26, 28],
-  [27, 29], [29, 31], [27, 31],
-  [28, 30], [30, 32], [28, 32],
-];
-
-let camStream = null;
-let camLoopRunning = false;
-let latestPose = null;      // {x,y,z}[33] normalized, or null
-let latestLeftHand = null;  // {x,y,z}[21] normalized, or null
-let latestRightHand = null; // {x,y,z}[21] normalized, or null
-
-// Body/hand tracking (MediaPipe Tasks HolisticLandmarker) in its own
-// worker — see the long comment at the top of tracking-worker.js for why
-// this has to be a classic worker (no { type: "module" }) despite the
-// underlying package being ESM-only upstream.
-let trackingWorker = null;
-let trackingReady = false;
-let trackingReadyResolve;
-const trackingReadyPromise = new Promise((resolve) => { trackingReadyResolve = resolve; });
-let trackingRequestId = 0;
-const pendingTrackingResolvers = new Map();
-let trackingBusy = false;
-let trackingFrameCount = 0;
-let trackingMsTotal = 0;
-
-function ensureTrackingWorker() {
-  if (trackingWorker) return;
-  trackingWorker = new Worker("/static/tracking-worker.js");
-  trackingWorker.onmessage = (e) => {
-    const { type, id } = e.data;
-    if (type === "ready") {
-      trackingReady = true;
-      // GPU vs. CPU delegate is a 10-20x speed difference for this model —
-      // if tracking feels slow/laggy, check this line first.
-      console.log(`[tracking-worker] ready, delegate: ${e.data.delegate}`);
-      trackingReadyResolve();
-      return;
-    }
-    const resolve = pendingTrackingResolvers.get(id);
-    if (!resolve) return;
-    pendingTrackingResolvers.delete(id);
-    if (type === "error") {
-      console.error("[tracking-worker]", e.data.error);
-      resolve(null);
-    } else {
-      trackingFrameCount++;
-      trackingMsTotal += e.data.ms || 0;
-      if (trackingFrameCount % 30 === 0) {
-        console.log(
-          `[tracking-worker] avg ${(trackingMsTotal / trackingFrameCount).toFixed(1)}ms/frame ` +
-          `over ${trackingFrameCount} frames (last: ${(e.data.ms || 0).toFixed(1)}ms)`
-        );
-      }
-      resolve(e.data);
-    }
-  };
-}
-
-function resizeCamCanvas() {
-  const rect = camCanvas.getBoundingClientRect();
-  const dpr = window.devicePixelRatio || 1;
-  camCanvas.width = Math.max(1, rect.width * dpr);
-  camCanvas.height = Math.max(1, rect.height * dpr);
-  camCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
-}
-window.addEventListener("resize", resizeCamCanvas);
-
-async function startCamera() {
-  if (camStream) return;
-  camHint.textContent = "Starte Kamera …";
-  try {
-    camStream = await navigator.mediaDevices.getUserMedia({
-      // frameRate is a request, not a guarantee — the camera/browser still
-      // picks whatever it can actually sustain — but leaving it unset
-      // tends to default lower than the hardware can really do.
-      video: { width: 1280, height: 720, frameRate: { ideal: 60 } },
-    });
-    camVideo.srcObject = camStream;
-    await camVideo.play();
-    resizeCamCanvas();
-    camHint.textContent = "Lade Modelle …";
-
-    ensureTrackingWorker();
-    await trackingReadyPromise;
-
-    camHint.textContent = "";
-    camLoopRunning = true;
-    requestAnimationFrame(drawLoop);
-    trackingLoop();
-  } catch (err) {
-    console.error(err);
-    camHint.textContent = "Kamera abgelehnt oder Modelle nicht ladbar.";
-    camStream = null;
-  }
-}
-
-// Called when the camera column collapses — releases the actual hardware
-// (a stopped MediaStreamTrack turns off the OS-level camera light, not
-// just this tab's use of it) instead of leaving it running invisibly.
-function stopCamera() {
-  if (!camStream) return;
-  camLoopRunning = false;
-  camStream.getTracks().forEach((track) => track.stop());
-  camStream = null;
-  camVideo.srcObject = null;
-  latestPose = null;
-  latestLeftHand = null;
-  latestRightHand = null;
-  camHint.textContent = "";
-}
-
-// Drawing the video frame is its own loop, uncoupled from hand tracking —
-// it redraws every rAF tick (the display's own full refresh rate) no
-// matter how slow MediaPipe is running, instead of waiting on it each
-// frame like the old single combined loop did. The webcam feed itself
-// should never look choppier than the model behind it can keep up with.
-function drawLoop() {
-  if (!camLoopRunning) return;
-  drawCamOverlay();
-  requestAnimationFrame(drawLoop);
-}
-
-// Body/hand tracking self-throttles to whatever rate the worker can
-// actually sustain: a new request only starts once the previous one's
-// response has arrived, so on a slow machine this naturally runs slower
-// while drawLoop above keeps drawing the video at the full 30/60fps the
-// camera and display can do — the skeleton overlay just updates less
-// often, it never holds the video itself back (and, since this runs in a
-// Worker, it doesn't hold the rest of the page's main thread back either).
-function trackingLoop() {
-  if (!camLoopRunning) return;
-  if (trackingReady && !trackingBusy && camVideo.readyState >= 2) {
-    trackingBusy = true;
-    detectTracking().finally(() => {
-      trackingBusy = false;
-    });
-  }
-  setTimeout(trackingLoop, 15);
-}
-
-async function detectTracking() {
-  if (!camVideo.videoWidth || !camVideo.videoHeight) return;
-  const bitmap = await createImageBitmap(camVideo);
-  const id = ++trackingRequestId;
-  const data = await new Promise((resolve) => {
-    pendingTrackingResolvers.set(id, resolve);
-    trackingWorker.postMessage(
-      { type: "detect", id, bitmap, timestamp: Math.trunc(performance.now()) },
-      [bitmap]
-    );
-  });
-  latestPose = data && data.pose;
-  latestLeftHand = data && data.leftHand;
-  latestRightHand = data && data.rightHand;
-}
-
-// `skipBelow` drops landmark indices below it entirely (dots included, not
-// just the connection lines) — used to keep the pose skeleton's face
-// points (indices 0-10) off screen, since a face overlay was never wanted.
-function drawSkeleton(points, connections, w, h, skipBelow = 0) {
-  camCtx.strokeStyle = "#2be2e2";
-  camCtx.fillStyle = "#2be2e2";
-  camCtx.lineWidth = 2;
-  for (const [a, b] of connections) {
-    const pa = points[a], pb = points[b];
-    if (!pa || !pb) continue;
-    camCtx.beginPath();
-    camCtx.moveTo(pa.x * w, pa.y * h);
-    camCtx.lineTo(pb.x * w, pb.y * h);
-    camCtx.stroke();
-  }
-  for (let i = skipBelow; i < points.length; i++) {
-    const p = points[i];
-    camCtx.beginPath();
-    camCtx.arc(p.x * w, p.y * h, 3, 0, Math.PI * 2);
-    camCtx.fill();
-  }
-}
-
-// Everything drawn on the canvas — video, body and both hand skeletons —
-// shares one mirrored transform (front-camera convention) so an arm
-// reaching from the right of the *frame* still appears to reach from the
-// right on screen, matching what looking at yourself in a mirror feels
-// like.
-function drawCamOverlay() {
-  const w = camCanvas.clientWidth, h = camCanvas.clientHeight;
-  if (!w || !h || !camVideo.videoWidth) return;
-
-  camCtx.save();
-  camCtx.clearRect(0, 0, w, h);
-  camCtx.translate(w, 0);
-  camCtx.scale(-1, 1);
-  camCtx.drawImage(camVideo, 0, 0, w, h);
-
-  if (latestPose) drawSkeleton(latestPose, POSE_CONNECTIONS, w, h, 11);
-  if (latestLeftHand) drawSkeleton(latestLeftHand, HAND_CONNECTIONS, w, h);
-  if (latestRightHand) drawSkeleton(latestRightHand, HAND_CONNECTIONS, w, h);
-
-  camCtx.restore();
-}
-
