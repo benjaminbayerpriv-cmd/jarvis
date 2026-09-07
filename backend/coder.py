@@ -88,7 +88,7 @@ def _summarize_result(path: Path) -> None:
         f = path / candidate
         if f.exists() and f.suffix in _CODE_SUFFIXES:
             try:
-                text = f.read_text(errors="replace")[:6000]
+                text = f.read_text(encoding="utf-8", errors="replace")[:6000]
                 panel.push("code", title=candidate, language=f.suffix.lstrip("."), text=text)
             except Exception:
                 pass
@@ -116,7 +116,13 @@ def _run_build(task_id: str, path: Path, description: str) -> None:
         try:
             target = path / rel_path
             target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(content)
+            # Path.write_text() defaults to the OS locale's preferred
+            # encoding (cp1252 on German Windows) rather than UTF-8 — an
+            # AI-generated file containing anything outside that (an emoji
+            # or checkmark in a comment/README is common) would raise
+            # UnicodeEncodeError and silently fail to write, one file at a
+            # time, with nothing but a generic "konnte X nicht schreiben".
+            target.write_text(content, encoding="utf-8")
             written.append(rel_path)
         except Exception as exc:
             panel.push("notify", text=f"Konnte '{rel_path}' nicht schreiben: {exc}")

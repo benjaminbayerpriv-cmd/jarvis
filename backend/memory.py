@@ -54,7 +54,13 @@ def add_task(text: str, status: str = "offen") -> str:
     stamp = dt.datetime.now().strftime("%Y-%m-%d %H:%M")
     marker = "x" if status == "erledigt" else " "
     with _lock, TASKS.open("a", encoding="utf-8") as handle:
-        handle.write(f"- [{marker}] {text}  \\n  status:: {status}  \\n  erstellt:: {stamp}\n")
+        # A literal "\n" (two characters) was being written here instead of
+        # an actual line break — the trailing double-space + real newline is
+        # Markdown's soft-break convention, meant to keep each Obsidian
+        # property (status::, erstellt::) on its own visual line within the
+        # same list item. With a literal backslash-n, every task instead
+        # showed up as one line with visible "\n" text right in the note.
+        handle.write(f"- [{marker}] {text}  \n  status:: {status}  \n  erstellt:: {stamp}\n")
     return f"Aufgabe als {status} in Obsidian gespeichert."
 
 

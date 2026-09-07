@@ -732,7 +732,11 @@ def _write_file(path: str, content: str) -> str:
     if not str(target):
         return "Welche Datei soll ich schreiben?"
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(content or "")
+    # Same cp1252-vs-UTF-8 trap as elsewhere in this file (see coder.py):
+    # without an explicit encoding, any character outside the Windows
+    # locale's codepage — an emoji, a checkmark, non-Latin text — raises
+    # UnicodeEncodeError instead of writing.
+    target.write_text(content or "", encoding="utf-8")
     return f"Datei geschrieben: {target} ({len(content or '')} Zeichen)."
 
 

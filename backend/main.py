@@ -116,7 +116,12 @@ _BUILD = str(int(time.time()))
 
 @app.get("/")
 def serve_index():
-    html = (FRONTEND_DIR / "index.html").read_text()
+    # Explicit encoding matters here: Path.read_text() defaults to the OS
+    # locale's preferred encoding, which is cp1252 on German Windows, not
+    # UTF-8 — the file itself is UTF-8, so without this every special
+    # character in it (observed live: the "≡" debug-toggle symbol) gets
+    # silently mangled into mojibake before it's ever served to the browser.
+    html = (FRONTEND_DIR / "index.html").read_text(encoding="utf-8")
     html = html.replace("/static/style.css", f"/static/style.css?v={_BUILD}")
     html = html.replace("/static/app.js", f"/static/app.js?v={_BUILD}")
     return HTMLResponse(html, headers=_NO_CACHE)

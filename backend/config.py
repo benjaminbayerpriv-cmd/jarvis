@@ -54,4 +54,4 @@ CONFIG_FILE = ROOT_DIR / "config.json"
 def load_config() -> dict:
     if not CONFIG_FILE.exists():
         return {}
-    return json.loads(CONFIG_FILE.read_text())
+    return json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
