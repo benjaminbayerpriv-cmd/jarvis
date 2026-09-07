@@ -93,6 +93,21 @@ der Hotkey hier `Ctrl+Shift+J` — der Listener erkennt die Plattform selbst
 und wählt automatisch die richtige Kombination. `start_jarvis_windows.cmd`
 startet Server und Hotkey zusammen.
 
+### Als startbare .exe verpacken (optional, Windows)
+
+Statt jedes Mal ein Terminal zu öffnen, lässt sich der Server als
+Doppelklick-App verpacken: `launcher\build_exe.bat` einmal ausführen (nach
+Schritt 2, venv muss stehen). Das erzeugt `launcher\dist\Jarvis.exe` — ein
+schlanker Launcher, der den bestehenden `.venv`-Server startet und
+automatisch den Browser öffnet, sobald er bereit ist. Kein Terminal-Fenster,
+bei einem Fehlschlag kommt eine Fehlermeldung statt eines stillen Abbruchs.
+
+Das ist bewusst kein vollständiges PyInstaller-Freeze des ganzen Backends —
+`faster-whisper`/`ctranslate2` und Supertonic bringen native Bibliotheken
+mit, die sich dabei erfahrungsgemäß schlecht einfrieren lassen. Der
+Launcher ruft stattdessen einfach das bereits funktionierende `.venv` auf,
+genau wie `start_jarvis_windows.cmd`.
+
 ## 5. Chrome-Browser-Agent einrichten (optional, macOS und Windows)
 
 1. In Chrome `chrome://extensions` öffnen und den **Entwicklermodus** aktivieren.
