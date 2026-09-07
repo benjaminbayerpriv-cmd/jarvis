@@ -977,6 +977,17 @@ def stream_reply(user_message: str, history: list | None = None):
     # claim an action was performed when nothing was.
     tools_used: list[str] = []
 
+    def _vet(text: str) -> str:
+        """Swap a sentence for an honest one if it fails the same checks
+        the old end-of-turn gate used to run on the whole reply at once —
+        now run per sentence so a lone false claim doesn't hold up (or
+        taint) everything spoken around it."""
+        if not tools_used and (_claims_action(text) or _looks_like_tool_text(text)):
+            return "Das habe ich nicht ausgeführt."
+        if _is_repetition_loop(text):
+            return "Da ist mir gerade etwas verrutscht, frag bitte nochmal."
+        return text
+
     for _ in range(MAX_TOOL_ROUNDS):
         # A round is retried on its own (outside the tool-round budget above)
         # when the stream comes back corrupted — see _CORRUPT_PREFIX_RE.
@@ -1037,9 +1048,14 @@ def stream_reply(user_message: str, history: list | None = None):
                                     break
                                 clean = _strip_think_tags(s)
                                 if clean:
-                                    # Hold prose until the full turn is
-                                    # verified; never speak a fake success.
+                                    # Spoken the moment it's ready, not held
+                                    # until the whole reply is in — the
+                                    # difference between hearing the first
+                                    # words in ~1s and sitting through the
+                                    # model's full 15-20s reply in silence.
+                                    clean = _vet(clean)
                                     full_text_parts.append(clean)
+                                    yield {"type": "sentence", "text": clean}
 
                 for tc in delta.get("tool_calls") or []:
                     idx = tc.get("index", 0)
@@ -1176,32 +1192,32 @@ def stream_reply(user_message: str, history: list | None = None):
             buffer = ""
         elif suspect:
             # Suspected leaked call but not recoverable — flush it rather
-            # than lose it.
-            leftover_all = _strip_think_tags(content_acc)
+            # than lose it. Nothing from this reply went through the
+            # per-sentence loop above (that only runs once suspect is
+            # confirmed False), so this is genuinely new, unspoken text.
+            leftover_all = _vet(_strip_think_tags(content_acc))
             if leftover_all:
                 full_text_parts.append(leftover_all)
+                yield {"type": "sentence", "text": leftover_all}
             buffer = ""
 
-        leftover = _strip_think_tags(buffer)
+        # Whatever never formed a "complete" sentence (no trailing
+        # punctuation+space before the stream ended) didn't go through the
+        # per-sentence loop either — speak it now instead of dropping it.
+        leftover = _vet(_strip_think_tags(buffer))
         if leftover:
             full_text_parts.append(leftover)
+            yield {"type": "sentence", "text": leftover}
 
         if not full_text_parts and last_tool_result:
+            last_tool_result = _vet(last_tool_result)
             full_text_parts.append(last_tool_result)
+            yield {"type": "sentence", "text": last_tool_result}
         elif not full_text_parts:
             yield {"type": "sentence", "text": "Alles klar."}
             full_text_parts.append("Alles klar.")
 
-        # A tool-free success claim is never shown. The text stayed buffered,
-        # so the user hears only the truthful state.
-        spoken = " ".join(full_text_parts)
-        if not tools_used and (_claims_action(spoken) or _looks_like_tool_text(spoken)):
-            spoken = "Das habe ich nicht ausgeführt."
-        elif _is_repetition_loop(spoken):
-            spoken = "Da ist mir gerade etwas verrutscht, frag bitte nochmal."
-
-        yield {"type": "sentence", "text": spoken}
-        yield {"type": "done", "full_text": spoken}
+        yield {"type": "done", "full_text": " ".join(full_text_parts)}
         return
 
     # Real side effects (a file written, a command run) may already have
