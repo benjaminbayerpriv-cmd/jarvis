@@ -34,8 +34,8 @@ URL = "http://127.0.0.1:8000"
 # The floating widget's fixed size — no more expand/collapse case now that
 # there's no debug/chat sidebar to grow into (see frontend/app.js and
 # backend/transcript_log.py).
-WIDGET_WIDTH = 340
-WIDGET_HEIGHT = 430
+WIDGET_WIDTH = 520
+WIDGET_HEIGHT = 660
 # Always the same corner on launch — a floating widget with no title bar
 # has no natural "restore position" affordance, so rather than trusting
 # whatever the OS/backend defaults to (centered, or wherever it last was),
