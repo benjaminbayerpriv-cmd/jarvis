@@ -1314,7 +1314,14 @@ async function startCamera() {
       });
     }
     if (!cocoModel) {
-      cocoModel = await cocoSsd.load({ base: "lite_mobilenet_v2" });
+      // mobilenet_v2 over the lighter lite_mobilenet_v2 — noticeably more
+      // accurate at recognizing what's actually in frame, still fast
+      // enough to run on the slower interval this checks on (see
+      // runObjectDetection / setInterval below). Still limited to
+      // COCO's fixed 80 classes either way — no COCO-SSD accuracy tuning
+      // fixes that, only a different (much heavier, not browser-viable —
+      // see SAM 3, ~3.4GB) open-vocabulary model would.
+      cocoModel = await cocoSsd.load({ base: "mobilenet_v2" });
     }
 
     camHint.textContent = "";
