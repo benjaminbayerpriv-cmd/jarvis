@@ -280,9 +280,35 @@ def _get_supertonic() -> tuple[TTS, object]:
     return _supertonic_tts, _supertonic_style
 
 
+def _sanitize_for_supertonic(text: str, tts: TTS) -> str:
+    """Drop any character outside Supertonic's ~8000-character supported
+    set instead of letting synthesize() raise ValueError over it.
+
+    Observed live: a lone U+FFFD replacement character appearing mid-word
+    in ordinary German text, which crashed Supertonic entirely for that
+    whole reply and cascaded into ElevenLabs (also broken — no real key
+    configured) and finally the noticeably worse Windows SAPI voice. Most
+    plausible source is upstream: LM Studio's streaming token output can
+    split a multi-byte UTF-8 character (ü/ö/ä/ß are all multi-byte) across
+    two token chunks, and if the inference server decodes each chunk's
+    bytes independently rather than buffering incomplete sequences, the
+    orphaned half becomes U+FFFD before it ever reaches us. Nothing on
+    this end can fix that at the source, but one garbled character
+    shouldn't take down the whole sentence's voice quality — stripping it
+    keeps everything else intact instead.
+    """
+    is_valid, unsupported = tts.model.text_processor.validate_text(text)
+    if not is_valid:
+        print(f"[tts] Entferne nicht unterstützte Zeichen vor der Synthese: {unsupported}")
+        for ch in unsupported:
+            text = text.replace(ch, "")
+    return text
+
+
 def _supertonic_say(text: str) -> bytes:
     text = _expand_numbers_for_speech(text)
     tts, style = _get_supertonic()
+    text = _sanitize_for_supertonic(text, tts)
     # FastAPI runs sync endpoints in a thread pool, and it's undocumented
     # whether one Supertonic engine tolerates concurrent synthesize() calls
     # from different threads — e.g. the startup filler-generation pass
