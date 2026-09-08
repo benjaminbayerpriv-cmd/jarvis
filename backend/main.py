@@ -4,6 +4,7 @@ import asyncio
 import base64
 import json
 import os
+import re
 import threading
 import time
 from pathlib import Path
@@ -92,6 +93,7 @@ class ChatRequest(BaseModel):
     history: list[dict] | None = None
     turn_id: str | None = None
     conversation_id: str | None = None
+    mode: str = "chat"  # "chat" | "code" — Chat|Code-Umschalter im Frontend
 
 
 class CancelRequest(BaseModel):
@@ -131,17 +133,60 @@ _NO_CACHE = {"Cache-Control": "no-store, must-revalidate"}
 _BUILD = str(int(time.time()))
 
 
+def _freeze_snapshot(html: str) -> str:
+    """Freeze the claude.ai SSR DOM so React never re-hydrates.
+
+    website.html is a server-rendered (SSR) snapshot of the *logged-in*
+    Anthropic client. If the client bundles are allowed to boot they
+    immediately re-run the auth gate, find no session, and the router
+    redirects to /login — which this offline server has no route for, so the
+    user just sees a bare 404 JSON instead of the UI. Stripping every <script>
+    keeps the full SSR markup (sidebar, conversation list, composer) as static
+    HTML+CSS: the exact claude.ai look, fully offline, no redirect.
+    """
+    html = re.sub(r"<script\b[^>]*>(?:(?!</script>).)*?</script>\s*", "", html, flags=re.DOTALL | re.IGNORECASE)
+    html = re.sub(r"<script\b[^>]*/>", "", html, flags=re.IGNORECASE)
+    return html
+
+
 @app.get("/")
 def serve_index():
+    # The start page is the real claude.ai UI: the SSR snapshot of the
+    # Anthropic web client (frontend/claude.html), with every Anthropic asset
+    # localized under /static/vendor/ap/ and the client scripts stripped so the
+    # logged-in interface renders as static HTML+CSS instead of bouncing to a
+    # /login 404 (see _freeze_snapshot). The previous JARVIS UI still lives at
+    # frontend/index.html (with its own style.css/app.js) and remains reachable
+    # via the /static/* mount for reference, but is no longer served on /.
+    #
     # Explicit encoding matters here: Path.read_text() defaults to the OS
     # locale's preferred encoding, which is cp1252 on German Windows, not
     # UTF-8 — the file itself is UTF-8, so without this every special
     # character in it (observed live: the "≡" debug-toggle symbol) gets
     # silently mangled into mojibake before it's ever served to the browser.
-    html = (FRONTEND_DIR / "index.html").read_text(encoding="utf-8")
-    html = html.replace("/static/style.css", f"/static/style.css?v={_BUILD}")
-    html = html.replace("/static/app.js", f"/static/app.js?v={_BUILD}")
+    html = (FRONTEND_DIR / "claude.html").read_text(encoding="utf-8")
+    html = _freeze_snapshot(html)
+    # The frozen snapshot must not let the Anthropic client boot (it would
+    # bounce to a /login 404). It also must not be completely static: inject
+    # our own functional layer, which drives the same 1:1 claude.ai DOM.
+    # Einen Build-Stempel an die Skript-URL hängen: claude-app.js wird ständig
+    # umgebaut, und no-store allein hilft nicht gegen ein bereits zuvor
+    # gecachtes Skript — ohne ?v= bleibt ein alter Browser hartnäckig bei der
+    # alten, kollabierten Version hängen und der User sähe weiter die tote UI.
+    html = html.replace("</body>", f'    <script src="/static/claude-app.js?v={_BUILD}"></script>\n  </body>')
     return HTMLResponse(html, headers=_NO_CACHE)
+
+
+@app.get("/favicon.ico")
+def favicon():
+    """Serve the real Claude icon at the browser's default probe path so the
+    frozen snapshot is completely free of 404s (the SSR markup links its
+    shortcut icon to /favicon.ico, and Chrome probes it regardless of the
+    rel="icon" SVG it also links)."""
+    icon = FRONTEND_DIR / "vendor" / "ap" / "cd02a42d9-Vq_H3mgS.svg"
+    if icon.exists():
+        return Response(icon.read_bytes(), media_type="image/svg+xml")
+    return Response(status_code=204)
 
 
 class NoCacheStatic(StaticFiles):
@@ -157,7 +202,7 @@ app.mount("/static", NoCacheStatic(directory=FRONTEND_DIR), name="static")
 @app.post("/chat", response_model=ChatResponse)
 def chat(req: ChatRequest):
     try:
-        reply = llm_client.get_reply(req.message, req.history)
+        reply = llm_client.get_reply(req.message, req.history, req.mode)
     except (requests.RequestException, llm_client.ModelError):
         reply = (
             "Ich komm gerade nicht an mein Sprachmodell ran. "
@@ -236,30 +281,35 @@ def chat_stream(req: ChatRequest):
     def generate():
         full_text = ""
         try:
-            for event in llm_client.stream_reply(req.message, req.history, turn_id=req.turn_id):
+            for event in llm_client.stream_reply(req.message, req.history, turn_id=req.turn_id, mode=req.mode):
                 if event["type"] == "sentence":
                     text = event["text"]
-                    # Speech is optional; the words are not. If synthesis
-                    # fails the sentence still goes out silently, because
-                    # dropping it made Jarvis look completely dead.
-                    audio_b64 = ""
-                    mime = "audio/mpeg"
+                    # Text wird SOFORT geschickt — TTS-Synthese dauert real
+                    # Sekunden, und der Nutzer soll nicht auf die Stimme warten,
+                    # nur um überhaupt etwas zu sehen. Die Worte gehen zuerst
+                    # raus (leeres audio), der Klang folgt als eigener
+                    # "audio"-Event, sobald er fertig ist. Schlägt die
+                    # Synthese fehl, ist trotzdem der Text da (nie den Satz
+                    # verschlucken, nur den Ton).
+                    yield json.dumps({"type": "sentence", "text": text, "audio": ""}) + "\n"
                     try:
                         audio = tts.synthesize(text)
                         audio_b64 = base64.b64encode(audio).decode("ascii")
                         _, mime = tts.ENGINE_MEDIA.get(tts.VoiceInfo.engine, ("mp3", "audio/mpeg"))
-                    except Exception as exc:  # noqa: BLE001 - never mute the reply
+                        yield json.dumps({"type": "audio", "audio": audio_b64, "mime": mime}) + "\n"
+                    except Exception as exc:  # noqa: BLE001 - nie nur-wortlos
                         print(f"[tts] Sprachausgabe fehlgeschlagen: {exc}")
-                    yield json.dumps(
-                        {"type": "sentence", "text": text, "audio": audio_b64, "mime": mime}
-                    ) + "\n"
+                elif event["type"] == "partial":
+                    # Zwischentext des noch unfertigen Satzes — sofort weiter,
+                    # damit der Nutzer live mitlesen kann. Kein Audio, nur Text.
+                    yield json.dumps({"type": "partial", "text": event["text"]}) + "\n"
                 elif event["type"] == "done":
                     full_text = event["full_text"]
                     yield json.dumps(
                         {"type": "done", "full_text": event["full_text"], "conversation_id": conv_id}
                     ) + "\n"
             if full_text:
-                transcript_log.log_turn(req.message, full_text)
+                transcript_log.log_turn(req.message, full_text, req.mode)
                 conv = conversations.append_turn(conv_id, req.message, full_text)
                 if conv.get("title") is None and len(conv.get("turns", [])) == 2:
                     _generate_title_in_background(req.message, full_text)
@@ -334,7 +384,14 @@ def get_conversation(conv_id: str):
 @app.get("/models")
 def list_models():
     try:
-        return {"models": llm_client.list_models(), "current": config.LM_STUDIO_MODEL}
+        model_ids = llm_client.list_models()
+        caps = llm_client.list_model_capabilities()
+        return {
+            "models": model_ids,
+            "current": config.LM_STUDIO_MODEL,
+            "model_caps": caps,
+            "current_caps": caps.get(config.LM_STUDIO_MODEL, []),
+        }
     except requests.RequestException as exc:
         return {"models": [], "current": config.LM_STUDIO_MODEL, "error": str(exc)}
 

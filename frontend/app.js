@@ -7,10 +7,20 @@ const IS_MAC = /Mac|iPod|iPhone|iPad/.test(navigator.platform);
 const stateLabel = document.getElementById("stateLabel");
 const hintEl = document.getElementById("hint");
 const logEl = document.getElementById("log");
-const startBtn = document.getElementById("startBtn");
+const inputEl = document.getElementById("input");
 const muteBtn = document.getElementById("muteBtn");
 const stopBtn = document.getElementById("stopBtn");
 const quitBtn = document.getElementById("quitBtn");
+const composerBar = document.getElementById("composerBar");
+const greetEl = document.getElementById("greeting");
+const greetTextEl = document.getElementById("greetingText");
+const attachBtn = document.getElementById("attachBtn");
+const fileInput = document.getElementById("fileInput");
+const dictateBtn = document.getElementById("dictateBtn");
+const speechSendBtn = document.getElementById("speechSendBtn");
+const modeSwitch = document.getElementById("modeSwitch");
+const modeOpts = [...document.querySelectorAll(".mode-opt")];
+const modelCapBadge = document.getElementById("modelCapBadge");
 
 // Ends the whole backend process (see /shutdown in backend/main.py), not
 // just this browser tab — window.close() is a best-effort extra for the
@@ -220,6 +230,17 @@ let muted = false;
 let busy = false;
 let fillerUrls = [];
 
+// Two capture modes share one mic stream and one VAD loop (see ensureMic).
+// speechMode  — Jarvis's continuous voice mode: orb up, VAD auto-sends via
+//               handleUserMessage (the original startBtn behaviour).
+// dictationActive — a one-shot capture in chat mode: VAD inserts the
+//               transcribed text into #input instead of sending it.
+let speechMode = false;
+let dictationActive = false;
+let appMode = "chat";       // Chat | Code — visual only for now, no behaviour
+let pendingFiles = [];
+let modelCaps = {};         // model id -> capability tags, e.g. ["vision"]
+
 let activeTurn = null;
 let turnCounter = 0;
 
@@ -236,8 +257,8 @@ fetch("/fillers")
 /* ---------- state ---------- */
 
 const HINTS = {
-  idle: "Mikrofon freigeben, dann hört Jarvis dauerhaft zu.",
-  listening: "Hört zu — sprich einfach, oder tippe.",
+  idle: "Tippe eine Nachricht oder nutze das Mikrofon.",
+  listening: "Hört zu — sprich einfach.",
   thinking: "Arbeitet.",
   speaking: "Sprich dazwischen, um zu unterbrechen.",
   off: "Mikro ist aus. Tippen geht weiter.",
@@ -257,13 +278,43 @@ function setState(state) {
   hintEl.textContent = HINTS[state] || "";
 }
 
+// Drives the whole view: the greeting vs the orb depends on speechMode, and
+// the mute/stop buttons on micReady/busy. Idempotent and cheap — call it
+// whenever any of those change. renderOrb() early-returns on a 0×0 canvas, so
+// a hidden orb costs nothing while it's off (app.js:365).
+function updateView() {
+  document.body.dataset.view = speechMode ? "speech" : "chat";
+  greetEl.hidden = speechMode;
+  muteBtn.hidden = !(micReady && speechMode);
+  stopBtn.hidden = !busy;
+  dictateBtn.hidden = speechMode; // dictation is a chat-mode gesture only
+  dictateBtn.classList.toggle("active", dictationActive);
+  // resizeOrbCanvas() only runs on window resize/load. Since the orb is now
+  // display:none in the default chat view, that load-time call measured a 0×0
+  // rect and left the buffer at 1×1 — so when speech mode flips the orb to
+  // display:block, renderOrb keeps drawing into that 1×1 buffer and the orb
+  // renders blank. Re-measure here so a freshly shown orb gets a real buffer.
+  resizeOrbCanvas();
+}
+
+function renderGreeting() {
+  const h = new Date().getHours();
+  greetTextEl.textContent =
+    h >= 5 && h < 11 ? "Morgen, Chef" :
+    h >= 11 && h < 15 ? "Mittag, Chef" :
+    h >= 15 && h < 22 ? "Abend, Chef" : "Mondscheingespräch";
+}
+
 function restingState() {
   if (!micReady) return "idle";
+  if (dictationActive) return "listening"; // capturing a dictation right now
+  if (!speechMode) return "idle";         // mic granted ≠ always listening
   return muted ? "off" : "listening";
 }
 
 function settle() {
   if (!busy) setState(restingState());
+  updateView();
 }
 
 /* ---------- the orb: a voice-reactive 3D wireframe mesh ---------- */
@@ -1061,6 +1112,7 @@ async function handleUserMessage(text) {
   activeTurn = turn;
   busy = true;
   setState("thinking");
+  updateView(); // reveal the stop button while busy
 
   turn.fillerTimer = setTimeout(() => playFiller(turn), FILLER_DELAY_MS);
 
@@ -1291,7 +1343,13 @@ async function sendUtterance(chunks, startedAt) {
     if (!resp.ok) return;
     const data = await resp.json();
     const text = (data.text || "").trim();
-    if (text) handleUserMessage(text);
+    if (!text) return;
+    if (speechMode) {
+      handleUserMessage(text);            // voice mode: auto-send (as before)
+    } else {
+      inputEl.value = text;               // dictation: insert only, no send
+      inputEl.dispatchEvent(new Event("input")); // flips the send button
+    }
   } catch (err) {
     console.error(err);
   }
@@ -1326,7 +1384,10 @@ function vadTick() {
   // Barge-in while busy needs real echo cancellation to be trustworthy
   // (see the comment above) — idle "listening" doesn't depend on that at
   // all, since there's no Jarvis audio to confuse it with.
-  const listenable = state === "listening" || (busy && !IS_MAC);
+  // "listening" covers speech-mode idle AND a live dictation capture. Barge-in
+  // while busy is gated on speechMode — in chat mode a typed send just goes
+  // through handleUserMessage with no voice loop beneath it.
+  const listenable = state === "listening" || (busy && !IS_MAC && speechMode);
 
   if (!listenable) {
     vadNoiseFloor = vadNoiseFloor * 0.98 + rms * 0.02;
@@ -1361,7 +1422,14 @@ function vadTick() {
     silenceStreak = 0;
   } else {
     silenceStreak++;
-    if (silenceStreak >= RECORD_SILENCE_SUSTAIN) stopRecording();
+    if (silenceStreak >= RECORD_SILENCE_SUSTAIN) {
+      // One-shot dictation: drop out of "listening" *before* the async /stt
+      // round-trip, so VAD can't re-arm and grab a second utterance (voice
+      // mode stays armed — that's its job). settle() re-derives idle here
+      // because dictationActive is now false.
+      if (!speechMode) { dictationActive = false; settle(); }
+      stopRecording();
+    }
   }
 }
 
@@ -1381,38 +1449,166 @@ function setMuted(next) {
   muted = next;
   muteBtn.title = muted ? "Mikro aktivieren" : "Mikro stummschalten";
   muteBtn.classList.toggle("off", muted);
-  if (muted) cancelRecording();
+  if (muted) { cancelRecording(); dictationActive = false; }
   settle();
 }
 
-startBtn.addEventListener("click", async () => {
-  if (micReady) return;
-  try {
-    // echoCancellation off only on macOS (see the VAD comment below) — with
-    // built-in speakers + mic, macOS engages a "voice processing" audio
-    // path for echo-cancelled input that claims the mic exclusively, so no
-    // other app can use it at all while Jarvis is running. Everywhere else
-    // that trade-off doesn't apply, so real AEC stays on — it's what lets
-    // vadTick tell a genuine interruption apart from Jarvis's own voice
-    // bleeding into the mic while it's talking.
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation: !IS_MAC, noiseSuppression: true, autoGainControl: true },
-    });
-    micReady = true;
-    micStream = stream;
-    startBtn.hidden = true;
-    muteBtn.hidden = false;
-    setupVad(stream);
-    startContinuousRecording();
-    settle();
-  } catch (_) {
-    hintEl.textContent = "Mikrofon abgelehnt. Tippen funktioniert trotzdem.";
+// Acquires (once) the single mic stream + VAD loop shared by dictation and
+// speech mode. Idempotent — the first caller builds the stream/analyser, the
+// rest just get it back, so there's never a second stream or a second
+// interval (startContinuousRecording and setupVad each self-guard too).
+//
+// echoCancellation off only on macOS (see the VAD comment below) — with
+// built-in speakers + mic, macOS engages a "voice processing" audio path for
+// echo-cancelled input that claims the mic exclusively, so no other app can
+// use it at all while Jarvis is running. Everywhere else that trade-off
+// doesn't apply, so real AEC stays on — it's what lets vadTick tell a genuine
+// interruption apart from Jarvis's own voice bleeding into the mic while it
+// talks.
+async function ensureMic() {
+  if (micReady) return micStream;
+  const stream = await navigator.mediaDevices.getUserMedia({
+    audio: { echoCancellation: !IS_MAC, noiseSuppression: true, autoGainControl: true },
+  });
+  micReady = true;
+  micStream = stream;
+  setupVad(stream);
+  startContinuousRecording();
+  return stream;
+}
+
+function speechDenied() {
+  hintEl.textContent = "Mikrofon abgelehnt. Tippen funktioniert trotzdem.";
+}
+
+async function enterSpeechMode() {
+  try { await ensureMic(); } catch (_) { speechDenied(); return; }
+  speechMode = true;
+  setState("listening");
+  updateView();
+}
+
+function exitSpeechMode() {
+  speechMode = false;
+  cancelRecording();
+  settle();
+}
+
+// Shared wake gesture for the global hotkey (Cmd/Ctrl+Shift+J) and the
+// /trigger websocket wake: get Jarvis into continuous listening. Already in
+// speech mode → just unmute, or interrupt if he's mid-sentence. In chat mode
+// → enter speech mode (which acquires the mic on first use).
+function wakeJarvis() {
+  if (speechMode) {
+    if (muted) setMuted(false);
+    else if (busy) interruptActiveTurn();
+    return;
+  }
+  enterSpeechMode();
+}
+
+// The right-most button swaps its glyph with the field's content: a live-voice
+// waveform (speech-mode trigger) when empty, an up-arrow send when there's text.
+// The dictation button (#dictateBtn, in the HTML) keeps a plain mic, so the two
+// modes read differently at a glance — mic = dictate into the field, waveform =
+// continuous voice conversation.
+const SPEECH_SVG =
+  '<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">' +
+  '<line x1="2" y1="6.5" x2="2" y2="9.5"/>' +
+  '<line x1="5" y1="4" x2="5" y2="12"/>' +
+  '<line x1="8" y1="1.5" x2="8" y2="14.5"/>' +
+  '<line x1="11" y1="4" x2="11" y2="12"/>' +
+  '<line x1="14" y1="6.5" x2="14" y2="9.5"/></svg>';
+const SEND_SVG =
+  '<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">' +
+  '<path d="M8 13V3"/>' +
+  '<path d="M4.5 6.5 8 3l3.5 3.5"/></svg>';
+
+const MIC_SVG =
+  '<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">' +
+  '<rect x="5.5" y="1.3" width="5" height="8" rx="2.5"/>' +
+  '<path d="M3 7.3a5 5 0 0 0 10 0"/>' +
+  '<line x1="8" y1="12.3" x2="8" y2="14.3"/>' +
+  '<line x1="5" y1="14.3" x2="11" y2="14.3"/></svg>';
+
+function refreshSendButton() {
+  const has = !!inputEl.value.trim();
+  speechSendBtn.classList.toggle("send", has);
+  speechSendBtn.classList.toggle("speech", !has);
+  speechSendBtn.innerHTML = has ? SEND_SVG : SPEECH_SVG;
+  speechSendBtn.title = speechSendBtn.ariaLabel = has
+    ? "Senden"
+    : (speechMode ? "Sprechmodus verlassen" : "Sprechmodus");
+}
+
+function submitText() {
+  const text = inputEl.value.trim();
+  if (!text) return;
+  inputEl.value = "";
+  pendingFiles = [];
+  handleUserMessage(text);
+  refreshSendButton();
+}
+
+muteBtn.addEventListener("click", () => setMuted(!muted));
+stopBtn.addEventListener("click", () => { if (busy) interruptActiveTurn(); });
+
+// The right-most button: send when the field has text, otherwise toggle
+// speech mode. type="button" — clicking it with an empty field must trigger
+// speech mode, never a no-op submit.
+speechSendBtn.addEventListener("click", async () => {
+  if (inputEl.value.trim()) { submitText(); return; }
+  if (speechMode) { exitSpeechMode(); return; }
+  await enterSpeechMode();
+});
+
+// #input is a <textarea> now — grow it with its content rather than spinning
+// up a fixed-height scroll box. The CSS caps it at max-height: 40vh.
+function autosizeComposer() {
+  inputEl.style.height = "auto";
+  inputEl.style.height = Math.min(inputEl.scrollHeight, 320) + "px";
+}
+
+inputEl.addEventListener("input", () => { refreshSendButton(); autosizeComposer(); });
+
+// Enter sends. The composer was a <form> before, so its submit() listener
+// (and this being an implicit submit button) no longer exists — reimplemented
+// here, else Enter would stop working entirely.
+inputEl.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey) {
+    e.preventDefault();
+    submitText();
   }
 });
 
-muteBtn.addEventListener("click", () => setMuted(!muted));
+// Dictation: one-shot capture into #input (no auto-send). Voice mode is not
+// used here — this is a chat-mode gesture to get words into the field.
+dictateBtn.addEventListener("click", async () => {
+  if (speechMode) return;
+  try { await ensureMic(); } catch (_) { speechDenied(); return; }
+  cancelRecording();          // drop any stale utterance / pre-roll
+  dictateBtn.classList.add("active");
+  dictationActive = true;
+  setState("listening");      // lets vadTick's listenable branch arm
+  updateView();
+});
 
-stopBtn.addEventListener("click", () => { if (busy) interruptActiveTurn(); });
+/* ---------- mode slider (Chat | Code) — visual only for now ---------- */
+modeOpts.forEach((btn) => {
+  btn.addEventListener("click", () => {
+    appMode = btn.dataset.mode;
+    modeOpts.forEach((b) => b.classList.toggle("active", b === btn));
+  });
+});
+
+/* ---------- file attach (UI-first; wiring to a tool comes later) ---------- */
+attachBtn.addEventListener("click", () => fileInput.click());
+fileInput.addEventListener("change", () => {
+  pendingFiles = [...fileInput.files];
+  attachBtn.title = pendingFiles.length
+    ? `${pendingFiles.length} Datei(en) angehängt`
+    : "Datei anhängen";
+});
 
 /* ---------- model picker ---------- */
 //
@@ -1428,6 +1624,12 @@ const modelName = document.getElementById("modelName");
 const modelDropdown = document.getElementById("modelDropdown");
 let currentModel = null;
 
+function renderCapBadge(caps) {
+  const has = (caps || []).includes("vision");
+  modelCapBadge.hidden = !has;
+  modelCapBadge.textContent = has ? "Vision" : "";
+}
+
 function renderModelOptions(models) {
   modelDropdown.innerHTML = "";
   for (const id of models) {
@@ -1436,6 +1638,13 @@ function renderModelOptions(models) {
     opt.className = "model-option" + (id === currentModel ? " active" : "");
     opt.textContent = id;
     opt.title = id;
+    const caps = modelCaps[id];
+    if (caps && caps.includes("vision")) {
+      const badge = document.createElement("span");
+      badge.className = "cap-badge";
+      badge.textContent = "Vision";
+      opt.appendChild(badge);
+    }
     opt.addEventListener("click", () => selectModel(id));
     modelDropdown.appendChild(opt);
   }
@@ -1447,8 +1656,10 @@ async function refreshModels() {
     if (!r.ok) return;
     const data = await r.json();
     currentModel = data.current;
+    modelCaps = data.model_caps || {};
     modelName.textContent = currentModel || "Modell";
     modelBtn.title = currentModel || "Modell wechseln";
+    renderCapBadge(data.current_caps || modelCaps[currentModel] || []);
     renderModelOptions(data.models || []);
   } catch (_) {}
 }
@@ -1461,6 +1672,7 @@ async function selectModel(id) {
   // Optimistic — the actual load happens in the background on LM Studio's
   // side and can take a while for a large model; nothing here waits on it.
   modelName.textContent = id;
+  renderCapBadge(modelCaps[id]);
   try {
     await fetch("/models/select", {
       method: "POST",
@@ -1476,14 +1688,11 @@ modelBtn.addEventListener("click", () => {
   if (!collapsed) refreshModels();
 });
 
-refreshModels(); // populate the button label on page load, not just on first open
-
 document.addEventListener("keydown", (e) => {
   const modifierPressed = IS_MAC ? e.metaKey : e.ctrlKey;
   if (modifierPressed && e.shiftKey && e.key.toLowerCase() === "j") {
     e.preventDefault();
-    if (muted) setMuted(false);
-    else if (busy) interruptActiveTurn();
+    wakeJarvis();
   }
 });
 
@@ -1500,9 +1709,7 @@ function connectWs() {
     if (msg.type === "panel") {
       renderPanelItem(msg.item);
     } else if (msg.type === "wake") {
-      if (!micReady) return;
-      if (muted) setMuted(false);
-      else if (busy) interruptActiveTurn();
+      wakeJarvis();
     }
   };
 
@@ -1510,4 +1717,9 @@ function connectWs() {
 }
 
 connectWs();
+updateView();
+refreshSendButton();
+autosizeComposer();
+renderGreeting();
+refreshModels();
 setState("idle");

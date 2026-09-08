@@ -6,18 +6,12 @@
   <title>Jarvis</title>
   <link rel="stylesheet" href="/static/style.css" />
 </head>
-<body>
+<body data-view="chat">
   <main class="stage" id="console">
 
-    <!-- Chat panel: voice-only (no text input — Jarvis is spoken to, not
-         typed at), collapsed by default via a fixed top-left toggle
-         outside the panel itself, plus a .collapsed class on the panel
-         that animates its flex-basis to 0 instead of an off-screen slide,
-         so Jarvis (next to it) can react to the width change instead of
-         the panel just floating over everything. -->
-    <!-- VS Code-style sidebar toggle: a window outline with a left panel
-         divider, the panel filling in solid once open (see .sidebar-fill
-         in style.css) instead of a slash/cross to indicate state. -->
+<!-- Transcript sidebar (collapsed by default). The Claude composer below
+         owns the actual conversation; this panel is the scroll-back log for
+         past turns, opened with the fixed top-left toggle. -->
     <button class="icon-btn chat-toggle-btn" id="chatToggleBtn" aria-label="Chatfenster ausklappen" title="Chatfenster ausklappen">
       <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">
         <rect x="1.5" y="2.5" width="13" height="11" rx="1.5"/>
@@ -51,17 +45,81 @@
       <div class="resize-handle" id="resizeHandle"></div>
     </aside>
 
+    <!-- Centered column: the serif greeting (plus the terracotta starburst) in
+         chat mode, swapping to the orb in speech mode. Both live in the same
+         .jarvis-column; body[data-view] decides which is shown. -->
     <div class="jarvis-column">
+      <div class="greeting" id="greeting" hidden>
+        <svg class="starburst" viewBox="0 0 24 24" width="0.9em" height="0.9em" fill="none" aria-hidden="true">
+          <g stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+            <line x1="12" y1="2.4"  x2="12" y2="21.6"/>
+            <line x1="2.4" y1="12"   x2="21.6" y2="12"/>
+            <line x1="5.2" y1="5.2"  x2="18.8" y2="18.8"/>
+            <line x1="18.8" y1="5.2" x2="5.2" y2="18.8"/>
+            <line x1="2.4" y1="4.7"  x2="21.6" y2="19.3"/>
+            <line x1="2.4" y1="19.3" x2="21.6" y2="4.7"/>
+            <line x1="4.7" y1="2.4"  x2="19.3" y2="21.6"/>
+            <line x1="4.7" y1="21.6" x2="19.3" y2="2.4"/>
+            <line x1="19.3" y1="2.4" x2="4.7" y2="21.6"/>
+            <line x1="19.3" y1="21.6" x2="4.7" y2="2.4"/>
+            <line x1="12" y1="6.6"  x2="12" y2="17.4"/>
+            <line x1="6.6" y1="12"  x2="17.4" y2="12"/>
+          </g>
+        </svg>
+        <span id="greetingText">Abend, Chef</span>
+      </div>
+
       <div class="orb-wrap">
         <canvas id="orb" aria-hidden="true"></canvas>
         <canvas id="subOrb" aria-hidden="true" hidden></canvas>
       </div>
+    </div>
 
-      <!-- Icon-only, no labels — this row sits right under the orb, which
-           carries all the state a glance needs (colour = mic/speaking state).
-           Only one of startBtn/muteBtn is ever visible at a time. -->
-      <div class="control-row">
-        <button class="icon-btn" id="startBtn" aria-label="Mikrofon freigeben" title="Mikrofon freigeben">
+    <!-- Fixed to the page's top-right corner. -->
+    <button class="icon-btn quit-btn" id="quitBtn" aria-label="Programm beenden" title="Programm beenden">
+      <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M8 2v5.6"/>
+        <path d="M4.4 4.1a5 5 0 1 0 7.2 0"/>
+      </svg>
+    </button>
+
+    <!-- Claude-style composer: a two-tier card. Top: a tall, auto-growing
+         textarea for the message. Bottom: a toolbar row — left the attach
+         button and the Chat|Code pill, right the model pill, the dictation
+         mic, mute, stop, and the speech-mode/send button. Every control that
+         used to live in the orb's .control-row now sits here. -->
+    <div class="composer" id="composerBar">
+      <textarea
+        id="input"
+        class="composer-input"
+        rows="1"
+        autocomplete="off"
+        placeholder="Wie kann ich dir heute helfen?"
+        aria-label="Nachricht an Jarvis"
+      ></textarea>
+
+      <div class="composer-toolbar">
+        <button type="button" class="icon-btn" id="attachBtn" aria-label="Datei anhängen" title="Datei anhängen">+</button>
+        <input type="file" id="fileInput" hidden multiple />
+
+        <div class="mode-switch" id="modeSwitch" role="tablist" aria-label="Modus">
+          <button type="button" class="mode-opt active" data-mode="chat">Chat</button>
+          <button type="button" class="mode-opt" data-mode="code">Code</button>
+        </div>
+
+        <div class="toolbar-spacer"></div>
+
+        <div class="model-picker">
+          <button type="button" class="model-btn" id="modelBtn" aria-label="Modell wechseln" title="Modell wechseln">
+            <span class="model-name"><span id="modelName">Modell</span><span id="modelCapBadge" class="cap-badge" hidden></span></span>
+            <svg class="model-chevron" viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M4 6l4 4 4-4"/>
+            </svg>
+          </button>
+          <div class="model-dropdown collapsed" id="modelDropdown"></div>
+        </div>
+
+        <button type="button" class="icon-btn" id="dictateBtn" aria-label="Diktieren" title="Diktieren">
           <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">
             <rect x="5.5" y="1.3" width="5" height="8" rx="2.5"/>
             <path d="M3 7.3a5 5 0 0 0 10 0"/>
@@ -69,7 +127,7 @@
             <line x1="5" y1="14.3" x2="11" y2="14.3"/>
           </svg>
         </button>
-        <button class="icon-btn" id="muteBtn" aria-label="Mikro stumm/aktiv" title="Mikro stumm/aktiv" hidden>
+        <button type="button" class="icon-btn" id="muteBtn" aria-label="Mikro stumm/aktiv" title="Mikro stumm/aktiv" hidden>
           <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">
             <rect x="5.5" y="1.3" width="5" height="8" rx="2.5"/>
             <path d="M3 7.3a5 5 0 0 0 10 0"/>
@@ -78,28 +136,17 @@
             <line class="mic-slash" x1="1.5" y1="1.5" x2="14.5" y2="14.5"/>
           </svg>
         </button>
-        <button class="icon-btn" id="stopBtn" aria-label="Denkprozess stoppen" title="Denkprozess stoppen">■</button>
-        <div class="model-picker">
-          <button class="icon-btn model-btn" id="modelBtn" aria-label="Modell wechseln" title="Modell wechseln">
-            <span class="model-name" id="modelName">Modell</span>
-            <svg class="model-chevron" viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M4 6l4 4 4-4"/>
-            </svg>
-          </button>
-          <div class="model-dropdown collapsed" id="modelDropdown"></div>
-        </div>
+        <button type="button" class="icon-btn" id="stopBtn" aria-label="Denkprozess stoppen" title="Denkprozess stoppen" hidden>■</button>
+        <button type="button" class="icon-btn send" id="speechSendBtn" aria-label="Sprechmodus" title="Sprechmodus">
+          <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="5.5" y="1.3" width="5" height="8" rx="2.5"/>
+            <path d="M3 7.3a5 5 0 0 0 10 0"/>
+            <line x1="8" y1="12.3" x2="8" y2="14.3"/>
+            <line x1="5" y1="14.3" x2="11" y2="14.3"/>
+          </svg>
+        </button>
       </div>
     </div>
-
-    <!-- Fixed to the page's top-right corner (mirrors chatToggleBtn's
-         top-left placement) rather than inside .control-row, so it stays
-         put and reachable regardless of anything else on screen. -->
-    <button class="icon-btn quit-btn" id="quitBtn" aria-label="Programm beenden" title="Programm beenden">
-      <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M8 2v5.6"/>
-        <path d="M4.4 4.1a5 5 0 1 0 7.2 0"/>
-      </svg>
-    </button>
 
   </main>
   <script src="/static/app.js"></script>
