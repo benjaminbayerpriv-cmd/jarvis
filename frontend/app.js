@@ -314,6 +314,11 @@ function buildIcosphere(subdivisions) {
 const orbMesh = buildIcosphere(ORB_SUBDIVISIONS);
 const orbVerts = orbMesh.verts.map(([x, y, z]) => ({ x, y, z }));
 const orbEdges = orbMesh.edges;
+// Reused per-frame projection buffer: renderOrb writes the transformed
+// vertex into these objects in place every frame instead of allocating a
+// fresh `{sx,sy,depth,sweep,x,y,z}` per vertex (162/frame). Per-frame
+// allocation there was a hidden GC churn source on top of the draw cost.
+const orbProjected = orbVerts.map(() => ({ sx: 0, sy: 0, depth: 0, sweep: 0, x: 0, y: 0, z: 0 }));
 
 // ---------- outer HUD rings: segmented scanner band + uneven dust ring ----
 //
@@ -355,18 +360,30 @@ function boundaryRadiusFactor(angle) {
 
 function drawDustRing(cx, cy, ringR, spin, color, alpha) {
   const t = Date.now() / 1000;
-  orbCtx.save();
-  orbCtx.fillStyle = color;
-  orbCtx.shadowColor = color;
-  orbCtx.shadowBlur = 4;
+  // 220 dust motes as 220 separate arc+fill() calls — each with canvas
+  // shadowBlur — was another frame-cost spike. Batch them into a few alpha
+  // buckets (quantised twinkle) so it's ~10 fill() calls, and drop the
+  // per-mote shadowBlur (the outer halo below carries the glow).
+  const DUST_BUCKETS = 12;
+  const paths = Array.from({ length: DUST_BUCKETS }, () => new Path2D());
+  const bucketAlpha = new Float32Array(DUST_BUCKETS);
   for (const p of dustParticles) {
     const angle = p.angle + spin * 0.4;
     const r = ringR * boundaryRadiusFactor(angle) * (1 + p.jitter * 0.05);
     const twinkle = 0.5 + 0.5 * Math.sin(t * 1.5 + p.twinklePhase);
-    orbCtx.globalAlpha = alpha * (0.3 + twinkle * 0.7);
-    orbCtx.beginPath();
-    orbCtx.arc(cx + Math.cos(angle) * r, cy + Math.sin(angle) * r, p.size, 0, Math.PI * 2);
-    orbCtx.fill();
+    const a = alpha * (0.3 + twinkle * 0.7);
+    const k = Math.min(DUST_BUCKETS - 1, (a * DUST_BUCKETS) | 0);
+    const x = cx + Math.cos(angle) * r, y = cy + Math.sin(angle) * r;
+    paths[k].moveTo(x + p.size, y);
+    paths[k].arc(x, y, p.size, 0, Math.PI * 2);
+    bucketAlpha[k] = (k + 0.5) / DUST_BUCKETS;
+  }
+  orbCtx.save();
+  orbCtx.fillStyle = color;
+  for (let k = 0; k < DUST_BUCKETS; k++) {
+    if (!bucketAlpha[k]) continue;
+    orbCtx.globalAlpha = bucketAlpha[k];
+    orbCtx.fill(paths[k]);
   }
   orbCtx.restore();
 }
@@ -377,8 +394,6 @@ function drawSegmentRing(cx, cy, ringR, spin, color, level, alpha) {
   const sweep = Math.PI * 2 - (RING_GAP_DEG * Math.PI) / 180;
   orbCtx.save();
   orbCtx.strokeStyle = color;
-  orbCtx.shadowColor = color;
-  orbCtx.shadowBlur = 5;
   orbCtx.lineWidth = Math.max(1.5, ringR * 0.02);
   orbCtx.lineCap = "round";
   for (let i = 0; i < RING_SEGMENTS; i++) {
@@ -479,7 +494,9 @@ function renderOrb(level, stateName) {
   drawDustRing(cx, cy, outerR * 0.85, orbSpin, ringColor, 0.55 * listenPulse);
   drawSegmentRing(cx, cy, outerR * 0.82, orbSpin, ringColor, level, 0.75 * listenPulse);
 
-  const projected = orbVerts.map((v) => {
+  for (let i = 0; i < orbVerts.length; i++) {
+    const v = orbVerts[i];
+    const p = orbProjected[i];
     const ripple = Math.sin(v.x * 4 + t * 1.6) * Math.cos(v.y * 4 - t * 1.1);
     let sweep = 0;
     if (thinking) {
@@ -495,31 +512,50 @@ function renderOrb(level, stateName) {
     const z2 = y * sinX + z1 * cosX;
 
     const perspective = 3.1 / (3.1 + z2);
-    return {
-      sx: cx + x1 * baseR * perspective, sy: cy + y1 * baseR * perspective,
-      depth: z2, sweep, x: v.x, y: v.y, z: v.z,
-    };
-  });
+    p.sx = cx + x1 * baseR * perspective;
+    p.sy = cy + y1 * baseR * perspective;
+    p.depth = z2;
+    p.sweep = sweep;
+    p.x = v.x; p.y = v.y; p.z = v.z;
+  }
 
   // The wireframe grid itself — the "flower of life" triangulated sphere.
-  // Each edge gets its own stroke() call (not one shared path) so its alpha
-  // can fade with depth like the old dot cloud did — a single uniform-alpha
-  // path would flatten the front/back depth cue entirely.
+  // Edges are grouped into a few depth/sweep buckets (the block below) so
+  // each bucket is one shared path with a single alpha. The per-edge alpha
+  // of the old per-edge stroke() version is gone, but the bucketed
+  // front/back fade still reads as depth while costing ~8 stroke() calls
+  // instead of ~480.
   const wireColor = muted ? ORB_COLORS.off : color;
+  // The wireframe is the frame's biggest canvas cost. Drawing ~480 edges as
+  // one beginPath/moveTo/lineTo/stroke() each — with a canvas shadowBlur on
+  // top — flushed the whole raster pipeline per edge and dominated the frame.
+  // Instead: group edges into a few depth+x-sweep "brightness" buckets, build
+  // one Path2D per bucket and stroke() once per bucket. The per-edge depth
+  // fade that motivated the individual strokes is preserved as a coarser,
+  // bucketed alpha, and the sweep (thinking) highlight is folded into the same
+  // brightness key. shadowBlur is dropped entirely — the outer radial halo
+  // (drawn below) already carries the glow.
+  const EDGE_BUCKETS = 8;
+  const edgePaths = Array.from({ length: EDGE_BUCKETS }, () => new Path2D());
+  const edgeAlpha = new Float32Array(EDGE_BUCKETS);
+  for (const [ia, ib] of orbEdges) {
+    const a = orbProjected[ia], b = orbProjected[ib];
+    const front = Math.max(0, 1 - (a.depth + b.depth + 2) / 4); // ~0 back .. ~1 front
+    const brightness = front * 0.5 + Math.max(a.sweep, b.sweep) * 0.5; // 0..~1
+    const k = Math.min(EDGE_BUCKETS - 1, (brightness * EDGE_BUCKETS) | 0);
+    edgePaths[k].moveTo(a.sx, a.sy);
+    edgePaths[k].lineTo(b.sx, b.sy);
+    edgeAlpha[k] = (k + 0.5) / EDGE_BUCKETS;
+  }
   orbCtx.save();
   orbCtx.lineCap = "round";
   orbCtx.strokeStyle = wireColor;
-  orbCtx.shadowColor = wireColor;
-  orbCtx.shadowBlur = 5;
   orbCtx.lineWidth = Math.max(0.6, baseR * 0.008);
-  for (const [ia, ib] of orbEdges) {
-    const a = projected[ia], b = projected[ib];
-    const front = Math.max(0, 1 - (a.depth + b.depth + 2) / 4); // ~0 back .. ~1 front
-    orbCtx.globalAlpha = (0.1 + front * 0.5 + Math.max(a.sweep, b.sweep) * 0.5) * listenPulse;
-    orbCtx.beginPath();
-    orbCtx.moveTo(a.sx, a.sy);
-    orbCtx.lineTo(b.sx, b.sy);
-    orbCtx.stroke();
+  for (let k = 0; k < EDGE_BUCKETS; k++) {
+    const path = edgePaths[k];
+    if (!path || !edgeAlpha[k]) continue;
+    orbCtx.globalAlpha = (0.12 + edgeAlpha[k] * 0.55) * listenPulse;
+    orbCtx.stroke(path);
   }
   orbCtx.restore();
 
@@ -528,9 +564,7 @@ function renderOrb(level, stateName) {
   // which would just look like the old dot cloud again.
   const dotR = Math.max(1, baseR * 0.03);
   orbCtx.save();
-  orbCtx.shadowColor = wireColor;
-  orbCtx.shadowBlur = 6;
-  for (const p of projected) {
+  for (const p of orbProjected) {
     if (p.depth > -0.55 && p.sweep < 0.5) continue;
     const front = Math.max(0, (1 - (p.depth + 1) / 2));
     orbCtx.globalAlpha = (0.5 + front * 0.5 + p.sweep * 0.5) * listenPulse;
@@ -650,6 +684,13 @@ function rmsFrom(analyser, buf) {
 }
 
 let outBuf = null;
+// Throttle the orb redraw. requestAnimationFrame fires at the display's
+// refresh rate (up to 120 Hz on ProMotion), but the orb is a slowly-rotating,
+// already-smooth visual — 30 fps is indistinguishable here and saves up to
+// ~4x of the expensive canvas work. The audio level itself is still computed
+// every frame so the meter stays responsive; only the draw is gated.
+const METER_RENDER_FPS = 30;
+let lastMeterRender = 0;
 
 function meterLoop() {
   let level = 0;
@@ -664,8 +705,12 @@ function meterLoop() {
   }
 
   smoothed += (level - smoothed) * (level > smoothed ? 0.5 : 0.12);
-  renderOrb(smoothed, document.body.dataset.state);
-  if (backgroundTasks.size) renderSubOrb();
+  const now = performance.now();
+  if (now - lastMeterRender >= 1000 / METER_RENDER_FPS) {
+    lastMeterRender = now;
+    renderOrb(smoothed, document.body.dataset.state);
+    if (backgroundTasks.size) renderSubOrb();
+  }
 
   requestAnimationFrame(meterLoop);
 }
