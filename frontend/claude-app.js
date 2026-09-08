@@ -186,6 +186,7 @@
   // Sprachmodus + VAD + Diktat
   let speechMode = false, dictating = false, micReady = false, micStream = null, muted = false;
   let pcmNode = null, pcmSampleRate = 0, pcmRing = [], utterancePCM = null, utteranceStartedAt = 0;
+  let utterancePeak = 0;   // Spitzenpegel der laufenden Äußerung — nur echte Stimme zählt
   let silenceStreak = 0, vadAnalyser = null, vadData = null;
   let vadNoiseFloor = 0.01;
 
@@ -969,6 +970,7 @@
   function beginUtterance() {
     utterancePCM = pcmRing.slice();
     utteranceStartedAt = Date.now();
+    utterancePeak = 0;
     lastLiveStt = '';
     dictBase = composerInput ? composerInput.innerText.trim() : '';
     noteSpeechWords('…');
@@ -1065,18 +1067,29 @@
     const rms = Math.sqrt(sum / vadData.length);
     const listening = (speechMode || dictating) && !muted && !busy;
     vadNoiseFloor = vadNoiseFloor * 0.98 + rms * 0.02;
-    const thresh = Math.max(vadNoiseFloor * 2.4, 0.025);
+    // Schwelle deutlich über dem Grundrauschen: reine Umgebungsgeräusche
+    // (Lüfter, Raum, Tastatur) dürfen keine "Äußerung" starten.
+    const thresh = Math.max(vadNoiseFloor * 3.2, 0.04);
     const above = rms > thresh;
     if (above && !utterancePCM) { if (listening) beginUtterance(); }
     if (utterancePCM) {
+      // Spitzenpegel über die ganze Aufnahme — nur echte Stimme (deutlich über
+      // dem Bodenrauschen) zählt als hörbare Antwort.
+      utterancePeak = Math.max(utterancePeak, rms);
       if (above) { silenceStreak = 0; }
       else {
         // Auto-Send: nach ~640 ms Stille (8 Ticks à 80 ms) automatisch
-        // absenden, nicht auf den Senden-Button warten. Notbremse: eine
-        // Äußerung, die länger als 12 s geht, wird trotzdem abgeschickt,
+        // absenden, statt auf den Senden-Button zu warten. Notbremse: eine
+        // länger als 12 s laufende "Äußerung" wird ebenfalls abgeschickt,
         // falls die Stille-Erkennung wegen Umgebungsgeräuschen nie greift.
         silenceStreak++;
-        if (silenceStreak >= 8 || Date.now() - utteranceStartedAt > 12000) { silenceStreak = 0; stopRecording(); }
+        const voiceFloor = Math.max(vadNoiseFloor * 4, 0.05);
+        const hasVoice = utterancePeak > voiceFloor;
+        if (silenceStreak >= 8 || Date.now() - utteranceStartedAt > 12000) {
+          silenceStreak = 0;
+          // Nur echtes Gesprochenes absenden; reines Rauschen verwerfen.
+          if (hasVoice) stopRecording(); else cancelRecording();
+        }
       }
     }
   }
@@ -1161,7 +1174,7 @@
     }
     return pts;
   }
-  let orbPoints = makeSpherePoints(900);   // dichter beieinander
+  let orbPoints = makeSpherePoints(300);   // weniger Punkte → klare, ruhige Kugel
   let orbRotY = 0, orbRotX = -0.38;
 
   // Eine konstante Farbe für alle Zustände — die Status werden nur über die
@@ -1187,24 +1200,24 @@
     const rect = chatRootEl ? chatRootEl.getBoundingClientRect() : { left: 0, top: 0, width: cw, height: ch };
     const cx = rect.left + rect.width / 2;
     const cy = rect.top + rect.height / 2;
-    const R = Math.min(rect.width, rect.height) * 0.16;   // kleine Kugel
+    const R = Math.min(rect.width, rect.height) * 0.10;   // viel kleinere Kugel
     const lvl = orbLevel || 0;
     const status = orbStatus();
     const t = now / 1000;
 
-    // Rotationsgeschwindigkeit je Zustand
-    let rotSpeed = 0.0028;
-    if (status === 'listening') rotSpeed = 0.0035 + lvl * 0.02;
-    else if (status === 'thinking') rotSpeed = 0.006;
-    else if (status === 'speaking') rotSpeed = 0.0065;
+    // Rotationsgeschwindigkeit je Zustand — spürbar schneller als zuvor
+    let rotSpeed = 0.005;
+    if (status === 'listening') rotSpeed = 0.006 + lvl * 0.03;
+    else if (status === 'thinking') rotSpeed = 0.011;
+    else if (status === 'speaking') rotSpeed = 0.013;
     orbRotY += rotSpeed;
-    orbRotX = -0.38 + Math.sin(t * 0.7) * 0.04;   // sanftes Wanken
+    orbRotX = -0.38 + Math.sin(t * 1.5) * 0.05;   // zügigeres Wanken
 
     // Denk-Sweep: ein Band wandert von oben nach unten (0 = oben … 1 = unten).
     // Dreieck-Welle, damit es ohne Sprung durchläuft — wie in der alten Kugel.
     let sweepT = -1;
     if (status === 'thinking') {
-      const period = 1.6;
+      const period = 0.9;
       const phase = (t % (period * 2)) / (period * 2);
       sweepT = phase < 0.5 ? phase * 2 : 2 - phase * 2;
     }
@@ -1233,26 +1246,26 @@
       // chaotisch zu zucken — wie in der alten Kugel.
       let dr = 0;
       if (status === 'idle') {
-        // ruhiges, synchrones Atmen + sehr langsame kohärente Welle
-        const breathe = Math.sin(t * 0.7);
-        const wave = Math.sin(bx * 2.1 + by * 1.8 + t * 0.5);
-        dr = breathe * 0.018 + wave * 0.03;
+        // ruhiges Atmen + langsame kohärente Welle (ohne Zufall)
+        const breathe = Math.sin(t * 1.4);
+        const wave = Math.sin(bx * 2.1 + by * 1.8 + t * 1.1);
+        dr = breathe * 0.03 + wave * 0.05;
       } else if (status === 'listening') {
         // Rippel: kohärente Welle über die Position, von der Lautstärke gesteuert
-        const ripple = Math.sin(bx * 4 + t * 2.4) * Math.cos(by * 4 - t * 1.7);
-        dr = lvl * 0.28 * ripple;
+        const ripple = Math.sin(bx * 4 + t * 5.0) * Math.cos(by * 4 - t * 3.6);
+        dr = lvl * 0.5 * ripple;
       } else if (status === 'thinking') {
         // Sweep-Band wandert von oben nach unten (Dreieck-Welle) und drückt
         // die Punkte darin nach außen; leichte kohärente Welle dazu
         const rowT = (1 - by) / 2;
         const sweep = sweepT >= 0 ? Math.exp(-Math.pow((rowT - sweepT) * 6, 2)) : 0;
-        dr = 0.14 * sweep + 0.028 * Math.sin(bx * 2 + bz * 2 + t * 1.2);
+        dr = 0.3 * sweep + 0.06 * Math.sin(bx * 2 + bz * 2 + t * 2.6);
       } else { // speaking — mehrere kohärente Wellen; jeder Punkt hat seinen
                // eigenen Wert, aber Bewegungen laufen als Wellen über die Fläche
-        const rippleA = Math.sin(bx * 3.5 + t * 3.1) * Math.cos(by * 3.3 - t * 2.6);
-        const rippleB = Math.sin(bz * 4.2 - t * 2.9);
-        const rippleC = Math.sin((bx + bz) * 2.6 + t * 3.8);
-        dr = 0.09 * rippleA + 0.06 * rippleB + 0.05 * rippleC;
+        const rippleA = Math.sin(bx * 3.5 + t * 6.5) * Math.cos(by * 3.3 - t * 5.2);
+        const rippleB = Math.sin(bz * 4.2 - t * 6.0);
+        const rippleC = Math.sin((bx + bz) * 2.6 + t * 7.5);
+        dr = 0.20 * rippleA + 0.15 * rippleB + 0.13 * rippleC;
       }
       const r = 1 + dr;
       const x = bx * r, y = by * r, z = bz * r;
@@ -1302,10 +1315,15 @@
 
   function showOrb() {
     orbVisible = true;
+    if (orbCanvas) orbCanvas.style.display = 'block';
     if (!orbRaf) orbRaf = requestAnimationFrame(orbLoop);
   }
   function hideOrb() {
     orbVisible = false;
+    // nicht nur die Animationsschleife stoppen, sondern den Canvas wirklich
+    // ausblenden — sonst bleibt der letzte Frame als "Geister-Kugel" stehen.
+    if (orbCanvas) { orbCanvas.style.display = 'none'; }
+    if (orbCtx && orbCanvas) { const w = orbCanvas.clientWidth, h = orbCanvas.clientHeight; if (w && h) { orbCtx.setTransform(1,0,0,1,0,0); orbCtx.clearRect(0,0,w,h); } }
   }
 
   // ---------------------------------------------------------------- boot
