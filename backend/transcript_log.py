@@ -14,15 +14,18 @@ LOG_FILE = Path(__file__).resolve().parent / "transcript.log"
 _lock = threading.Lock()
 
 
-def log_turn(user_text: str, assistant_text: str) -> None:
+def log_turn(user_text: str, assistant_text: str, mode: str = "chat") -> None:
     timestamp = dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    entry = f"[{timestamp}] DU: {user_text}\n[{timestamp}] JARVIS: {assistant_text}\n\n"
+    mode_tag = f"[{mode}]" if mode else ""
+    entry = f"[{timestamp}]{mode_tag} DU: {user_text}\n[{timestamp}]{mode_tag} JARVIS: {assistant_text}\n\n"
     with _lock:
         with LOG_FILE.open("a", encoding="utf-8") as f:
             f.write(entry)
 
 
-_TURN_RE = re.compile(r"^\[[^\]]+\] (DU|JARVIS): (.*)$")
+# Optionaler [mode]-Tag zwischen Zeitstempel und Rolle: [ts][code] DU: ... — alte
+# Zeilen ohne Tag werden als "chat" gelesen.
+_TURN_RE = re.compile(r"^\[[^\]]+\](?:\[([a-z]+)\])? (DU|JARVIS): (.*)$")
 
 
 def read_recent_turns(limit: int = 40) -> list[dict]:
@@ -38,8 +41,8 @@ def read_recent_turns(limit: int = 40) -> list[dict]:
     for line in lines:
         m = _TURN_RE.match(line)
         if m:
-            role, text = m.group(1), m.group(2)
-            turns.append({"role": "you" if role == "DU" else "jarvis", "text": text})
+            mode, role, text = m.group(1) or "chat", m.group(2), m.group(3)
+            turns.append({"role": "you" if role == "DU" else "jarvis", "text": text, "mode": mode})
     return turns[-limit:]
 
 

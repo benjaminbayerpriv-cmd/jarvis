@@ -255,7 +255,17 @@ Wenn er etwas programmiert haben will, frage zuerst, in welchen Ordner es soll."
 MAX_TOOL_ROUNDS = 4
 
 
-def _build_messages(user_message: str, history: list | None) -> list:
+# Chat|Code-Modus: bei mode=="code" wird dieser Zusatz in den System-Prompt
+# gemischt. Er lenkt die Antwort in Richtung konkreter, technischer Hilfe mit
+# Code statt in lockere Umgangssprache — der Frontend-Umschalter reicht einen
+# mode-Wert mit, das Backend entscheidet hier über den Ton.
+_CODE_MODE_PROMPT = """Der Nutzer hat den Code-Modus gewählt. Antworte deshalb jetzt
+technischer und konkreter: wo es passt, gib echten Code (in Code-Blöcken),
+zeige Differenzen oder genaue Schritte und bleibe knapp. Wenn etwas programmiert
+werden soll, frage weiterhin zuerst nach dem Zielordner."""
+
+
+def _build_messages(user_message: str, history: list | None, mode: str | None = None) -> list:
     # Qwen3.5's chat template rejects the request outright ("System message
     # must be at the beginning") the moment more than one system-role entry
     # shows up anywhere in the list — which used to happen constantly here:
@@ -276,6 +286,8 @@ def _build_messages(user_message: str, history: list | None) -> list:
     # when the model wants to name it as an explicit action.
     now = datetime.datetime.now().strftime("%A, %d.%m.%Y %H:%M")
     system_parts = [_system_prompt(), f"Gerade jetzt ist es: {now}."]
+    if mode == "code":
+        system_parts.append(_CODE_MODE_PROMPT)
     remembered = memory.context_for(user_message)
     if remembered:
         system_parts.append(f"Relevantes lokales Gedächtnis:\n{remembered}")
@@ -506,6 +518,88 @@ def list_models() -> list[str]:
     response = requests.get(f"{config.LM_STUDIO_BASE_URL}/models", timeout=5)
     response.raise_for_status()
     return sorted(entry.get("id") for entry in response.json().get("data", []) if entry.get("id"))
+
+
+# Substring fingerprint for vision-capable models. LM Studio doesn't guarantee
+# a `vision`/`capabilities` field in its /models metadata, so this is the
+# reliable fallback: match a model id / architecture string against the common
+# naming conventions. `(?<![a-z])vl(?![a-z])` catches a bare "vl" token (e.g.
+# "qwen2-vl") without matching random "vl" substrings inside other words.
+_VISION_RE = re.compile(
+    r"vision|visual|multimodal|llava|internvl|pixtral|moondream|molmo|"
+    r"qwen[0-9.-]*-vl|qwen[^ ]*vision|deepseek[-_]vl|phi[-_]?vision|"
+    r"gemini|claude|gpt-?4[ot]?-?vision|minicpm[-_]?v|bakllava|(?<![a-z])vl(?![a-z])",
+    re.IGNORECASE,
+)
+
+
+def _native_model_meta() -> dict[str, dict]:
+    """Best-effort per-model metadata from LM Studio's *native* /api/v0/models
+    endpoint, which exposes richer fields (architecture, path, quant) than the
+    OpenAI-compatible /v1/models one. The root is the base URL with any trailing
+    /v1 stripped; a failure just falls back to the id heuristic."""
+    base = config.LM_STUDIO_BASE_URL
+    root = base[: base.rfind("/v1")].rstrip("/") if base.endswith("/v1") else base.rstrip("/")
+    try:
+        response = requests.get(f"{root}/api/v0/models", timeout=4)
+        response.raise_for_status()
+        return {
+            entry.get("id"): entry
+            for entry in response.json().get("data", []) if entry.get("id")
+        }
+    except requests.RequestException:
+        return {}
+
+
+def _detect_capabilities(model_id: str, meta: dict) -> list[str]:
+    """Given a model id and whatever metadata happened to come back, return
+    the capability tags (e.g. ["vision"]). Evidence is preferred in order:
+    explicit `vision`/`capabilities` fields, then the architecture string,
+    then a substring match over the id + architecture."""
+    hay = [model_id or ""]
+    for key in ("owned_by", "architecture", "arch", "model_type"):
+        if isinstance(meta.get(key), str):
+            hay.append(meta[key])
+    cfg = meta.get("config")
+    if isinstance(cfg, dict):
+        for key in ("arch", "model_type"):
+            if isinstance(cfg.get(key), str):
+                hay.append(cfg[key])
+
+    caps: list[str] = []
+    if isinstance(meta.get("vision"), bool) and meta["vision"]:
+        caps.append("vision")
+    if isinstance(meta.get("capabilities"), (list, tuple)):
+        for cap in meta["capabilities"]:
+            if isinstance(cap, str) and cap.lower() in ("vision", "multimodal", "image"):
+                caps.append("vision")
+    if not caps and _VISION_RE.search(" ".join(hay)):
+        caps.append("vision")
+    return sorted(set(caps))
+
+
+def list_model_capabilities() -> dict[str, list[str]]:
+    """model id -> capability tags, for the frontend's per-model badge. Tolerant
+    of unknown metadata formats: prefers the native endpoint's architecture
+    string, and always has the id/arch substring heuristic as a guaranteed
+    fallback so a metadata quirk never breaks the endpoint."""
+    native = _native_model_meta()
+    try:
+        response = requests.get(f"{config.LM_STUDIO_BASE_URL}/models", timeout=5)
+        response.raise_for_status()
+        data = response.json().get("data", [])
+    except requests.RequestException:
+        data = []
+
+    caps: dict[str, list[str]] = {}
+    seen: set[str] = set()
+    for entry in data:
+        model_id = entry.get("id")
+        if not model_id or model_id in seen:
+            continue
+        seen.add(model_id)
+        caps[model_id] = _detect_capabilities(model_id, native.get(model_id, entry))
+    return caps
 
 
 def _find_lms_cli() -> str | None:
@@ -1094,19 +1188,19 @@ def _turn_cancelled(turn_id: str | None) -> bool:
     return bool(turn_id) and turn_id in _cancelled_turns
 
 
-def stream_reply(user_message: str, history: list | None = None, turn_id: str | None = None):
+def stream_reply(user_message: str, history: list | None = None, turn_id: str | None = None, mode: str | None = None):
     """Thin wrapper around _stream_reply_impl that guarantees turn_id gets
     dropped from _cancelled_turns once the turn ends, cancelled or not —
     otherwise every turn_id a client ever sends would sit in that set
     forever."""
     try:
-        yield from _stream_reply_impl(user_message, history, turn_id)
+        yield from _stream_reply_impl(user_message, history, turn_id, mode)
     finally:
         if turn_id:
             _cancelled_turns.discard(turn_id)
 
 
-def _stream_reply_impl(user_message: str, history: list | None = None, turn_id: str | None = None):
+def _stream_reply_impl(user_message: str, history: list | None = None, turn_id: str | None = None, mode: str | None = None):
     """Generator yielding {"type": "sentence", "text": ...} as soon as each
     sentence of the reply is complete, then a final {"type": "done"}.
 
@@ -1135,7 +1229,7 @@ def _stream_reply_impl(user_message: str, history: list | None = None, turn_id: 
         yield {"type": "done", "full_text": resolved}
         return
 
-    messages = _build_messages(user_message, history)
+    messages = _build_messages(user_message, history, mode)
 
     last_tool_result = None
     full_text_parts = []
@@ -1277,6 +1371,19 @@ def _stream_reply_impl(user_message: str, history: list | None = None, turn_id: 
                                         continue
                                     full_text_parts.append(clean)
                                     yield {"type": "sentence", "text": clean}
+
+                            # Live, word-by-word: während das Modell schreibt, den
+                            # gerade entstehenden (noch unfertigen) Satz anzeigen,
+                            # statt den Nutzer 20s auf's erste Wort starren zu lassen.
+                            # Denk-/Code-Fragmente im Zwischenpuffer wegstreifen.
+                            if buffer and not trailing_suspect:
+                                partial = _strip_think_tags(buffer)
+                                yield {"type": "partial", "text": partial}
+
+                    else:
+                        if buffer:
+                            partial = _strip_think_tags(buffer)
+                            yield {"type": "partial", "text": partial}
 
                 for tc in delta.get("tool_calls") or []:
                     idx = tc.get("index", 0)
@@ -1479,12 +1586,12 @@ def _stream_reply_impl(user_message: str, history: list | None = None, turn_id: 
     yield {"type": "done", "full_text": spoken}
 
 
-def get_reply(user_message: str, history: list | None = None) -> str:
+def get_reply(user_message: str, history: list | None = None, mode: str | None = None) -> str:
     resolved = confirm.resolve(user_message)
     if resolved is not None:
         return resolved
 
-    messages = _build_messages(user_message, history)
+    messages = _build_messages(user_message, history, mode)
 
     last_tool_result = None
     tool_ran = False
