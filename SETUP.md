@@ -9,9 +9,12 @@ unten unterschiedlich sind, ist es gekennzeichnet.
 ## 1. Voraussetzungen
 
 - **LM Studio** läuft lokal mit geladenem Modell (Server unter
-  `http://localhost:1234`, in LM Studio unter "Developer" -> "Start
+  `http://127.0.0.1:1234`, in LM Studio unter "Developer" -> "Start
   Server"). Der Modellname in `.env` (`LM_STUDIO_MODEL`) muss exakt zu dem
-  passen, was LM Studio anzeigt.
+  passen, was LM Studio anzeigt. `127.0.0.1` statt `localhost` in
+  `LM_STUDIO_BASE_URL` verwenden — unter Windows verzögert die
+  "localhost"-Namensauflösung sonst jede einzelne Anfrage an LM Studio um
+  rund 2 Sekunden.
 - ElevenLabs API-Key in `.env` ist optional — ohne Key (oder wenn das
   Kontingent aufgebraucht ist) spricht Jarvis automatisch mit der lokalen
   Supertonic-Stimme weiter, siehe unten.

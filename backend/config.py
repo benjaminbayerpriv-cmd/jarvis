@@ -22,7 +22,13 @@ SUPERTONIC_LANG = os.environ.get("SUPERTONIC_LANG", "de")
 # remains available via WHISPER_MODEL=small for a CPU-only machine.
 WHISPER_MODEL = os.environ.get("WHISPER_MODEL", "medium")
 
-LM_STUDIO_BASE_URL = os.environ.get("LM_STUDIO_BASE_URL", "http://localhost:1234/v1")
+# "127.0.0.1", not "localhost": resolving "localhost" through Python's
+# requests/urllib3 on Windows was measured adding ~2s per single request
+# (IPv6 "::1" tried first, then a slow fallback to IPv4) — every LM Studio
+# call in this app goes through here, so that 2s hit every chat message
+# and, doubled up, made the model picker (two sequential calls) take
+# 6+ seconds to open. 127.0.0.1 skips the resolution step entirely.
+LM_STUDIO_BASE_URL = os.environ.get("LM_STUDIO_BASE_URL", "http://127.0.0.1:1234/v1")
 LM_STUDIO_MODEL = os.environ.get("LM_STUDIO_MODEL", "google/gemma-4-e4b")
 
 # Embedding model for semantic memory search (backend/vector_memory.py) —
