@@ -132,8 +132,13 @@
   const ORB_LAT = 26, ORB_LON = 40;
 
   // Persisted so reloading the page continues the same conversation
-  // instead of silently starting a new, empty one every time.
-  let currentConversationId = localStorage.getItem('jarvis_conversation_id') || null;
+  // instead of silently starting a new, empty one every time. Ein optionaler
+  // ?conv=<id>-Parameter (Deep-Link) setzt die ID in localStorage und wird
+  // priorisiert — praktisch, um eine bestimmte Unterhaltung zu öffnen.
+  const params = new URLSearchParams(location.search);
+  const deepConv = params.get('conv');
+  if (deepConv) localStorage.setItem('jarvis_conversation_id', deepConv);
+  let currentConversationId = deepConv || localStorage.getItem('jarvis_conversation_id') || null;
   function ensureConversationId() {
     if (!currentConversationId) {
       currentConversationId = (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2));
