@@ -128,14 +128,33 @@ def _windows_say(text: str) -> bytes:
 # vierunddreißig"). ElevenLabs' API already handles this well on its own,
 # so this is only applied to the two engines that don't.
 #
-# Clock times ("14:30") are left alone — that already reads fine
-# digit-by-digit in German. Dates are not: "07.09.2026" read digit-by-digit
-# says "sieben" for the day where German always uses an ordinal ("der
-# siebte September"), so dates get their own expansion (_spell_date) below
-# instead of being left untouched like times are. Math symbols get the
-# same treatment for the same reason — Supertonic's own normalizer either
-# drops "/" silently or passes "+ - * = %" straight through unpronounced.
-_TIME_RE = re.compile(r"\d{1,2}:\d{2}(?::\d{2})?")
+# Clock times ("14:30") used to be left alone on the assumption that they
+# already read fine digit-by-digit in German — true for ElevenLabs, but
+# Supertonic's frontend doesn't silently skip the colon: it reads it aloud
+# as the literal word "Doppelpunkt" ("vierzehn Uhr Doppelpunkt dreißig"
+# instead of "vierzehn Uhr dreißig"), observed live as the exact cause of
+# choppy-sounding time replies. Given its own expansion below (_spell_time)
+# instead. Math symbols get the same treatment for the same reason —
+# Supertonic's own normalizer either drops "/" silently or passes
+# "+ - * = %" straight through unpronounced.
+# The trailing "(?:\s*Uhr)?" absorbs a literal "Uhr" the model already
+# wrote right after the digits ("20:44 Uhr", the common phrasing) so
+# _spell_time's own "Uhr" doesn't end up doubled ("zwanzig Uhr
+# vierundvierzig Uhr") — works the same either way if it wasn't there.
+_TIME_RE = re.compile(r"\b(\d{1,2}):(\d{2})(?::(\d{2}))?\b(?:\s*Uhr)?")
+
+
+def _spell_time(match: re.Match) -> str:
+    hour, minute, second = match.group(1), match.group(2), match.group(3)
+    words = f"{num2words(int(hour), lang='de')} Uhr"
+    # "zwanzig Uhr null" for :00 sounds robotic — natural German just says
+    # "zwanzig Uhr" and drops the minute entirely, same as clock speech
+    # normally works, and num2words(0) would emit an actual "null" here.
+    if int(minute) != 0:
+        words += f" {num2words(int(minute), lang='de')}"
+    if second is not None and int(second) != 0:
+        words += f" und {num2words(int(second), lang='de')} Sekunden"
+    return words
 _DATE_RE = re.compile(r"\b(\d{1,2})\.(\d{1,2})\.(\d{2,4})\b")
 # The two extra lookarounds (before/after) keep this off a dotted token
 # that isn't actually German thousands-grouping, like a version number
@@ -217,33 +236,46 @@ def _spell_number(match: re.Match) -> str:
     return words
 
 
-_PLACEHOLDER = ""
+# Two or more bare digit groups separated only by single spaces, with
+# nothing else marking them as one quantity (no thousands dot, no math
+# symbol) — read naturally as one gigantic cardinal number otherwise.
+# Observed: "030 1234567" (a plain phone number split into area code and
+# local number) turned into "dreißig eine Million
+# zweihundertvierunddreißigtausendfünfhundertsiebenundsechzig" instead of
+# being read digit by digit. Short runs (a couple of small numbers just
+# mentioned next to each other, e.g. "8 12") are left alone — under six
+# total digits reads fine as separate cardinal numbers via the normal pass
+# below, and is far more likely to be two unrelated numbers than a phone
+# number fragment.
+_DIGIT_GROUPS_RE = re.compile(r"(?<!\w)\d{1,15}(?: \d{1,15}){1,}(?!\w)")
+
+
+def _spell_digit_groups(match: re.Match) -> str:
+    digits = match.group(0).replace(" ", "")
+    if len(digits) < 6:
+        return match.group(0)
+    return " ".join(num2words(int(d), lang="de") for d in digits)
+
 
 
 def _expand_numbers_for_speech(text: str) -> str:
-    protected = []
-
-    def shield(m: re.Match) -> str:
-        protected.append(m.group(0))
-        return _PLACEHOLDER
-
-    # A placeholder embedding its own index as digits (e.g. "\x0007\x00")
-    # would just get re-matched and mangled by _NUMBER_RE right below, since
-    # \x00 isn't a word character and so doesn't block the (?<!\w)/(?!\w)
-    # boundary check — a single fixed marker with no digits in it sidesteps
-    # that entirely, restored in order since re.sub visits matches
-    # left-to-right in the same order they were shielded.
-    shielded = _TIME_RE.sub(shield, text)
-    shielded = _DATE_RE.sub(_spell_date, shielded)
-    shielded = _DATE_WORDS_RE.sub(_spell_date_words, shielded)
+    # Every step below replaces digits with words, so none of them can be
+    # re-matched (and re-mangled) by a later step in the pipeline — no
+    # shielding/placeholder juggling needed, unlike when _TIME_RE used to
+    # just protect its match verbatim instead of actually expanding it.
+    expanded = _TIME_RE.sub(_spell_time, text)
+    expanded = _DATE_RE.sub(_spell_date, expanded)
+    expanded = _DATE_WORDS_RE.sub(_spell_date_words, expanded)
+    # Phone-number-shaped runs before the math pass — after conversion the
+    # result is words, not digits, so it can't be re-matched by _NUMBER_RE
+    # below either way.
+    expanded = _DIGIT_GROUPS_RE.sub(_spell_digit_groups, expanded)
     # Math symbols expand to words before numbers do, so e.g. "12+34"
     # becomes "12 plus 34" first — still cleanly digit-bounded for
     # _NUMBER_RE right after, since "plus"/"minus"/etc. are word characters
     # that its (?<!\w)/(?!\w) boundaries respect either way.
-    shielded = _expand_math_symbols_for_speech(shielded)
-    expanded = _NUMBER_RE.sub(_spell_number, shielded)
-    protected_iter = iter(protected)
-    return re.sub(_PLACEHOLDER, lambda _m: next(protected_iter), expanded)
+    expanded = _expand_math_symbols_for_speech(expanded)
+    return _NUMBER_RE.sub(_spell_number, expanded)
 
 
 def _local_say(text: str) -> bytes:

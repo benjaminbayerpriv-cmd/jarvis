@@ -15,10 +15,14 @@
          that animates its flex-basis to 0 instead of an off-screen slide,
          so Jarvis (next to it) can react to the width change instead of
          the panel just floating over everything. -->
+    <!-- VS Code-style sidebar toggle: a window outline with a left panel
+         divider, the panel filling in solid once open (see .sidebar-fill
+         in style.css) instead of a slash/cross to indicate state. -->
     <button class="icon-btn chat-toggle-btn" id="chatToggleBtn" aria-label="Chatfenster ausklappen" title="Chatfenster ausklappen">
       <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M2 3.5h12v7H6.3L3.3 13.2v-2.7H2z"/>
-        <line class="chat-slash" x1="1.5" y1="1.5" x2="14.5" y2="14.5"/>
+        <rect x="1.5" y="2.5" width="13" height="11" rx="1.5"/>
+        <line x1="6" y1="2.5" x2="6" y2="13.5"/>
+        <rect class="sidebar-fill" x="2.3" y="3.3" width="3" height="9.4" rx=".6" fill="currentColor" stroke="none"/>
       </svg>
     </button>
     <aside class="chat-column collapsed" id="debugPanel">
@@ -41,6 +45,10 @@
       <p class="hint" id="hint">Mikrofon freigeben, dann hört Jarvis dauerhaft zu.</p>
 
       <div class="log" id="log"></div>
+
+      <!-- Drag left/right to resize the panel (see app.js) — hidden while
+           collapsed via .chat-column.collapsed in style.css. -->
+      <div class="resize-handle" id="resizeHandle"></div>
     </aside>
 
     <div class="jarvis-column">

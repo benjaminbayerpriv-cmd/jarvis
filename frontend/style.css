@@ -66,6 +66,7 @@ button { font-family: var(--mono); cursor: pointer; }
    with vw rather than left to grow with a wide window. min-width keeps
    the composer's input actually usable on a narrow one. */
 .chat-column {
+  position: relative;
   flex: 0 0 0;
   width: 0;
   min-width: 0;
@@ -76,19 +77,46 @@ button { font-family: var(--mono); cursor: pointer; }
   padding: 0;
   background: var(--housing);
   border-right: 1px solid transparent;
-  transition: flex-basis 220ms ease, width 220ms ease, border-color 220ms ease;
+  transition: border-color 220ms ease;
 }
 
 /* Padding only applies once expanded — border-box can't shrink a box
    below its own padding, so a "0 width" panel that still carried
    left/right padding rendered at that padding's width instead of
-   actually vanishing. */
+   actually vanishing. app.js overrides flex-basis/width inline once the
+   panel has been dragged to a custom size (see resizeHandle below) — an
+   inline style always wins over this vw default without needing !important.
+   flex-basis/width deliberately aren't transitioned (collapse/expand is an
+   instant snap, not a slide): Chromium was observed to get these stuck at
+   their pre-transition value — an inline override from app.js's resize
+   handler silently failing to ever take effect — whenever a transition is
+   declared on either property at the same time app.js changes them. */
 .chat-column:not(.collapsed) {
   flex: 0 0 12.5vw;
   width: 12.5vw;
   min-width: 200px;
   padding: 20px 16px 16px;
   border-right-color: var(--line);
+}
+
+/* Drag left/right to resize (see app.js). A slim strip flush with the
+   panel's own right edge/border, widened only by :hover/.dragging so it
+   doesn't visually compete with the border the rest of the time. */
+.resize-handle {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 6px;
+  height: 100%;
+  cursor: ew-resize;
+  z-index: 6;
+  background: transparent;
+  transition: background-color 160ms;
+}
+.chat-column.collapsed .resize-handle { display: none; }
+.resize-handle:hover,
+.resize-handle.dragging {
+  background: color-mix(in srgb, var(--sig-active) 45%, transparent);
 }
 
 .chat-toggle-btn {
@@ -190,11 +218,11 @@ button { font-family: var(--mono); cursor: pointer; }
 .mic-slash { opacity: 0; transition: opacity 160ms; }
 .icon-btn#muteBtn.off .mic-slash { opacity: 1; }
 
-/* Chat bubble: the opposite default — crossed out while the chat panel is
-   collapsed (the normal starting state), plain once chatToggleBtn.open is
-   set by app.js on expand. */
-.chat-slash { opacity: 1; transition: opacity 160ms; }
-.chat-toggle-btn.open .chat-slash { opacity: 0; }
+/* Sidebar-toggle icon's left panel: faint outline while collapsed (the
+   normal starting state), solid once chatToggleBtn.open is set by app.js
+   on expand — same idea as VS Code's sidebar-visibility icon. */
+.sidebar-fill { opacity: .35; transition: opacity 160ms; }
+.chat-toggle-btn.open .sidebar-fill { opacity: 1; }
 
 .icon-btn#muteBtn.off { color: var(--muted); border-color: color-mix(in srgb, var(--muted) 45%, var(--line)); opacity: 1; }
 
