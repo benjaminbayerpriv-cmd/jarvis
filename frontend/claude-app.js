@@ -46,6 +46,50 @@
   };
 
   // ---------------------------------------------------------------- helfer
+  // Datei-Anhang: liest den TEXT-Inhalt der Datei clientseitig und fügt ihn
+  // direkt in die Nachricht ein — vorher landete hier nur "📎 dateiname.txt"
+  // als reiner Text im Composer, die Datei selbst wurde nie gelesen oder
+  // irgendwohin geschickt (es gibt auch keinen Upload-Endpoint im Backend).
+  // Bewusst nur Text: Bilder/PDFs bräuchten ein multimodales Modell bzw.
+  // eine eigene Backend-Route, die es hier nicht gibt — für die verlinkte
+  // "Datei hochladen"-Erwartung des Nutzers deckt Text/Code den Regelfall
+  // ab (Skripte, Configs, Logs, Notizen), ohne stillschweigend mehr
+  // vorzutäuschen, als die App tatsächlich verarbeiten kann.
+  const ATTACH_MAX_CHARS = 20000;
+  function looksBinary(text) {
+    // NUL-Bytes oder ein hoher Anteil des Unicode-Replacement-Zeichens
+    // deuten auf eine Datei hin, die keine echte Textdatei ist (Bild, PDF,
+    // Audio, …) — FileReader.readAsText() wirft dafür keinen Fehler,
+    // sondern liefert einfach unlesbaren Müll zurück.
+    if (text.indexOf('\x00') !== -1) return true;
+    let bad = 0;
+    for (let i = 0; i < text.length && i < 2000; i++) if (text[i] === '�') bad++;
+    return bad > 20;
+  }
+  function readFileAsText(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ''));
+      reader.onerror = () => reject(reader.error);
+      reader.readAsText(file);
+    });
+  }
+  async function readAttachedFile(file) {
+    let text;
+    try {
+      text = await readFileAsText(file);
+    } catch (e) {
+      return `📎 ${file.name}: konnte nicht gelesen werden.`;
+    }
+    if (looksBinary(text)) {
+      return `📎 ${file.name}: Inhalt kann nicht als Text gelesen werden (Bild/PDF/Binärdatei) — nur Textdateien werden derzeit unterstützt.`;
+    }
+    let truncated = false;
+    if (text.length > ATTACH_MAX_CHARS) { text = text.slice(0, ATTACH_MAX_CHARS); truncated = true; }
+    const note = truncated ? ` (gekürzt auf ${ATTACH_MAX_CHARS} Zeichen)` : '';
+    return `📎 ${file.name}${note}:\n\`\`\`\n${text}\n\`\`\``;
+  }
+
   function base64ToBlob(base64, mime) {
     const bytes = atob(base64);
     const arr = new Uint8Array(bytes.length);
@@ -531,13 +575,14 @@
     fileInput.type = 'file';
     fileInput.multiple = true;
     fileInput.style.display = 'none';
-    fileInput.addEventListener('change', () => {
-      const names = fileInput.files ? [...fileInput.files].map((f) => f.name) : [];
+    fileInput.addEventListener('change', async () => {
+      const files = fileInput.files ? [...fileInput.files] : [];
       fileInput.value = '';
-      if (!names.length) return;
+      if (!files.length) return;
+      const blocks = await Promise.all(files.map(readAttachedFile));
       const base = (composerInput ? composerInput.innerText : '').trim();
-      const attach = '📎 ' + names.join(', ');
-      if (composerInput) { composerInput.innerText = base ? base + '\n' + attach : attach; composerInput.classList.remove('is-empty'); if (sendBtn) sendBtn.disabled = false; }
+      const attach = blocks.join('\n\n');
+      if (composerInput) { composerInput.innerText = base ? base + '\n\n' + attach : attach; composerInput.classList.remove('is-empty'); if (sendBtn) sendBtn.disabled = false; }
     });
     document.body.appendChild(fileInput);
 
