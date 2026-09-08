@@ -40,6 +40,7 @@
     settings: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915"/><circle cx="12" cy="12" r="3"/></svg>',
     paperclip: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m16 6-8.414 8.586a2 2 0 0 0 2.829 2.829l8.414-8.586a4 4 0 1 0-5.657-5.657l-8.379 8.551a6 6 0 1 0 8.485 8.485l8.379-8.551"/></svg>',
     stop: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect width="18" height="18" x="3" y="3" rx="4" fill="currentColor"/></svg>',
+    close: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>',
     volume: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 4.702a.705.705 0 0 0-1.203-.498L6.413 7.587A1.4 1.4 0 0 1 5.416 8H3a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2.416a1.4 1.4 0 0 1 .997.413l3.383 3.384A.705.705 0 0 0 11 19.298z"/><path d="M16 9a5 5 0 0 1 0 6"/><path d="M19.364 18.364a9 9 0 0 0 0-12.728"/></svg>',
     muted: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 4.702a.7.7 0 0 0-1.203-.498L6.413 7.587A1.4 1.4 0 0 1 5.416 8H3a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2.416a1.4 1.4 0 0 1 .997.413l3.383 3.384A.7.7 0 0 0 11 19.298z"/><path d="m16.5 14.5 5-5"/><path d="m16.5 9.5 5 5"/></svg>',
   };
@@ -281,7 +282,7 @@
         <button class="js-sp-mute" title="Mikrofon aus" style="width:44px;height:44px;border-radius:14px;background:${C.bgHover};border:1px solid ${C.border};color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;">${ICONS.mic}</button>
         <button class="js-sp-stop" title="Stopp" style="width:44px;height:44px;border-radius:14px;background:${C.bgHover};border:1px solid ${C.border};color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;">${ICONS.stop}</button>
         <button class="js-sp-send" title="Senden" style="width:44px;height:44px;border-radius:14px;background:${C.bgHover};border:1px solid ${C.border};color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;">${ICONS.send}</button>
-        <button class="js-sp-chat" title="Chat-Modus" style="width:44px;height:44px;border-radius:14px;background:${C.bgHover};border:1px solid ${C.border};color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;">${ICONS.chat}</button>
+        <button class="js-sp-chat" title="Chat-Modus" style="width:44px;height:44px;border-radius:14px;background:${C.bgHover};border:1px solid ${C.border};color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;">${ICONS.close}</button>
       </div>
     `;
     document.body.appendChild(speechBarEl);
@@ -1140,7 +1141,11 @@
 
   // Eine konstante Farbe für alle Zustände — die Status werden nur über die
   // BEWEGUNG erzählt (wie in der alten JARVIS-Kugel), nicht über Farbwechsel.
+  // Ausnahme: stummgeschaltet wird ausdrücklich grau eingefärbt, als klares
+  // visuelles Signal, dass das Mikrofon gerade nichts aufnimmt.
   const ORB_COLOR = C.accent;
+  const ORB_MUTED_COLOR = '#8c877c';
+  function currentOrbColor() { return muted ? ORB_MUTED_COLOR : ORB_COLOR; }
 
   // aktueller Orb-Zustand: jeder bekommt eine eigene Animation
   function orbStatus() {
@@ -1186,17 +1191,19 @@
     const cosY = Math.cos(orbRotY), sinY = Math.sin(orbRotY);
     const cosX = Math.cos(orbRotX), sinX = Math.sin(orbRotX);
 
-    // weicher Glow hinter der Kugel (eine Farbe, keine Status-Änderung)
+    // weicher Glow hinter der Kugel (eine Farbe, keine Status-Änderung —
+    // außer stummgeschaltet, siehe currentOrbColor())
+    const orbColor = currentOrbColor();
     const glow = orbCtx.createRadialGradient(cx, cy, 0, cx, cy, R * 1.5);
-    glow.addColorStop(0, ORB_COLOR + '22');
-    glow.addColorStop(1, ORB_COLOR + '00');
+    glow.addColorStop(0, orbColor + '22');
+    glow.addColorStop(1, orbColor + '00');
     orbCtx.globalAlpha = 0.5;
     orbCtx.fillStyle = glow;
     orbCtx.beginPath();
     orbCtx.arc(cx, cy, R * 1.5, 0, Math.PI * 2);
     orbCtx.fill();
 
-    orbCtx.fillStyle = ORB_COLOR;
+    orbCtx.fillStyle = orbColor;
     for (let i = 0; i < orbPoints.length; i++) {
       const p = orbPoints[i];
       const bx = p.x, by = p.y, bz = p.z;
@@ -1281,6 +1288,15 @@
   }
   function hideOrb() {
     orbVisible = false;
+    // orbRaf zurücksetzen, nicht nur orbVisible: orbLoop() bricht bei
+    // orbVisible=false einfach mit `return` ab, OHNE einen neuen Frame
+    // anzufordern — orbRaf behält dabei die alte (jetzt tote) Frame-ID.
+    // Ohne den Reset hier sieht showOrb()'s `if (!orbRaf)`-Check die ID
+    // fälschlich als "läuft noch" an und startet nie wieder einen neuen
+    // requestAnimationFrame-Loop — die Kugel bleibt dann beim nächsten
+    // Öffnen des Sprachmodus als eingefrorenes Standbild stehen (genau der
+    // gemeldete "Animation hängt sich beim Unterbrechen auf"-Fall).
+    if (orbRaf) { cancelAnimationFrame(orbRaf); orbRaf = 0; }
     // nicht nur die Animationsschleife stoppen, sondern den Canvas wirklich
     // ausblenden — sonst bleibt der letzte Frame als "Geister-Kugel" stehen.
     if (orbCanvas) { orbCanvas.style.display = 'none'; }
