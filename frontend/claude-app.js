@@ -108,7 +108,7 @@
 
   // UI-Anker (in buildUi() gesetzt)
   let uiEl = null, sidebarEl = null, chatListEl = null, chatRootEl = null, threadEl = null;
-  let composerInput = null, sendBtn = null, micBtn = null, composerTray = null, modelEl = null, modelMenuEl = null;
+  let composerInput = null, sendBtn = null, micBtn = null, composerTray = null, modelEl = null, modelBtnEl = null, modelMenuEl = null;
 
   // Sprachmodus + VAD
   let speechMode = false, micReady = false, micStream = null, muted = false;
@@ -271,6 +271,7 @@
     sendBtn = $('.js-send', uiEl);
     micBtn = $('.js-mic', uiEl);
     modelEl = $('.js-model-label', uiEl);
+    modelBtnEl = $('.js-model', uiEl);
     modelMenuEl = $('.js-modelmenu', uiEl);
 
     injectSkinCss();
@@ -396,22 +397,36 @@
     for (const p of $$('.js-pill', uiEl)) p.addEventListener('click', () => setMode(p.getAttribute('data-mode')));
     // Neu
     $('.js-new', uiEl).addEventListener('click', startNewConversation);
-    // Senden
-    if (sendBtn) sendBtn.addEventListener('click', (e) => { e.preventDefault(); sendFromComposer(); });
+    // Senden — mit Text: abschicken. Leer: wie der echte claude.ai-Button den
+    // Sprechmodus öffnen, statt gar nichts zu tun (siehe unten, warum das vorher
+    // gar nicht erst zum Klick kam).
+    if (sendBtn) sendBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      const hasText = composerInput && composerInput.innerText.trim().length > 0;
+      if (hasText) sendFromComposer();
+      else { speechMode ? exitSpeech() : enterSpeech(); }
+    });
     // Composer: Enter sendet; Placeholder-Klasse beim Tippen entfernen.
     if (composerInput) {
       composerInput.addEventListener('keydown', (e) => {
         if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendFromComposer(); }
       });
       composerInput.addEventListener('input', () => {
+        // sendBtn wurde hier früher bei leerem Feld disabled — ein disabled
+        // <button> feuert überhaupt kein click-Event mehr, was den Button
+        // bei leerem Composer komplett tot aussehen ließ (genau der
+        // gemeldete "Sprechmodus-Symbol tut nichts"-Fall, da der Button in
+        // diesem Zustand ja gerade den Sprechmodus öffnen soll).
         composerInput.classList.toggle('is-empty', composerInput.innerText.trim().length === 0);
-        if (sendBtn) sendBtn.disabled = composerInput.innerText.trim().length === 0;
       });
     }
     // Mikro (Sprachmodus)
     if (micBtn) micBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); speechMode ? exitSpeech() : enterSpeech(); });
-    // Modell-Auswahl
-    if (modelEl) modelEl.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); toggleModelMenu(); });
+    // Modell-Auswahl — Listener am ganzen Button, nicht nur am inneren
+    // Label-Span: ein Klick auf den Pfeil "▾" oder das Innenpolster (also
+    // fast die halbe Klickfläche) landete daneben und tat gar nichts, weil
+    // dieser Text-Knoten kein Kind des Spans ist.
+    if (modelBtnEl) modelBtnEl.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); toggleModelMenu(); });
     window.addEventListener('click', () => { if (modelMenuEl) modelMenuEl.style.display = 'none'; });
 
     // Restore the last-open conversation's turns on load, then the sidebar
@@ -677,8 +692,13 @@
       if (composerTray) composerTray.style.opacity = '0.25';
       if (micBtn) micBtn.style.background = C.accent;
       if (micBtn) micBtn.style.color = '#fff';
-    }).catch(() => {
+    }).catch((err) => {
+      // A silent title-only hint is easy to miss entirely — this looked
+      // exactly like "the button does nothing" from the outside. Surfaced
+      // in the composer's own placeholder instead, where it's actually seen.
+      console.warn('[jarvis] Mikrofonzugriff fehlgeschlagen:', err);
       if (micBtn) micBtn.title = 'Mikrofon abgelehnt — Tippen funktioniert';
+      if (composerInput) composerInput.setAttribute('data-placeholder', 'Mikrofon nicht verfügbar — bitte tippen');
     });
   }
   function exitSpeech() {
