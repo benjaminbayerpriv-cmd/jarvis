@@ -36,6 +36,17 @@ _ABBREV = {
 
 _WORD_BEFORE_DOT_RE = re.compile(r"([A-Za-zÄÖÜäöüß]+)$")
 
+# A bare digit followed by ". <Monatsname>" is a German date's day-of-month
+# ordinal ("der 8. September", "den 08. September 2026"), never a sentence
+# end — unlike a plain digit before ANY dot (see _pop_complete_sentences),
+# which can't be treated as always-non-terminal without also swallowing
+# genuinely sentence-final numbers ("Das Jahr ist 2026." must still split).
+# Restricting to a month name right after keeps this to the one case that
+# actually needs it.
+_MONTH_AFTER_DOT_RE = re.compile(
+    r"^\s+(?:Januar|Februar|März|April|Mai|Juni|Juli|August|September|Oktober|November|Dezember)\b"
+)
+
 
 def _pop_complete_sentences(buffer: str) -> tuple[list[str], str]:
     """Peel finished sentences off a growing stream so each can go to
@@ -71,6 +82,15 @@ def _pop_complete_sentences(buffer: str) -> tuple[list[str], str]:
         if buffer[i] == ".":
             prev = buffer[i - 1] if i else ""
             if prev.isdigit() and after.isdigit():
+                i = j
+                continue
+            # Same idea, for the date-ordinal case specifically (see
+            # _MONTH_AFTER_DOT_RE) — without this, a streamed date got
+            # mis-split mid-date ("... den 08." / "September 2026." as two
+            # separate TTS calls), which also broke tts.py's date-to-words
+            # expansion (it needs the day and month name in the same
+            # chunk) and read the day as a cardinal instead of an ordinal.
+            if prev.isdigit() and _MONTH_AFTER_DOT_RE.match(buffer[j:]):
                 i = j
                 continue
             word = _WORD_BEFORE_DOT_RE.search(buffer[start:i])
@@ -1143,6 +1163,35 @@ def _stream_reply_impl(user_message: str, history: list | None = None, turn_id: 
             return "Da ist mir gerade etwas verrutscht, frag bitte nochmal."
         return text
 
+    # Sentences that read as an action claim with nothing backing them up
+    # YET this round — but the model can still emit a real tool_calls delta
+    # moments later in the very same response (observed live: "Ich öffne
+    # die YouTube-Ergebnisse für ..." immediately followed by the actual
+    # youtube_search call in the same round). Vetting a sentence the instant
+    # it completes can't see that still-arriving tool call, so a genuine
+    # claim got branded a lie every time the model announced the action
+    # before the structured call for it. Held here instead and resolved
+    # once the round's outcome is known — see _flush_pending_claims.
+    pending_claims: list[str] = []
+
+    def _is_pending_claim_risk(text: str) -> bool:
+        return (
+            not _looks_like_tool_text(text)
+            and not tools_used
+            and not recent_action_confirmed
+            and _claims_action(text)
+        )
+
+    def _flush_pending_claims():
+        nonlocal pending_claims
+        for s in pending_claims:
+            vetted = _vet(s)
+            if full_text_parts and full_text_parts[-1] == vetted:
+                continue
+            full_text_parts.append(vetted)
+            yield {"type": "sentence", "text": vetted}
+        pending_claims = []
+
     for _ in range(MAX_TOOL_ROUNDS):
         # A round is retried on its own (outside the tool-round budget above)
         # when the stream comes back corrupted — see _CORRUPT_PREFIX_RE.
@@ -1156,6 +1205,7 @@ def _stream_reply_impl(user_message: str, history: list | None = None, turn_id: 
             buffer = ""
             content_acc = ""
             tool_calls_acc = {}
+            pending_claims = []
             # None = can't tell yet, True = leaked call (hold back speech),
             # False = ordinary prose (stream it), "corrupt" = scrap + retry.
             # This is decided once from the first characters — it catches a
@@ -1202,7 +1252,13 @@ def _stream_reply_impl(user_message: str, history: list | None = None, turn_id: 
                                     trailing_suspect_text = s
                                     break
                                 clean = _strip_think_tags(s)
-                                if clean:
+                                if clean and _is_pending_claim_risk(clean):
+                                    # Might still be backed by a tool_calls
+                                    # delta arriving later in this very
+                                    # round — held instead of vetted now,
+                                    # see _flush_pending_claims.
+                                    pending_claims.append(clean)
+                                elif clean:
                                     # Spoken the moment it's ready, not held
                                     # until the whole reply is in — the
                                     # difference between hearing the first
@@ -1293,6 +1349,7 @@ def _stream_reply_impl(user_message: str, history: list | None = None, turn_id: 
                     yield {"type": "sentence", "text": result}
                     yield {"type": "done", "full_text": result}
                     return
+            yield from _flush_pending_claims()
             continue
 
         # A call leaked after some genuine lead-in prose (already spoken/
@@ -1312,6 +1369,7 @@ def _stream_reply_impl(user_message: str, history: list | None = None, turn_id: 
                 messages.append({"role": "assistant", "content": content_acc})
                 messages.append({"role": "user", "content": f"[Ergebnis von {name}: {result}]"})
                 buffer = ""
+                yield from _flush_pending_claims()
                 continue
             # Not recoverable — drop the garbled tail rather than speak it.
             buffer = ""
@@ -1336,6 +1394,7 @@ def _stream_reply_impl(user_message: str, history: list | None = None, turn_id: 
                     }
                 )
                 buffer = ""
+                yield from _flush_pending_claims()
                 continue
 
         # Round produced no real tool call. If the whole reply was a call
@@ -1356,7 +1415,14 @@ def _stream_reply_impl(user_message: str, history: list | None = None, turn_id: 
             messages.append({"role": "assistant", "content": content_acc})
             messages.append({"role": "user", "content": f"[Ergebnis von {name}: {result}]"})
             buffer = ""
+            yield from _flush_pending_claims()
             continue
+
+        # No tool ran this round after all (every recovery path above was
+        # ruled out) — resolve any held claims now, same rules as _vet
+        # would have applied at the time, since nothing arrived to back
+        # them up.
+        yield from _flush_pending_claims()
 
         if suspect == "corrupt":
             # All retries came back corrupted too — silently drop it rather

@@ -47,7 +47,13 @@ def test_youtube_routing():
         tools.call_tool = lambda name, args: calls.append((name, args)) or "Ausgeführt."
         events = list(llm_client.stream_reply("Suche auf YouTube nach Donut SMP"))
         assert calls == [("youtube_search", {"query": "Donut SMP"})]
-        assert events[0]["text"] == "Ausgeführt."
+        # The model paraphrases the tool's result rather than echoing it
+        # verbatim, so asserting exact wording here would just test today's
+        # phrasing, not the actual guarantee: a real tool ran, and nothing
+        # denies that it did (see llm_client._claims_action / _vet).
+        sentences = [e["text"] for e in events if e["type"] == "sentence"]
+        assert sentences, "expected at least one spoken sentence"
+        assert not any("nicht ausgeführt" in s for s in sentences), sentences
     finally:
         tools.call_tool = real_call
 
