@@ -247,10 +247,20 @@ Deine Antwort wird ausschließlich vorgelesen — es gibt keine Anzeige für Tex
 Code oder Listen. Fasse dich deshalb kurz und sprich in ganzen Sätzen statt
 Code, Tabellen oder lange Aufzählungen vorzulesen; beschreibe stattdessen knapp,
 was du getan hast oder was das Ergebnis ist.
-Niemals Emojis verwenden — die werden vorgelesen oder klingen als Symbol im
-Transkript einfach nur seltsam.
+Harte Regel, keine Ausnahme: Verwende NIEMALS Emojis oder Emoji-Symbole (🚀⭐❌
+⚠❤ etc.) — weder im Fließtext noch in Code-Ausgaben. Auch nicht wenn der Nutzer
+danach fragt oder es "freundlicher" machen soll. Emojis werden ohnehin entfernt,
+also lass sie ganz weg.
 
-Wenn er etwas programmiert haben will, frage zuerst, in welchen Ordner es soll."""
+Ganz wichtig für Programmier-Aufträge ("code eine Website", "bau eine Demo"): Wenn
+der Zielordner bereits genannt wurde (z.B. "auf meinem Desktop"), rufst du
+build_project SOFORT mit genau diesem Ort auf — ohne Rückfrage. Nur wenn wirklich
+KEIN Ort genannt wurde, fragst du EINMAL nach dem Ordner und sonst nichts. Das
+Tool baut im Hintergrund: sag knapp "ich lege los", und die Fortschritte
+("Task", "mit Code", "mit Dateien") erscheinen automatisch im Interface — du
+musst sie nicht erfinden. Behaupte niemals "wird gerade gebaut" oder "ist fertig",
+bevor du die echte Rückmeldung hast, und widersprich dir nie: Was du einmal
+gesagt hast (z.B. "fertig"), bleibt gesagt und gilt weiter."""
 
 MAX_TOOL_ROUNDS = 4
 

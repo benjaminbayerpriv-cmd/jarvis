@@ -32,6 +32,36 @@ active_sockets: list[WebSocket] = []
 filler_urls: list[str] = []
 
 
+# Emoji-Range, die aus KI-Antworten entfernt werden. Der Nutzer will keine
+# Emojis in den Antworten — weder im Text noch in der Sprachausgabe. Der Filter
+# sitzt an EINER Stelle (hier), damit Display UND TTS denselben bereinigten
+# Text erhalten. Entfernt werden die farbigen Piktogramm-Blöcke (U+1F000–U+1FAFF),
+# die klassischen BMP-Symbole (U+2600–U+27BF, U+2B00–U+2BFF, U+2300–U+23FF für
+# Emoji-Defaults wie ⏰⌚), regionale Flags (U+1F1E6–U+1F1FF), Skin-Tones
+# (U+1F3FB–U+1F3FF), das Joiner-Zeichen (U+200D, zerlegt ZWJ-Komposita wie
+# 👨‍👩‍👧 in Einzelzeichen) und die Variationsselektoren (U+FE00–U+FE0F).
+_EMOJI_RE = re.compile(
+    "["
+    "\U0001F000-\U0001FAFF"  # Piktogramme: Smileys, 💡, 🚀, Tiere, …
+    "\U0001F1E6-\U0001F1FF"  # regionale Indikatoren (Flaggen)
+    "\U00002300-\U000023FF"  # ⌚⏰⌛⏳ (emoji-default)
+    "\U00002600-\U000027BF"  # ⭐❌✅⚠❤✨ …
+    "\U00002B00-\U00002BFF"  # wiederkehrende Symbolpfeile/Formen
+    "\U0001F3FB-\U0001F3FF"  # Hauttöne
+    "\U0000200D"  # ZWJ (Zero-Width-Joiner)
+    "\U000020E3"  # Keycap-Combiner
+    "\U0000FE00-\U0000FE0F"  # Variationsselektoren
+    "]"
+)
+
+
+def _strip_emojis(text: str) -> str:
+    """Entfernt Emojis aus einer Antwort; lässt normalen Text unangetastet."""
+    if not text:
+        return text
+    return _EMOJI_RE.sub("", text)
+
+
 async def broadcast(payload: dict) -> None:
     dead = []
     for ws in active_sockets:
@@ -205,8 +235,8 @@ def chat(req: ChatRequest):
         reply = llm_client.get_reply(req.message, req.history, req.mode)
     except (requests.RequestException, llm_client.ModelError):
         reply = (
-            "Ich komm gerade nicht an mein Sprachmodell ran. "
-            "Läuft LM Studio und ist der Server dort gestartet?"
+            "I can't reach my language model right now. "
+            "Is LM Studio running and has its server been started?"
         )
     return ChatResponse(reply=reply)
 
@@ -283,7 +313,12 @@ def chat_stream(req: ChatRequest):
         try:
             for event in llm_client.stream_reply(req.message, req.history, turn_id=req.turn_id, mode=req.mode):
                 if event["type"] == "sentence":
-                    text = event["text"]
+                    text = _strip_emojis(event["text"])
+                    # Leere Sätze (löst ein Reasoning-Modell manchmal am Ende aus)
+                    # ganz überspringen — weder anzeigen noch (den Mini-Botch)
+                    # vertonen.
+                    if not text.strip():
+                        continue
                     # Text wird SOFORT geschickt — TTS-Synthese dauert real
                     # Sekunden, und der Nutzer soll nicht auf die Stimme warten,
                     # nur um überhaupt etwas zu sehen. Die Worte gehen zuerst
@@ -302,11 +337,11 @@ def chat_stream(req: ChatRequest):
                 elif event["type"] == "partial":
                     # Zwischentext des noch unfertigen Satzes — sofort weiter,
                     # damit der Nutzer live mitlesen kann. Kein Audio, nur Text.
-                    yield json.dumps({"type": "partial", "text": event["text"]}) + "\n"
+                    yield json.dumps({"type": "partial", "text": _strip_emojis(event["text"])}) + "\n"
                 elif event["type"] == "done":
-                    full_text = event["full_text"]
+                    full_text = _strip_emojis(event["full_text"])
                     yield json.dumps(
-                        {"type": "done", "full_text": event["full_text"], "conversation_id": conv_id}
+                        {"type": "done", "full_text": full_text, "conversation_id": conv_id}
                     ) + "\n"
             if full_text:
                 transcript_log.log_turn(req.message, full_text, req.mode)
@@ -315,8 +350,8 @@ def chat_stream(req: ChatRequest):
                     _generate_title_in_background(req.message, full_text)
         except (requests.RequestException, llm_client.ModelError, KeyError, IndexError) as exc:
             fallback = (
-                "Ich komme gerade nicht an mein Sprachmodell ran. "
-                "Prüfe bitte, ob Gemma 4 E4B in LM Studio geladen ist."
+                "I can't reach my language model right now. "
+                "Please check whether Gemma is loaded in LM Studio."
             )
             print(f"[model] Anfrage fehlgeschlagen: {exc}")
             try:
