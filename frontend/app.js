@@ -7,8 +7,6 @@ const IS_MAC = /Mac|iPod|iPhone|iPad/.test(navigator.platform);
 const stateLabel = document.getElementById("stateLabel");
 const hintEl = document.getElementById("hint");
 const logEl = document.getElementById("log");
-const composer = document.getElementById("composer");
-const inputEl = document.getElementById("input");
 const startBtn = document.getElementById("startBtn");
 const muteBtn = document.getElementById("muteBtn");
 const stopBtn = document.getElementById("stopBtn");
@@ -26,10 +24,9 @@ quitBtn.addEventListener("click", () => {
   window.close();
 });
 
-// #log/#input/composer are the small chat panel (id="debugPanel", see
-// index.html) — collapsed by default, toggled open by chatToggleBtn below.
-// The turn-by-turn record also always goes to backend/transcript.log
-// regardless of whether this panel is ever opened.
+// #log is the small chat panel (id="debugPanel", see index.html) —
+// collapsed by default, toggled open by chatToggleBtn below. Voice-only:
+// there's no text input, #log just mirrors the spoken conversation.
 const chatColumn = document.getElementById("debugPanel");
 const chatToggleBtn = document.getElementById("chatToggleBtn");
 
@@ -40,13 +37,101 @@ chatToggleBtn.addEventListener("click", () => {
   chatToggleBtn.classList.toggle("open", !collapsed);
   chatToggleBtn.title = chatToggleBtn.ariaLabel =
     collapsed ? "Chatfenster ausklappen" : "Chatfenster einklappen";
-  if (!collapsed) {
-    inputEl.focus();
-    loadTranscriptHistory();
-  }
+  if (!collapsed) loadConversationList();
 });
 
 let history = [];
+
+/* ---------- conversations (sidebar list, see backend/conversations.py) ---------- */
+
+const convListEl = document.getElementById("convList");
+const newChatBtn = document.getElementById("newChatBtn");
+
+function randomId() {
+  return crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+// Persisted across page reloads so re-opening the app continues the same
+// conversation instead of silently starting a new, empty one every time.
+let currentConversationId = localStorage.getItem("jarvis_conversation_id") || randomId();
+localStorage.setItem("jarvis_conversation_id", currentConversationId);
+
+// Each sidebar entry is its own little accordion: click the title to show
+// its transcript right underneath, click again to hide it — independent
+// of whichever conversation is actually live in #log. Fetched once per
+// entry (transcriptEl.dataset.loaded) and kept in the DOM afterwards, so
+// collapsing and re-expanding the same entry doesn't refetch it.
+async function toggleConversationEntry(id, entry) {
+  const transcriptEl = entry.querySelector(".conv-transcript");
+  const isOpen = entry.classList.toggle("expanded");
+  transcriptEl.classList.toggle("open", isOpen);
+  if (!isOpen || transcriptEl.dataset.loaded) return;
+  try {
+    const r = await fetch(`/conversations/${encodeURIComponent(id)}`);
+    if (!r.ok) return;
+    const { turns } = await r.json();
+    for (const t of turns || []) transcriptEl.appendChild(buildTurnEl(t.role, t.text));
+    transcriptEl.dataset.loaded = "1";
+  } catch (_) {}
+}
+
+function renderConversationList(list) {
+  convListEl.innerHTML = "";
+  for (const conv of list) {
+    const entry = document.createElement("div");
+    entry.className = "conv-entry";
+
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "conv-item";
+    // The one currently live in #log (voice conversation in progress),
+    // not whichever entry happens to be expanded right now.
+    if (conv.id === currentConversationId) btn.classList.add("active");
+    btn.textContent = conv.title || "Neuer Chat";
+    btn.title = btn.textContent;
+    btn.addEventListener("click", () => toggleConversationEntry(conv.id, entry));
+
+    const transcriptEl = document.createElement("div");
+    transcriptEl.className = "conv-transcript";
+
+    entry.append(btn, transcriptEl);
+    convListEl.appendChild(entry);
+  }
+}
+
+async function loadConversationList() {
+  try {
+    const r = await fetch("/conversations");
+    if (!r.ok) return;
+    const { conversations: list } = await r.json();
+    renderConversationList(list || []);
+  } catch (_) {}
+}
+
+function startNewChat() {
+  currentConversationId = randomId();
+  localStorage.setItem("jarvis_conversation_id", currentConversationId);
+  logEl.innerHTML = "";
+  history = [];
+  loadConversationList();
+}
+
+newChatBtn.addEventListener("click", startNewChat);
+
+// Restores the live conversation's turns into #log once on page load,
+// regardless of whether the panel is open yet — opening it should reveal
+// a chat that's already there, not trigger the fetch for the first time.
+(async () => {
+  try {
+    const r = await fetch(`/conversations/${encodeURIComponent(currentConversationId)}`);
+    if (!r.ok) return;
+    const { turns } = await r.json();
+    for (const t of turns || []) {
+      addTurn(t.role, t.text);
+      history.push({ role: t.role === "you" ? "user" : "assistant", content: t.text });
+    }
+  } catch (_) {}
+})();
 
 // Once the rolling history window fills up, the oldest chunk used to just
 // be dropped outright — mid-conversation amnesia with no trace left. Now
@@ -608,29 +693,6 @@ function addTurn(who, text) {
   return el.querySelector(".said");
 }
 
-// Scroll-back: backend/transcript.log is written on every turn regardless
-// of whether this panel is ever opened (see backend/transcript_log.py), so
-// the first time it's opened this fetches that history instead of the
-// panel only ever showing turns from the current page session. Loaded
-// once per page load — historyLoaded is set before the fetch resolves so
-// two quick toggles can't both go fetch it.
-let historyLoaded = false;
-async function loadTranscriptHistory() {
-  if (historyLoaded) return;
-  historyLoaded = true;
-  try {
-    const r = await fetch("/transcript");
-    if (!r.ok) return;
-    const { turns } = await r.json();
-    const frag = document.createDocumentFragment();
-    for (const t of turns) frag.appendChild(buildTurnEl(t.role, t.text));
-    logEl.insertBefore(frag, logEl.firstChild);
-    logEl.scrollTop = logEl.scrollHeight;
-  } catch (_) {
-    historyLoaded = false; // transient failure — worth retrying next open
-  }
-}
-
 /* ---------- inline tool output (Claude Code-style verbose log) ---------- */
 
 function escapeHtml(s) {
@@ -912,7 +974,12 @@ async function handleUserMessage(text) {
     const resp = await fetch("/chat/stream", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message: text, history, turn_id: String(turn.id) }),
+      body: JSON.stringify({
+        message: text,
+        history,
+        turn_id: String(turn.id),
+        conversation_id: currentConversationId,
+      }),
     });
     if (turn.aborted) return;
     if (!resp.ok) {
@@ -956,9 +1023,16 @@ async function handleUserMessage(text) {
       // backend bug, not silence — surface it instead of leaving the turn
       // looking like Jarvis never heard the question at all.
       if (!parts.length) said.textContent = "Keine Antwort erhalten. Bitte nochmal versuchen.";
+      const wasFirstTurn = history.length === 0;
       history.push({ role: "user", content: text });
       history.push({ role: "assistant", content: fullText || parts.join(" ") });
       await trimHistory();
+      // The conversation now exists on disk (and, for a first turn, its
+      // title generation just started in the background) — refresh the
+      // sidebar so it shows up, then once more shortly after for the
+      // title, which finishes a beat behind the reply itself.
+      loadConversationList();
+      if (wasFirstTurn) setTimeout(loadConversationList, 2500);
     }
   } catch (err) {
     if (!turn.aborted) {
@@ -976,16 +1050,6 @@ async function handleUserMessage(text) {
     }
   }
 }
-
-/* ---------- text input ---------- */
-
-composer.addEventListener("submit", (e) => {
-  e.preventDefault();
-  const text = inputEl.value.trim();
-  if (!text) return;
-  inputEl.value = "";
-  handleUserMessage(text);
-});
 
 /* ---------- local speech-to-text (record on VAD, transcribe via Whisper) ---------- */
 //

@@ -9,13 +9,12 @@
 <body>
   <main class="stage" id="console">
 
-    <!-- Chat panel: the same #log/#input/composer that already existed
-         (previously built but never actually shown to the user) now made
-         visible as an actual small chat window, collapsed by default: a
-         fixed top-left toggle outside the panel itself, plus a .collapsed
-         class on the panel that animates its flex-basis to 0 instead of an
-         off-screen slide, so Jarvis (next to it) can react to the width
-         change instead of the panel just floating over everything. -->
+    <!-- Chat panel: voice-only (no text input — Jarvis is spoken to, not
+         typed at), collapsed by default via a fixed top-left toggle
+         outside the panel itself, plus a .collapsed class on the panel
+         that animates its flex-basis to 0 instead of an off-screen slide,
+         so Jarvis (next to it) can react to the width change instead of
+         the panel just floating over everything. -->
     <button class="icon-btn chat-toggle-btn" id="chatToggleBtn" aria-label="Chatfenster ausklappen" title="Chatfenster ausklappen">
       <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">
         <path d="M2 3.5h12v7H6.3L3.3 13.2v-2.7H2z"/>
@@ -30,20 +29,18 @@
         </span>
       </header>
 
+      <!-- Sidebar list of past conversations (Claude-style: one short
+           auto-generated title per entry, see backend/conversations.py).
+           Clicking an entry loads that conversation into #log/history
+           below; "Neuer Chat" starts a fresh one. -->
+      <div class="conv-sidebar">
+        <button type="button" class="conv-new-btn" id="newChatBtn">+ Neuer Chat</button>
+        <div class="conv-list" id="convList"></div>
+      </div>
+
       <p class="hint" id="hint">Mikrofon freigeben, dann hört Jarvis dauerhaft zu.</p>
 
       <div class="log" id="log"></div>
-
-      <form class="composer" id="composer">
-        <input
-          id="input"
-          type="text"
-          autocomplete="off"
-          placeholder="Schreib oder sprich einfach"
-          aria-label="Nachricht an Jarvis"
-        />
-        <button type="submit" class="send" aria-label="Senden">↵</button>
-      </form>
     </aside>
 
     <div class="jarvis-column">

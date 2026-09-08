@@ -15,7 +15,7 @@ from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import browser_agent, config, fillers, llm_client, memory, panel, stt, transcript_log, tts
+from . import browser_agent, config, conversations, fillers, llm_client, memory, panel, stt, transcript_log, tts
 
 app = FastAPI(title="Jarvis")
 app.add_middleware(
@@ -86,6 +86,7 @@ class ChatRequest(BaseModel):
     message: str
     history: list[dict] | None = None
     turn_id: str | None = None
+    conversation_id: str | None = None
 
 
 class CancelRequest(BaseModel):
@@ -210,6 +211,23 @@ def chat_stream(req: ChatRequest):
     can start after the first sentence instead of waiting for the whole
     reply plus a single big TTS call."""
 
+    conv_id = req.conversation_id or conversations.new_id()
+
+    def _generate_title_in_background(user_text: str, assistant_text: str) -> None:
+        # Fire-and-forget: an extra LLM round-trip for the title must never
+        # hold the HTTP response (and with it, the frontend's turn) open —
+        # the sidebar just shows the generic label until this lands and the
+        # next conversation-list refresh picks it up.
+        def _job():
+            try:
+                title = llm_client.generate_title(user_text, assistant_text)
+            except (requests.RequestException, llm_client.ModelError):
+                title = ""
+            if title:
+                conversations.set_title(conv_id, title)
+
+        threading.Thread(target=_job, daemon=True).start()
+
     def generate():
         full_text = ""
         try:
@@ -232,10 +250,15 @@ def chat_stream(req: ChatRequest):
                     ) + "\n"
                 elif event["type"] == "done":
                     full_text = event["full_text"]
-                    yield json.dumps({"type": "done", "full_text": event["full_text"]}) + "\n"
+                    yield json.dumps(
+                        {"type": "done", "full_text": event["full_text"], "conversation_id": conv_id}
+                    ) + "\n"
             if full_text:
                 memory.log_summary(req.message, full_text)
                 transcript_log.log_turn(req.message, full_text)
+                conv = conversations.append_turn(conv_id, req.message, full_text)
+                if conv.get("title") is None and len(conv.get("turns", [])) == 2:
+                    _generate_title_in_background(req.message, full_text)
         except (requests.RequestException, llm_client.ModelError, KeyError, IndexError) as exc:
             fallback = (
                 "Ich komme gerade nicht an mein Sprachmodell ran. "
@@ -247,7 +270,7 @@ def chat_stream(req: ChatRequest):
                 yield json.dumps({"type": "sentence", "text": fallback, "audio": audio_b64}) + "\n"
             except requests.RequestException:
                 yield json.dumps({"type": "sentence", "text": fallback, "audio": ""}) + "\n"
-            yield json.dumps({"type": "done", "full_text": fallback}) + "\n"
+            yield json.dumps({"type": "done", "full_text": fallback, "conversation_id": conv_id}) + "\n"
 
     return StreamingResponse(generate(), media_type="application/x-ndjson")
 
@@ -288,6 +311,20 @@ def transcript():
     opened, so this just reads it back instead of the panel only ever
     showing turns from the current page session."""
     return {"turns": transcript_log.read_recent_turns()}
+
+
+@app.get("/conversations")
+def get_conversations():
+    """Metadata for the sidebar's conversation list — newest first, each
+    with its auto-generated title (see llm_client.generate_title)."""
+    return {"conversations": conversations.list_conversations()}
+
+
+@app.get("/conversations/{conv_id}")
+def get_conversation(conv_id: str):
+    """Full turn list for one conversation, fetched when the sidebar list
+    entry is clicked so it can be loaded back into the chat panel."""
+    return {"turns": conversations.load_turns(conv_id)}
 
 
 @app.get("/models")

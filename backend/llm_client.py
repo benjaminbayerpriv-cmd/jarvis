@@ -442,6 +442,42 @@ def summarize_history(history: list) -> str:
     raise last_exc
 
 
+_TITLE_PROMPT = (
+    "Gib dem folgenden Gesprächsanfang zwischen dem Nutzer und dir (Jarvis) "
+    "einen kurzen Titel auf Deutsch: maximal 4 Wörter, keine Anführungszeichen, "
+    "kein Punkt am Ende, keine Emojis. Antworte NUR mit dem Titel, sonst nichts."
+)
+
+
+def generate_title(user_text: str, assistant_text: str) -> str:
+    """A short sidebar label for a new conversation (Claude-style, e.g.
+    "Claude Skill Installation Setup") — generated once, right after the
+    first exchange, from just that first turn. Returns "" on failure so the
+    caller can fall back to a generic label instead of blocking on it."""
+    transcript = f"Nutzer: {user_text}\nJarvis: {assistant_text}"
+    messages = [
+        {"role": "system", "content": _TITLE_PROMPT},
+        {"role": "user", "content": transcript},
+    ]
+    for base_url, model, headers, extra in _request_targets():
+        try:
+            resp = requests.post(
+                f"{base_url}/chat/completions",
+                json={"model": model, "messages": messages, "temperature": 0.2, **extra},
+                headers=headers,
+                timeout=30,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            if not data.get("choices"):
+                continue
+            title = data["choices"][0]["message"].get("content", "").strip()
+            return title.strip("\"'").strip()[:60]
+        except (requests.RequestException, ModelError) as exc:
+            print(f"[model] {base_url} nicht verfügbar, versuche nächstes Ziel: {exc}")
+    return ""
+
+
 def list_models() -> list[str]:
     """Every model LM Studio currently reports via its OpenAI-compatible
     /models endpoint — the same call model_health() below already relies
