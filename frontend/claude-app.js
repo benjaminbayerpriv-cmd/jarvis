@@ -109,7 +109,6 @@
   // UI-Anker (in buildUi() gesetzt)
   let uiEl = null, sidebarEl = null, chatListEl = null, chatRootEl = null, threadEl = null;
   let composerInput = null, sendBtn = null, micBtn = null, composerTray = null, modelEl = null, modelMenuEl = null;
-  let emptyEl = null;           // Welcome/leerer Zustand im Thread
 
   // Sprachmodus + VAD
   let speechMode = false, micReady = false, micStream = null, muted = false;
@@ -124,8 +123,16 @@
   const ORB_COLOR = C.accent;
   const ORB_LAT = 26, ORB_LON = 40;
 
-  let cachedTurns = [];
-  let selectedTurnKey = null;
+  // Persisted so reloading the page continues the same conversation
+  // instead of silently starting a new, empty one every time.
+  let currentConversationId = localStorage.getItem('jarvis_conversation_id') || null;
+  function ensureConversationId() {
+    if (!currentConversationId) {
+      currentConversationId = (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2));
+      localStorage.setItem('jarvis_conversation_id', currentConversationId);
+    }
+    return currentConversationId;
+  }
 
   function buildSpherePoints() {
     const pts = [];
@@ -211,11 +218,11 @@
     uiEl.id = 'jsApp';
     uiEl.style.cssText = `position:fixed;inset:0;z-index:30;display:flex;background:${C.bg};color:${C.text};font-family:${C.font};`;
     uiEl.innerHTML = `
+      <button class="js-side-toggle" title="Sidebar ein/aus" style="position:absolute;top:20px;left:16px;z-index:31;background:none;border:none;color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:8px;">${ICONS.sidebar}</button>
       <aside class="js-sidebar" style="width:308px;flex:0 0 308px;height:100%;display:flex;flex-direction:column;background:${C.bgSoft};border-right:1px solid ${C.border};">
         <div class="js-sidebar-top" style="padding:20px 12px 8px;display:flex;flex-direction:column;gap:12px;">
-          <div style="display:flex;align-items:center;gap:8px;padding:0 6px;">
+          <div style="display:flex;align-items:center;gap:8px;padding:0 6px 0 44px;">
             <span class="js-brand" style="display:inline-flex;align-items:center;color:${C.text};">${ICONS.logo}</span>
-            <button class="js-side-toggle" title="Sidebar ein/aus" style="margin-left:auto;background:none;border:none;color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:8px;">${ICONS.sidebar}</button>
           </div>
           <div class="js-mode" style="display:flex;gap:6px;background:${C.bgHover};border:1px solid ${C.border};border-radius:12px;padding:4px;">
             <button class="js-pill" data-mode="chat" style="flex:1;padding:8px 10px;border:none;border-radius:9px;background:transparent;color:${C.textSoft};font-size:13px;font-weight:500;cursor:pointer;">Chat</button>
@@ -225,7 +232,7 @@
             <button class="js-new" style="flex:1;display:flex;align-items:center;gap:7px;padding:8px 12px;background:${C.bgHover};border:1px solid ${C.border};border-radius:10px;color:${C.text};font-size:13px;font-weight:500;cursor:pointer;">${ICONS.plus}<span>Neu</span></button>
           </div>
         </div>
-        <div class="js-chats" style="flex:1;overflow-y:auto;padding:4px 8px 12px;"></div>
+        <div class="js-chats" style="flex:0 0 33%;overflow-y:auto;padding:4px 8px 12px;margin-top:auto;"></div>
         <div style="padding:10px 12px;border-top:1px solid ${C.border};display:flex;align-items:center;gap:8px;">
           <span style="width:18px;height:18px;border-radius:50%;background:${C.accent};display:inline-flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#fff;">M</span>
           <span style="font-size:13px;color:${C.text};">Chef · Pro</span>
@@ -233,11 +240,6 @@
       </aside>
       <div class="js-main" style="flex:1;height:100%;display:flex;flex-direction:column;min-width:0;position:relative;">
         <div class="js-thread" style="flex:1;overflow-y:auto;scrollbar-width:thin;position:relative;"></div>
-        <div class="js-empty" style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:10px;padding:24px;">
-          <span class="js-welcome" style="color:${C.accent};opacity:.75;margin-bottom:6px;">${ICONS.spark}</span>
-          <div style="font-size:15px;color:${C.textSoft};">Was möchtest du gerade tun?</div>
-          <div style="font-size:13px;color:${C.textDim};">Ich bin bereit — dich zu verstehen. Schreib oder sprich einfach.</div>
-        </div>
       </div>
       <div class="js-composer" style="position:absolute;left:308px;right:0;bottom:0;padding:0 24px 20px;background:linear-gradient(transparent,${C.bg} 55%);">
         <div style="max-width:760px;margin:0 auto;">
@@ -264,7 +266,6 @@
     chatListEl = $('.js-chats', uiEl);
     chatRootEl = $('.js-main', uiEl);
     threadEl = $('.js-thread', uiEl);
-    emptyEl = $('.js-empty', uiEl);
     composerTray = $('.js-composer', uiEl);
     composerInput = $('.js-editor', uiEl);
     sendBtn = $('.js-send', uiEl);
@@ -291,7 +292,6 @@
       .js-side-toggle:hover { background:${C.bgHover}; }
       .js-side-toggle svg, .js-new svg { width:16px; height:16px; display:block; }
       .js-mic svg, .js-send svg { width:19px; height:19px; display:block; }
-      .js-welcome svg { width:28px; height:28px; display:block; }
       .js-mic:hover { background:${C.bgHover}; color:${C.text}; }
       .js-chat-item { display:flex; align-items:center; gap:9px; padding:7px 10px; border-radius:10px; cursor:pointer; font-size:13px; color:${C.textSoft}; }
       .js-chat-item:hover { background:${C.bgHover}; color:${C.text}; }
@@ -306,7 +306,6 @@
       .js-jarvis::before { content:"Jarvis"; display:block; font-size:11px; letter-spacing:.2em; text-transform:uppercase; color:${C.textDim}; margin-bottom:4px; }
       .js-jarvis .js-text.thinking { color:${C.textDim}; font-style:italic; }
       .js-thread { padding:64px 24px 180px; }
-      .js-empty.active { display:none; }
     `;
     document.head.appendChild(s);
   }
@@ -319,80 +318,84 @@
       p.classList.toggle('active', is);
     }
     if (modelEl) modelEl.textContent = mode === 'code' ? 'Code' : 'Claude';
-    renderChatList();
   }
 
-  // Fasse die flachen transcript-Turns zu Konversationen zusammen: jede
-  // Benutzer-Nachricht beginnt einen neuen Eintrag, laufende Austausche hängen
-  // als Turns daran. So zeigt die Sidebar EINE Liste von Konversations-Titeln
-  // statt des laufenden "Du:/J:"-Protokolls.
-  function groupTurns(turns) {
-    const groups = [];
-    for (const t of turns) {
-      const role = t.role === 'you' ? 'you' : 'jarvis';
-      const first = String(t.text || '').replace(/\s+/g, ' ').trim();
-      if (role === 'you' || !groups.length) {
-        groups.push({ title: first.slice(0, 46) || 'Neue Unterhaltung', mode: t.mode || 'chat', turns: [t] });
-      } else {
-        groups[groups.length - 1].turns.push(t);
-      }
-    }
-    return groups;
-  }
-
-  function activeGroups() {
-    return groupTurns(cachedTurns.filter((t) => (t.mode || 'chat') === activeMode));
-  }
-
-  function renderChatList() {
+  // Sidebar list — backed by the real per-conversation store (backend/
+  // conversations.py), not the flat /transcript debug log: each entry is
+  // one actual conversation with a short, model-generated title (see
+  // llm_client.generate_title), not a raw truncated first message.
+  async function loadConversationList() {
     if (!chatListEl) return;
-    const groups = activeGroups();
+    let list = [];
+    try {
+      const r = await fetch('/conversations');
+      const j = await r.json();
+      list = j.conversations || [];
+    } catch (e) { list = []; }
     chatListEl.innerHTML = '';
-    if (!groups.length) {
+    if (!list.length) {
       const d = document.createElement('div');
       d.className = 'js-chat-item';
       d.style.color = C.textDim;
       d.style.cursor = 'default';
-      d.textContent = activeMode === 'code' ? 'Noch keine Code-Chats' : 'Noch keine Gespräche';
+      d.textContent = 'Noch keine Gespräche';
       chatListEl.appendChild(d);
       return;
     }
-    for (let i = 0; i < groups.length; i++) {
-      const g = groups[i];
+    for (const conv of list) {
       const el = document.createElement('div');
       el.className = 'js-chat-item';
-      el.dataset.idx = String(i);
+      if (conv.id === currentConversationId) el.classList.add('selected');
       const ico = document.createElement('span');
       ico.className = 'js-ico';
       ico.innerHTML = ICONS.spark;
       const txt = document.createElement('span');
       txt.className = 'js-txt';
-      txt.textContent = g.title;
-      txt.title = g.title;
+      txt.textContent = conv.title || 'Neuer Chat';
+      txt.title = txt.textContent;
       el.appendChild(ico);
       el.appendChild(txt);
-      el.addEventListener('click', () => openTurn(i));
+      el.addEventListener('click', () => openConversation(conv.id));
       chatListEl.appendChild(el);
     }
   }
 
-  function openTurn(idx) {
-    selectedTurnKey = String(idx);
-    const g = activeGroups()[idx];
-    // Beim Klick die ganze Konversation im Thread zeigen (frisch aus /transcript).
+  async function openConversation(id) {
+    if (id === currentConversationId) return;
+    currentConversationId = id;
+    localStorage.setItem('jarvis_conversation_id', id);
+    let turns = [];
+    try {
+      const r = await fetch(`/conversations/${encodeURIComponent(id)}`);
+      const j = await r.json();
+      turns = j.turns || [];
+    } catch (e) { turns = []; }
     showThread();
     const el = ensureThread();
     el.innerHTML = '';
-    if (g) for (const t of g.turns) addThreadTurn(t.role === 'you' ? 'you' : 'jarvis', t.text);
-    for (const it of $$('.js-chat-item', chatListEl)) it.classList.toggle('selected', it.dataset.idx === String(idx));
+    history = [];
+    for (const t of turns) {
+      addThreadTurn(t.role === 'you' ? 'you' : 'jarvis', t.text);
+      history.push({ role: t.role === 'you' ? 'user' : 'assistant', content: t.text });
+    }
+    if (history.length > 40) history = history.slice(-40);
     if (el.children.length) el.scrollTop = el.scrollHeight;
+    loadConversationList();
+  }
+
+  function startNewConversation() {
+    currentConversationId = (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2));
+    localStorage.setItem('jarvis_conversation_id', currentConversationId);
+    history = [];
+    clearThreadUI();
+    loadConversationList();
   }
 
   function wireUi() {
     // Chat|Code
     for (const p of $$('.js-pill', uiEl)) p.addEventListener('click', () => setMode(p.getAttribute('data-mode')));
     // Neu
-    $('.js-new', uiEl).addEventListener('click', () => { clearThreadUI(); });
+    $('.js-new', uiEl).addEventListener('click', startNewConversation);
     // Senden
     if (sendBtn) sendBtn.addEventListener('click', (e) => { e.preventDefault(); sendFromComposer(); });
     // Composer: Enter sendet; Placeholder-Klasse beim Tippen entfernen.
@@ -411,7 +414,25 @@
     if (modelEl) modelEl.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); toggleModelMenu(); });
     window.addEventListener('click', () => { if (modelMenuEl) modelMenuEl.style.display = 'none'; });
 
-    refreshTranscript();
+    // Restore the last-open conversation's turns on load, then the sidebar
+    // list — opening the app should reveal a chat that's already there,
+    // not an empty thread until something is clicked.
+    (async () => {
+      if (currentConversationId) {
+        try {
+          const r = await fetch(`/conversations/${encodeURIComponent(currentConversationId)}`);
+          const j = await r.json();
+          const turns = j.turns || [];
+          const el = ensureThread();
+          for (const t of turns) {
+            addThreadTurn(t.role === 'you' ? 'you' : 'jarvis', t.text);
+            history.push({ role: t.role === 'you' ? 'user' : 'assistant', content: t.text });
+          }
+          if (el.children.length) el.scrollTop = el.scrollHeight;
+        } catch (e) { /* fine — starts with an empty thread */ }
+      }
+      loadConversationList();
+    })();
   }
 
   // ---------------------------------------------------------------- thread
@@ -428,7 +449,6 @@
   function addThreadTurn(role, text) {
     const el = ensureThread();
     if (!el) return { classList: { add(){}, remove(){}, toggle(){} }, textContent: '' };
-    if (emptyEl) emptyEl.classList.add('active');
     const row = document.createElement('div');
     row.className = 'js-turn ' + (role === 'you' ? 'js-you' : 'js-jarvis');
     const inner = document.createElement('div');
@@ -440,18 +460,9 @@
     return inner;
   }
 
-  function showThread() {
-    if (emptyEl) emptyEl.classList.add('active');
-  }
+  function showThread() {}
   function clearThreadUI() {
     if (threadEl) threadEl.innerHTML = '';
-    if (emptyEl) emptyEl.classList.remove('active');
-  }
-  function renderConversation(turns) {
-    showThread();
-    const el = ensureThread();
-    if (el) el.innerHTML = '';
-    for (const t of turns) addThreadTurn(t.role === 'you' ? 'you' : 'jarvis', t.text);
   }
 
   // ---------------------------------------------------------------- chat
@@ -477,7 +488,7 @@
       const resp = await fetch('/chat/stream', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: text, history, turn_id: String(++turnCounter), mode: activeMode }),
+        body: JSON.stringify({ message: text, history, turn_id: String(++turnCounter), mode: activeMode, conversation_id: ensureConversationId() }),
       });
       if (!resp.ok) throw new Error('HTTP ' + resp.status);
       const reader = resp.body.getReader();
@@ -501,11 +512,11 @@
             said.classList.remove('thinking');
             if (evt.text) parts.push(evt.text);
             said.textContent = parts.join(' ');
-          } else if (evt.type === 'audio') {
-            if (evt.audio) {
-              const blob = base64ToBlob(evt.audio, evt.mime || 'audio/mpeg');
-              await playClip(blob);
-            }
+            // The backend embeds each sentence's audio in this same event
+            // (see backend/main.py's /chat/stream) rather than sending a
+            // separate "audio"-typed event — that type never actually
+            // arrives, so playback silently never fired without this.
+            if (evt.audio) await playClip(base64ToBlob(evt.audio, evt.mime || 'audio/mpeg'));
           } else if (evt.type === 'done') {
             fullText = evt.full_text || '';
           }
@@ -521,23 +532,17 @@
       if (history.length > 40) history = history.slice(-40);
     }
     setBusy(false);
-    refreshTranscript();
+    // Picks up the freshly generated title once it's ready — generation
+    // runs in the background on the server, a beat behind the reply
+    // itself, so a second refresh shortly after catches it for a brand
+    // new conversation's first turn.
+    loadConversationList();
+    setTimeout(loadConversationList, 2500);
   }
 
   function sendFromComposer() {
     const text = composerInput ? composerInput.innerText.trim() : '';
     if (text) sendMessage(text);
-  }
-
-  async function refreshTranscript() {
-    let turns = [];
-    try {
-      const r = await fetch('/transcript');
-      const j = await r.json();
-      turns = j.turns || [];
-    } catch (e) { turns = []; }
-    cachedTurns = turns;
-    renderChatList();
   }
 
   // ---------------------------------------------------------------- modelle
