@@ -61,26 +61,63 @@
 
   // Sprachausgabe als sequenzielle Warteschlange: Der streamende Text landet
   // SOFORT im Thread, die vertonten Sätze folgen nacheinander, ohne sich zu
-  // überlappen. Direktes audio.play() — bewusst OHNE WebAudio-Routing
-  // (createMediaElementSource), das würde das TTS durch den (ggf. gesperrten)
-  // AudioContext der Mikrofon-Einrichtung leiten und im Sprachmodus stumm
-  // schalten. Welches Klangstück gerade spielt, merkt sich `speaking`, damit
-  // die Orb im Status "sprechen" tickt.
+  // überlappen. Für die „sprechen"-Animation wird die TTS-Ausgabe über einen
+  // EIGENEN AudioContext gemessen (getrennt vom Mikrofon-Context, damit das
+  // Routing die Stimme nicht stummschaltet); der Pegel treibt den Orb.
   let speaking = false;
   let audioQueue = [];
   let audioDraining = false;
+  // Ausgabe-Pegel-Messung (gesprochene Stimme) für die Orb-Animation
+  let ttsAudioCtx = null, outputAnalyser = null, outBuf = null, speakingLevel = 0;
+  let currentAudioEl = null, currentAudioSrc = null;
+  // Abbruch-Zustand für eine laufende Antwort (Stop-Button)
+  let turnAborted = false, activeReader = null, abortController = null, currentTurnId = null;
+  // Live-Diktat: Basis-Text im Eingabefeld beim Start
+  let dictBase = '';
+
+  function rmsFrom(analyser, buf) {
+    analyser.getByteTimeDomainData(buf);
+    let sum = 0;
+    for (let i = 0; i < buf.length; i++) { const v = (buf[i] - 128) / 128; sum += v * v; }
+    return Math.sqrt(sum / buf.length);
+  }
 
   function playClip(blob) {
     const audio = new Audio(URL.createObjectURL(blob));
     return new Promise((resolve) => {
       let done = false;
-      const finish = () => { if (done) return; done = true; clearTimeout(timer); resolve(); };
+      let src = null;
+      const finish = () => { if (done) return; done = true; clearTimeout(timer); teardownMeter(audio, src); resolve(); };
       const timer = setTimeout(finish, 4000);
+      // Ausgabe-Pegel nur im Sprachmodus messen (dort ist die Orb sichtbar).
+      try {
+        if (speechMode) {
+          if (!ttsAudioCtx) ttsAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+          if (ttsAudioCtx.state === 'suspended') ttsAudioCtx.resume().catch(() => {});
+          src = ttsAudioCtx.createMediaElementSource(audio);
+          const analyser = ttsAudioCtx.createAnalyser();
+          analyser.fftSize = 512;
+          src.connect(analyser);
+          analyser.connect(ttsAudioCtx.destination);   // Analyser speist UND lässt die Stimme hörbar
+          outputAnalyser = analyser;
+          if (!outBuf || outBuf.length !== analyser.fftSize) outBuf = new Uint8Array(analyser.fftSize);
+          currentAudioSrc = src;
+        }
+      } catch (e) { src = null; outputAnalyser = null; }
+      currentAudioEl = audio;
       audio.onplaying = () => { speaking = true; if (speechMode) setSpeechStatus('Antworte'); };
       audio.onended = () => { speaking = false; finish(); };
       audio.onerror = () => { speaking = false; finish(); };
       audio.play().then(() => {}).catch(() => { speaking = false; finish(); });
     });
+  }
+
+  function teardownMeter(el, src) {
+    if (currentAudioSrc === src) currentAudioSrc = null;
+    if (currentAudioEl === el) currentAudioEl = null;
+    if (src) { try { src.disconnect(); } catch (e) {} }
+    outputAnalyser = null;
+    speakingLevel = 0;
   }
 
   function enqueueClip(blob) {
@@ -97,6 +134,23 @@
     speaking = false;
     audioDraining = false;
     // nach der Ausgabe wieder in den Bereit-Zustand, wenn noch im Sprachmodus
+    if (speechMode && !busy) setSpeechStatus('Bereit');
+  }
+
+  // Stop-Button: unterbricht die laufende Antwort UND die Sprachausgabe.
+  function stopSpeech() {
+    turnAborted = true;
+    try { if (abortController) abortController.abort(); } catch (e) {}
+    try { if (activeReader) activeReader.cancel(); } catch (e) {}
+    audioQueue.length = 0;
+    audioDraining = false;
+    if (currentAudioSrc) { try { currentAudioSrc.disconnect(); } catch (e) {} currentAudioSrc = null; }
+    if (currentAudioEl) { try { currentAudioEl.pause(); } catch (e) {} currentAudioEl = null; }
+    outputAnalyser = null;
+    speaking = false;
+    speakingLevel = 0;
+    if (busy) setBusy(false);
+    if (currentTurnId) { fetch('/chat/cancel', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ turn_id: currentTurnId }) }).catch(() => {}); }
     if (speechMode && !busy) setSpeechStatus('Bereit');
   }
 
@@ -479,7 +533,7 @@
 
     // Sprachmodus-Bottom-Leiste
     if (spMuteBtn) spMuteBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); muted = !muted; updateMuteIcon(); });
-    if (spStopBtn) spStopBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); cancelRecording(); silenceStreak = 0; });
+    if (spStopBtn) spStopBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); cancelRecording(); silenceStreak = 0; stopSpeech(); });
     if (spSendBtn) spSendBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); stopRecording(); });
     if (spChatBtn) spChatBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); exitSpeech(); });
 
@@ -565,14 +619,20 @@
 
     const parts = [];
     let fullText = '';
+    turnAborted = false;
+    abortController = new AbortController();
+    activeReader = null;
+    currentTurnId = String(++turnCounter);
     try {
       const resp = await fetch('/chat/stream', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: text, history, turn_id: String(++turnCounter), mode: activeMode, conversation_id: ensureConversationId() }),
+        signal: abortController.signal,
+        body: JSON.stringify({ message: text, history, turn_id: currentTurnId, mode: activeMode, conversation_id: ensureConversationId() }),
       });
       if (!resp.ok) throw new Error('HTTP ' + resp.status);
       const reader = resp.body.getReader();
+      activeReader = reader;
       const decoder = new TextDecoder();
       let buf = '';
       while (true) {
@@ -595,17 +655,28 @@
             said.textContent = parts.join(' ');
             noteSpeechReply(parts.join(' '));
           } else if (evt.type === 'audio') {
-            // Sprache kommt als separates Event; in die Warteschlange statt
-            // await (sonst hängt der Text hinter dem vertonten Satz).
-            enqueueClip(base64ToBlob(evt.audio, evt.mime || 'audio/mpeg'));
+            // Sprache NUR im Sprachmodus abspielen; in allen anderen Modi
+            // (Text-/Diktat) wird vertonter Text verworfen — Jarvis spricht
+            // ausschließlich, wenn der Sprachmodus aktiv ist.
+            if (speechMode) enqueueClip(base64ToBlob(evt.audio, evt.mime || 'audio/mpeg'));
           } else if (evt.type === 'done') {
             fullText = evt.full_text || '';
           }
         }
       }
     } catch (err) {
-      const fb = "I can't reach my language model right now. Is LM Studio running with Gemma loaded?";
-      if (!fullText) { fullText = fb; said.classList.remove('thinking'); said.textContent = fb; }
+      // Abbruch durch den Stop-Button ist KEIN Fehler — keine Meldung anzeigen.
+      if (turnAborted) { fullText = fullText || ''; }
+      else if (!fullText) { const fb = "I can't reach my language model right now. Is LM Studio running with Gemma loaded?"; fullText = fb; said.classList.remove('thinking'); said.textContent = fb; }
+    }
+    activeReader = null;
+    abortController = null;
+    if (turnAborted) {
+      // abgebrochen: keine Historie, Status zurück in den Bereit-Zustand
+      turnAborted = false;
+      setBusy(false);
+      if (speechMode) setSpeechStatus('Bereit');
+      return;
     }
     if (fullText) {
       history.push({ role: 'user', content: text });
@@ -899,6 +970,7 @@
     utterancePCM = pcmRing.slice();
     utteranceStartedAt = Date.now();
     lastLiveStt = '';
+    dictBase = composerInput ? composerInput.innerText.trim() : '';
     noteSpeechWords('…');
     setSpeechStatus('Hören');
   }
@@ -924,8 +996,9 @@
     if (!text) return;
     if (speechMode) { sendMessage(text); return; }
     if (dictating && composerInput) {
-      const cur = composerInput.innerText.trim();
-      composerInput.innerText = cur ? cur + ' ' + text : text;
+      // überschreibt den Live-Stand mit dem finalen Erkennungsergebnis —
+      // gleiche Basis, kein doppeltes Anhängen.
+      composerInput.innerText = dictBase ? dictBase + ' ' + text : text;
       composerInput.classList.remove('is-empty');
       if (sendBtn) sendBtn.disabled = false;
     }
@@ -955,14 +1028,26 @@
   function startLiveStt() {
     if (liveSttTimer) return;
     liveSttTimer = setInterval(async () => {
-      if (!speechMode || !utterancePCM || !utterancePCM.length) return;
+      if ((!speechMode && !dictating) || !utterancePCM || !utterancePCM.length) return;
       try {
         const blob = encodeWav(concatFloat32(utterancePCM), pcmSampleRate);
         const fd = new FormData(); fd.append('audio', blob, 'speech.wav');
         const r = await fetch('/stt', { method: 'POST', body: fd });
         const j = await r.json();
         const t = (j.text || '').trim();
-        if (t && t !== lastLiveStt) { lastLiveStt = t; noteSpeechWords(t); }
+        if (t && t !== lastLiveStt) {
+          lastLiveStt = t;
+          // Sprachmodus: Live-Wörter in der Beschriftung anzeigen.
+          noteSpeechWords(t);
+          // Diktat: Live-Wörter DIREKT ins Eingabefeld schreiben. Idempotent:
+          // immer dieselbe Basis + der jeweils erkannte Stand, damit nichts
+          // doppelt landet (kein Anhängen an den eigenen vorherigen Stand).
+          if (dictating && composerInput) {
+            composerInput.innerText = dictBase ? dictBase + ' ' + t : t;
+            composerInput.classList.remove('is-empty');
+            if (sendBtn) sendBtn.disabled = false;
+          }
+        }
       } catch (e) { /* STT darf nie laufen stören */ }
     }, 700);
   }
@@ -1041,13 +1126,15 @@
     if (speechBtn) speechBtn.classList.remove('on');
   }
 
-  // Diktat-Modus: transkribiert ins Eingabefeld.
+  // Diktat-Modus: transkribiert ins Eingabefeld. Live-Transkription läuft
+  // mit, damit die erkannten Wörter schon während des Sprechens erscheinen.
   function setDictating(should) {
     if (should && !micReady) {
       ensureMic().then(() => {
         dictating = true;
         if (noteBtn) noteBtn.classList.add('on');
         if (noteBtn) noteBtn.title = 'Dictation off';
+        startLiveStt();
       }).catch(() => {
         if (noteBtn) noteBtn.title = 'Microphone denied';
         dictating = false;
@@ -1057,6 +1144,7 @@
     dictating = should;
     if (noteBtn) noteBtn.classList.toggle('on', should);
     if (noteBtn) noteBtn.title = should ? 'Dictation off' : 'Dictate';
+    if (should) startLiveStt(); else stopLiveStt();
   }
 
     // ------------------------------------------- 3D-Punktkugel (Sprachmodus)
@@ -1073,7 +1161,7 @@
     }
     return pts;
   }
-  let orbPoints = makeSpherePoints(600);
+  let orbPoints = makeSpherePoints(900);   // dichter beieinander
   let orbRotY = 0, orbRotX = -0.38;
 
   // Eine konstante Farbe für alle Zustände — die Status werden nur über die
@@ -1099,7 +1187,7 @@
     const rect = chatRootEl ? chatRootEl.getBoundingClientRect() : { left: 0, top: 0, width: cw, height: ch };
     const cx = rect.left + rect.width / 2;
     const cy = rect.top + rect.height / 2;
-    const R = Math.min(rect.width, rect.height) * 0.22;   // kleiner
+    const R = Math.min(rect.width, rect.height) * 0.16;   // kleine Kugel
     const lvl = orbLevel || 0;
     const status = orbStatus();
     const t = now / 1000;
@@ -1190,11 +1278,24 @@
     orbCtx.globalAlpha = 1;
   }
 
+  // Pegel der gesprochenen Stimme aus dem TTS-Ausgangsanalysator — die Orb
+  // pulsiert mit dem, was wirklich aus dem Lautsprecher kommt (nicht mit einem
+  // erfundenen Wert). Leichte Verstärkung, damit die Rippel sichtbar werden.
+  function speechLevel() {
+    if (outputAnalyser && outBuf) {
+      const r = rmsFrom(outputAnalyser, outBuf);
+      return Math.min(1, r * 1.8);
+    }
+    return 0;
+  }
+
   function orbLoop(now) {
     if (!orbVisible) return;
-    // Pegel nur aus dem Mikrofon, wenn gerade zugehört wird
+    // Zuletzt gesprochen wird beim „Hören" das Mikrofon gemessen, beim
+    // „Sprechen" die eigene TTS-Ausgabe — alles dynamisch am echten Audio.
     const listening = speechMode && !muted && !busy && !speaking;
-    orbLevel = Math.max(0, orbLevel * 0.9 + (listening ? getMicLevel() : 0) * 0.1);
+    const source = speaking ? speechLevel() : (listening ? getMicLevel() : 0);
+    orbLevel = Math.max(0, orbLevel * 0.78 + source * 0.22);
     drawOrb(now);
     orbRaf = requestAnimationFrame(orbLoop);
   }
