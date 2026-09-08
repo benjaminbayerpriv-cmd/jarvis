@@ -135,6 +135,9 @@
     audioDraining = false;
     // nach der Ausgabe wieder in den Bereit-Zustand, wenn noch im Sprachmodus
     if (speechMode && !busy) setSpeechStatus('Bereit');
+    // Erst jetzt ist die Antwort wirklich zu Ende — wieder hinhören, sonst
+    // würde die Erkennung Jarvis' eigene Stimme aufgreifen (Echo).
+    resumeListening();
   }
 
   // Stop-Button: unterbricht die laufende Antwort UND die Sprachausgabe.
@@ -152,21 +155,7 @@
     if (busy) setBusy(false);
     if (currentTurnId) { fetch('/chat/cancel', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ turn_id: currentTurnId }) }).catch(() => {}); }
     if (speechMode && !busy) setSpeechStatus('Bereit');
-  }
-
-  function encodeWav(samples, sampleRate) {
-    sampleRate = sampleRate || 16000;
-    const buffer = new ArrayBuffer(44 + samples.length * 2);
-    const view = new DataView(buffer);
-    const ws = (off, str) => { for (let i = 0; i < str.length; i++) view.setUint8(off + i, str.charCodeAt(i)); };
-    ws(0, 'RIFF'); view.setUint32(4, 36 + samples.length * 2, true); ws(8, 'WAVE'); ws(12, 'fmt ');
-    view.setUint32(16, 16, true); view.setUint16(20, 1, true); view.setUint16(22, 1, true);
-    view.setUint32(24, sampleRate, true); view.setUint32(28, sampleRate * 2, true);
-    view.setUint16(32, 2, true); view.setUint16(34, 16, true); ws(36, 'data');
-    view.setUint32(40, samples.length * 2, true);
-    let off = 44;
-    for (let i = 0; i < samples.length; i++, off += 2) view.setInt16(off, Math.max(-1, Math.min(1, samples[i])) * 0x7fff, true);
-    return new Blob([buffer], { type: 'audio/wav' });
+    resumeListening();
   }
 
   // ------------------------------------------------------------------ zustand
@@ -183,12 +172,11 @@
   let speechCaptionEl = null, spcStatusEl = null, spcUserEl = null, spcReplyEl = null;
   let settingsSheetEl = null, settingsModelsEl = null;
 
-  // Sprachmodus + VAD + Diktat
+  // Sprachmodus + VAD + Diktat + Web-Speech-Erkennung
   let speechMode = false, dictating = false, micReady = false, micStream = null, muted = false;
-  let pcmNode = null, pcmSampleRate = 0, pcmRing = [], utterancePCM = null, utteranceStartedAt = 0;
-  let utterancePeak = 0;   // Spitzenpegel der laufenden Äußerung — nur echte Stimme zählt
-  let silenceStreak = 0, vadAnalyser = null, vadData = null;
-  let vadNoiseFloor = 0.01;
+  let vadAnalyser = null, vadData = null, vadNoiseFloor = 0.01, vadAbove = 0;
+  const SpeechRecognitionImpl = window.SpeechRecognition || window.webkitSpeechRecognition;
+  let recognition = null;
 
   // Graues Punktnetz (Sprachmodus)
   let orbCtx = null, orbCanvas = null, orbLevel = 0, orbRaf = 0, orbVisible = false;
@@ -533,9 +521,9 @@
     window.addEventListener('click', () => { if (modelMenuEl) modelMenuEl.style.display = 'none'; });
 
     // Sprachmodus-Bottom-Leiste
-    if (spMuteBtn) spMuteBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); muted = !muted; updateMuteIcon(); });
-    if (spStopBtn) spStopBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); cancelRecording(); silenceStreak = 0; stopSpeech(); });
-    if (spSendBtn) spSendBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); stopRecording(); });
+    if (spMuteBtn) spMuteBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); muted = !muted; updateMuteIcon(); if (muted) stopListening(); else startListening(); });
+    if (spStopBtn) spStopBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); stopSpeech(); });
+    if (spSendBtn) spSendBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); const t = composerInput ? composerInput.innerText.trim() : ''; if (t) sendMessage(t); });
     if (spChatBtn) spChatBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); exitSpeech(); });
 
     fileInput = document.createElement('input');
@@ -615,6 +603,7 @@
     said.classList.add('thinking');
     said.textContent = '';
     setBusy(true);
+    stopListening();   // während Jarvis antwortet nicht mithören (Echo-Schutz)
     noteSpeechReply('');
     setSpeechStatus('Denke');
 
@@ -676,6 +665,7 @@
       // abgebrochen: keine Historie, Status zurück in den Bereit-Zustand
       turnAborted = false;
       setBusy(false);
+      resumeListening();
       if (speechMode) setSpeechStatus('Bereit');
       return;
     }
@@ -685,6 +675,9 @@
       if (history.length > 40) history = history.slice(-40);
     }
     setBusy(false);
+    // Ohne Sprachausgabe (Text-/Diktatmodus) sofort wieder zuhören; im
+    // Sprachmodus übernimmt drainAudioQueue das nach dem letzten Clip.
+    if (!audioDraining && !audioQueue.length) resumeListening();
     loadConversationList();
     setTimeout(loadConversationList, 2500);
   }
@@ -933,12 +926,15 @@
     return 0;
   }
 
+  // Der Mikrofon-Stream versorgt nur noch den VAD (Orb-Pulsation + Barge-in).
+  // Echo-Unterdrückung ist hier Pflicht: Die Web-Speech-Erkennung läuft im
+  // Sprachmodus kontinuierlich und würde Jarvis' eigene Antwort mitschreiben,
+  // wenn der Stream nicht gegengekoppelt wäre.
   async function ensureMic() {
     if (micReady) return micStream;
-    micStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: !/Mac/i.test(navigator.platform), noiseSuppression: true, autoGainControl: true } });
+    micStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
     micReady = true;
     setupVad(micStream);
-    startContinuousRecording();
     return micStream;
   }
   function setupVad(stream) {
@@ -950,62 +946,6 @@
     vadData = new Uint8Array(vadAnalyser.frequencyBinCount);
     setInterval(vadTick, 80);
   }
-  function startContinuousRecording() {
-    if (pcmNode || !micStream) return;
-    const ctx = ensureCtx();
-    pcmNode = ctx.createScriptProcessor(4096, 1, 1);
-    pcmSampleRate = ctx.sampleRate;
-    const gain = ctx.createGain();
-    gain.gain.value = 0;
-    pcmNode.connect(gain);
-    gain.connect(ctx.destination);
-    const src = ctx.createMediaStreamSource(micStream);
-    src.connect(pcmNode);
-    pcmNode.onaudioprocess = (e) => {
-      const data = new Float32Array(e.inputBuffer.getChannelData(0));
-      if (utterancePCM) utterancePCM.push(data);
-      else { pcmRing.push(data); if (pcmRing.length > 9) pcmRing.shift(); }
-    };
-  }
-  function beginUtterance() {
-    utterancePCM = pcmRing.slice();
-    utteranceStartedAt = Date.now();
-    utterancePeak = 0;
-    lastLiveStt = '';
-    dictBase = composerInput ? composerInput.innerText.trim() : '';
-    noteSpeechWords('…');
-    setSpeechStatus('Hören');
-  }
-  function stopRecording() {
-    const chunks = utterancePCM || [];
-    utterancePCM = null;
-    if (chunks.length) sendUtterance(concatFloat32(chunks), utteranceStartedAt);
-  }
-  function cancelRecording() { utterancePCM = null; pcmRing.length = 0; }
-  function concatFloat32(arrs) {
-    let len = 0; for (const a of arrs) len += a.length;
-    const out = new Float32Array(len); let o = 0;
-    for (const a of arrs) { out.set(a, o); o += a.length; }
-    return out;
-  }
-  async function sendUtterance(samples, startedAt) {
-    const blob = encodeWav(samples, pcmSampleRate);
-    const fd = new FormData(); fd.append('audio', blob, 'speech.wav');
-    let text = '';
-    try { const r = await fetch('/stt', { method: 'POST', body: fd }); const j = await r.json(); text = j.text || ''; }
-    catch (e) { text = ''; }
-    text = text.trim();
-    if (!text) return;
-    if (speechMode) { sendMessage(text); return; }
-    if (dictating && composerInput) {
-      // überschreibt den Live-Stand mit dem finalen Erkennungsergebnis —
-      // gleiche Basis, kein doppeltes Anhängen.
-      composerInput.innerText = dictBase ? dictBase + ' ' + text : text;
-      composerInput.classList.remove('is-empty');
-      if (sendBtn) sendBtn.disabled = false;
-    }
-  }
-
   // ------------------------------------------- Sprachmodus-Beschriftung
   function showSpeechCaption() {
     if (speechCaptionEl) speechCaptionEl.style.display = 'flex';
@@ -1023,74 +963,92 @@
     if (spcReplyEl) { spcReplyEl.textContent = t || ''; spcReplyEl.style.minHeight = t ? '' : '0'; }
   }
 
-  // Live-Transkription: solange eine Sprachaufnahme läuft, wird der wachsende
-  // Puffer ~alle 700ms an /stt geschickt und die erkannten Wörter als Live-
-  // Beschriftung gezeigt — so sieht man die Wörter beim Sprechen mitwaschen.
-  let liveSttTimer = null, lastLiveStt = '';
-  function startLiveStt() {
-    if (liveSttTimer) return;
-    liveSttTimer = setInterval(async () => {
-      if ((!speechMode && !dictating) || !utterancePCM || !utterancePCM.length) return;
-      try {
-        const blob = encodeWav(concatFloat32(utterancePCM), pcmSampleRate);
-        const fd = new FormData(); fd.append('audio', blob, 'speech.wav');
-        const r = await fetch('/stt', { method: 'POST', body: fd });
-        const j = await r.json();
-        const t = (j.text || '').trim();
-        if (t && t !== lastLiveStt) {
-          lastLiveStt = t;
-          // Sprachmodus: Live-Wörter in der Beschriftung anzeigen.
-          noteSpeechWords(t);
-          // Diktat: Live-Wörter DIREKT ins Eingabefeld schreiben. Idempotent:
-          // immer dieselbe Basis + der jeweils erkannte Stand, damit nichts
-          // doppelt landet (kein Anhängen an den eigenen vorherigen Stand).
-          if (dictating && composerInput) {
-            composerInput.innerText = dictBase ? dictBase + ' ' + t : t;
-            composerInput.classList.remove('is-empty');
-            if (sendBtn) sendBtn.disabled = false;
-          }
-        }
-      } catch (e) { /* STT darf nie laufen stören */ }
-    }, 700);
+  // ------------------------------------------- Web-Speech-Erkennung
+  // Zurück zur alten, eingebauten Browser-Erkennung statt lokalem Whisper:
+  // Chrome transkribiert selbst (de-DE, kontinuierlich, Zwischenergebnisse),
+  // das Backend /stt wird nicht mehr angerufen. Chrome stoppt die Erkennung
+  // nach Stille von selbst — onend startet sie neu, solange wir noch zuhören
+  // sollen (Sprachmodus/Diktat aktiv, nicht stumm, nicht mitten in einer
+  // Antwort).
+  function initRecognition() {
+    if (!SpeechRecognitionImpl) {
+      if (speechBtn) speechBtn.title = 'Spracherkennung braucht Chrome';
+      return null;
+    }
+    const rec = new SpeechRecognitionImpl();
+    rec.lang = 'de-DE';
+    rec.continuous = true;
+    rec.interimResults = true;
+
+    rec.onstart = () => { if (speechMode && !busy) setSpeechStatus('Hören'); };
+
+    rec.onresult = (event) => {
+      let text = '';
+      for (let i = event.resultIndex; i < event.results.length; i++) text += event.results[i][0].transcript;
+      text = text.trim();
+      if (!text) return;
+      const final = event.results[event.results.length - 1].isFinal;
+
+      if (speechMode) {
+        noteSpeechWords(text);
+        if (final) { setSpeechStatus('Denke'); sendMessage(text); }
+      } else if (dictating && composerInput) {
+        // Diktat: Zwischenergebnisse live ins Eingabefeld, aufbauend auf dem
+        // gesicherten Stand (dictBase); abgeschlossene Segmente rücken auf.
+        if (dictBase === null) dictBase = composerInput ? composerInput.innerText.trim() : '';
+        const composed = dictBase ? dictBase + ' ' + text : text;
+        composerInput.innerText = composed;
+        composerInput.classList.remove('is-empty');
+        if (sendBtn) sendBtn.disabled = false;
+        if (final) dictBase = composed;
+      }
+    };
+
+    rec.onerror = (event) => {
+      if (event.error === 'no-speech' || event.error === 'aborted') return;
+      if (event.error === 'not-allowed') micReady = false;
+    };
+
+    // Chrome beendet die Erkennung nach Stille auch bei continuous=true —
+    // wiederholen, außer es ist gerade nicht gewünscht.
+    rec.onend = () => {
+      if (!muted && !busy && (speechMode || dictating) && micReady) setTimeout(startListening, 250);
+    };
+
+    return rec;
   }
-  function stopLiveStt() {
-    if (liveSttTimer) { clearInterval(liveSttTimer); liveSttTimer = null; }
-    lastLiveStt = '';
-    noteSpeechWords('…');
+
+  function startListening() {
+    if (!recognition || muted || busy || !(speechMode || dictating)) return;
+    try { recognition.start(); } catch (_) {}
+  }
+  function stopListening() {
+    if (recognition) { try { recognition.stop(); } catch (_) {} }
+  }
+  function resumeListening() {
+    if (!muted && micReady && (speechMode || dictating)) startListening();
   }
 
   function vadTick() {
-    if (!vadAnalyser || !vadData) return;
-    vadAnalyser.getByteTimeDomainData(vadData);
-    let sum = 0;
-    for (let i = 0; i < vadData.length; i++) { const v = (vadData[i] - 128) / 128; sum += v * v; }
-    const rms = Math.sqrt(sum / vadData.length);
-    const listening = (speechMode || dictating) && !muted && !busy;
-    vadNoiseFloor = vadNoiseFloor * 0.98 + rms * 0.02;
-    // Schwelle deutlich über dem Grundrauschen: reine Umgebungsgeräusche
-    // (Lüfter, Raum, Tastatur) dürfen keine "Äußerung" starten.
-    const thresh = Math.max(vadNoiseFloor * 3.2, 0.04);
-    const above = rms > thresh;
-    if (above && !utterancePCM) { if (listening) beginUtterance(); }
-    if (utterancePCM) {
-      // Spitzenpegel über die ganze Aufnahme — nur echte Stimme (deutlich über
-      // dem Bodenrauschen) zählt als hörbare Antwort.
-      utterancePeak = Math.max(utterancePeak, rms);
-      if (above) { silenceStreak = 0; }
-      else {
-        // Auto-Send: nach ~640 ms Stille (8 Ticks à 80 ms) automatisch
-        // absenden, statt auf den Senden-Button zu warten. Notbremse: eine
-        // länger als 12 s laufende "Äußerung" wird ebenfalls abgeschickt,
-        // falls die Stille-Erkennung wegen Umgebungsgeräuschen nie greift.
-        silenceStreak++;
-        const voiceFloor = Math.max(vadNoiseFloor * 4, 0.05);
-        const hasVoice = utterancePeak > voiceFloor;
-        if (silenceStreak >= 8 || Date.now() - utteranceStartedAt > 12000) {
-          silenceStreak = 0;
-          // Nur echtes Gesprochenes absenden; reines Rauschen verwerfen.
-          if (hasVoice) stopRecording(); else cancelRecording();
-        }
-      }
+    if (!vadAnalyser || !vadData || muted) return;
+    const rms = rmsFrom(vadAnalyser, vadData);
+
+    if (!busy) {
+      vadNoiseFloor = vadNoiseFloor * 0.98 + rms * 0.02;
+      vadAbove = 0;
+      return;
+    }
+
+    // Barge-in: solange Jarvis antwortet, unterbricht eine anhaltende Stimme
+    // den Turn. Der Stream ist echo-kompensiert, also ist ein Pegel dort echte
+    // Person — Jarvis' eigene Ausgabe ist bereits abgezogen.
+    const threshold = Math.max(vadNoiseFloor * 2.4, 0.025);
+    vadAbove = rms > threshold ? vadAbove + 1 : 0;
+
+    if (vadAbove >= 3) {   // ~240 ms anhaltend
+      vadAbove = 0;
+      stopSpeech();
+      resumeListening();
     }
   }
 
@@ -1117,7 +1075,7 @@
       showOrb();
       showSpeechCaption();
       setSpeechStatus('Bereit');
-      startLiveStt();
+      startListening();
       if (composerTray) composerTray.style.display = 'none';
       if (chatRootEl) chatRootEl.classList.add('js-speech-active');
       if (speechBarEl) speechBarEl.style.display = 'flex';
@@ -1129,25 +1087,28 @@
   }
   function exitSpeech() {
     speechMode = false;
+    stopListening();
     hideOrb();
     hideSpeechCaption();
-    stopLiveStt();
-    cancelRecording();
+    noteSpeechWords('…');
     if (composerTray) composerTray.style.display = '';
     if (chatRootEl) chatRootEl.classList.remove('js-speech-active');
     if (speechBarEl) speechBarEl.style.display = 'none';
     if (speechBtn) speechBtn.classList.remove('on');
   }
 
-  // Diktat-Modus: transkribiert ins Eingabefeld. Live-Transkription läuft
-  // mit, damit die erkannten Wörter schon während des Sprechens erscheinen.
+  // Diktat-Modus: transkribiert ins Eingabefeld. Die Zwischenergebnisse der
+  // Web-Speech-Erkennung erscheinen live; fertige Segmente werden zur Basis
+  // für das nächste (dictBase).
   function setDictating(should) {
+    dictating = should;
     if (should && !micReady) {
       ensureMic().then(() => {
-        dictating = true;
+        if (!dictating) return;
         if (noteBtn) noteBtn.classList.add('on');
         if (noteBtn) noteBtn.title = 'Dictation off';
-        startLiveStt();
+        dictBase = null;
+        startListening();
       }).catch(() => {
         if (noteBtn) noteBtn.title = 'Microphone denied';
         dictating = false;
@@ -1157,7 +1118,7 @@
     dictating = should;
     if (noteBtn) noteBtn.classList.toggle('on', should);
     if (noteBtn) noteBtn.title = should ? 'Dictation off' : 'Dictate';
-    if (should) startLiveStt(); else stopLiveStt();
+    if (should) { dictBase = null; startListening(); } else stopListening();
   }
 
     // ------------------------------------------- 3D-Punktkugel (Sprachmodus)
@@ -1330,6 +1291,7 @@
   function boot() {
     buildUi();
     setMode(activeMode); // Sidebar befüllen + aktive Konversation des Modus laden
+    recognition = initRecognition();
     document.title = 'Jarvis';
     orbCanvas = document.createElement('canvas');
     orbCanvas.id = 'jarvisOrb';
