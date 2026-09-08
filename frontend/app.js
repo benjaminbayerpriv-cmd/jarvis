@@ -37,7 +37,61 @@ chatToggleBtn.addEventListener("click", () => {
   chatToggleBtn.classList.toggle("open", !collapsed);
   chatToggleBtn.title = chatToggleBtn.ariaLabel =
     collapsed ? "Chatfenster ausklappen" : "Chatfenster einklappen";
-  if (!collapsed) loadConversationList();
+  if (!collapsed) {
+    applySavedChatWidth();
+    loadConversationList();
+  } else {
+    // Clearing the inline size (rather than leaving it set) matters here:
+    // an inline style always beats the stylesheet's .collapsed width:0
+    // rule, so a leftover width would keep the panel visibly open.
+    chatColumn.style.width = "";
+    chatColumn.style.flexBasis = "";
+  }
+});
+
+/* ---------- resizable panel width ---------- */
+
+const resizeHandle = document.getElementById("resizeHandle");
+const CHAT_MIN_WIDTH = 200;
+const CHAT_MAX_WIDTH = 560;
+
+function setChatColumnWidth(px) {
+  const clamped = Math.min(CHAT_MAX_WIDTH, Math.max(CHAT_MIN_WIDTH, px));
+  chatColumn.style.width = `${clamped}px`;
+  chatColumn.style.flexBasis = `${clamped}px`;
+  return clamped;
+}
+
+function applySavedChatWidth() {
+  const saved = parseInt(localStorage.getItem("jarvis_chat_width"), 10);
+  if (saved) setChatColumnWidth(saved);
+}
+
+let resizingChat = false;
+
+resizeHandle.addEventListener("mousedown", (e) => {
+  resizingChat = true;
+  chatColumn.classList.add("resizing");
+  resizeHandle.classList.add("dragging");
+  document.body.style.userSelect = "none";
+  e.preventDefault();
+});
+
+window.addEventListener("mousemove", (e) => {
+  if (!resizingChat) return;
+  // The panel sits flush against the window's left edge, so its width is
+  // just the cursor's x position — no offset math needed.
+  setChatColumnWidth(e.clientX);
+});
+
+window.addEventListener("mouseup", () => {
+  if (!resizingChat) return;
+  resizingChat = false;
+  chatColumn.classList.remove("resizing");
+  resizeHandle.classList.remove("dragging");
+  document.body.style.userSelect = "";
+  const width = parseInt(chatColumn.style.width, 10);
+  if (width) localStorage.setItem("jarvis_chat_width", String(width));
 });
 
 let history = [];
