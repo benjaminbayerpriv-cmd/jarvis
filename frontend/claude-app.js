@@ -34,6 +34,7 @@
     chat: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z"/></svg>',
     code: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m18 16 4-4-4-4"/><path d="m6 8-4 4 4 4"/><path d="m14.5 4-5 16"/></svg>',
     mic: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/></svg>',
+    micOff: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="2" x2="22" y1="2" y2="22"/><path d="M18.89 13.23A7.12 7.12 0 0 0 19 12v-2"/><path d="M5 10v2a7 7 0 0 0 12 5"/><path d="M15 9.34V5a3 3 0 0 0-5.68-1.33"/><path d="M9 9v3a3 3 0 0 0 5.12 2.12"/><line x1="12" x2="12" y1="19" y2="22"/></svg>',
     audio: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M2 10v3"/><path d="M6 6v11"/><path d="M10 3v18"/><path d="M14 8v7"/><path d="M18 5v13"/><path d="M22 10v3"/></svg>',
     send: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 7-7 7 7"/><path d="M12 19V5"/></svg>',
     settings: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915"/><circle cx="12" cy="12" r="3"/></svg>',
@@ -58,22 +59,45 @@
     return audioCtx;
   }
 
+  // Sprachausgabe als sequenzielle Warteschlange: Der streamende Text landet
+  // SOFORT im Thread, die vertonten Sätze folgen nacheinander, ohne sich zu
+  // überlappen. Direktes audio.play() — bewusst OHNE WebAudio-Routing
+  // (createMediaElementSource), das würde das TTS durch den (ggf. gesperrten)
+  // AudioContext der Mikrofon-Einrichtung leiten und im Sprachmodus stumm
+  // schalten. Welches Klangstück gerade spielt, merkt sich `speaking`, damit
+  // die Orb im Status "sprechen" tickt.
+  let speaking = false;
+  let audioQueue = [];
+  let audioDraining = false;
+
   function playClip(blob) {
-    // Bewusst OHNE WebAudio-Routing (createMediaElementSource): das würde das
-    // TTS durch den (ggf. gesperrten) AudioContext der Mikrofon-Einrichtung
-    // leiten. Ist der Context im Sprachmodus "suspended", ist der gesamte
-    // Output stumm — genau der "Supertonic geht im Sprachmodus nicht"-Fehler.
-    // Direktes audio.play() hängt nur vom Autoplay-Gestenstatus ab und spielt
-    // in jedem Modus gleich zuverlässig.
     const audio = new Audio(URL.createObjectURL(blob));
     return new Promise((resolve) => {
       let done = false;
       const finish = () => { if (done) return; done = true; clearTimeout(timer); resolve(); };
       const timer = setTimeout(finish, 4000);
-      audio.onended = finish;
-      audio.onerror = finish;
-      audio.play().then(() => {}).catch(finish);
+      audio.onplaying = () => { speaking = true; if (speechMode) setSpeechStatus('Antworte'); };
+      audio.onended = () => { speaking = false; finish(); };
+      audio.onerror = () => { speaking = false; finish(); };
+      audio.play().then(() => {}).catch(() => { speaking = false; finish(); });
     });
+  }
+
+  function enqueueClip(blob) {
+    audioQueue.push(blob);
+    if (!audioDraining) drainAudioQueue();
+  }
+  async function drainAudioQueue() {
+    audioDraining = true;
+    speaking = false;
+    while (audioQueue.length) {
+      const blob = audioQueue.shift();
+      try { await playClip(blob); } catch (e) { /* nie den Faden abreißen */ }
+    }
+    speaking = false;
+    audioDraining = false;
+    // nach der Ausgabe wieder in den Bereit-Zustand, wenn noch im Sprachmodus
+    if (speechMode && !busy) setSpeechStatus('Bereit');
   }
 
   function encodeWav(samples, sampleRate) {
@@ -102,6 +126,7 @@
   let composerTray = null, composerInput = null, sendBtn = null, speechBtn = null, noteBtn = null;
   let uploadBtn = null, settingsBtn = null, modelEl = null, modelMenuEl = null, fileInput = null;
   let speechBarEl = null, spMuteBtn = null, spStopBtn = null, spSendBtn = null, spChatBtn = null;
+  let speechCaptionEl = null, spcStatusEl = null, spcUserEl = null, spcReplyEl = null;
   let settingsSheetEl = null, settingsModelsEl = null;
 
   // Sprachmodus + VAD + Diktat
@@ -210,13 +235,31 @@
     speechBarEl.style.cssText = 'position:fixed;left:0;right:0;bottom:24px;z-index:50;display:none;justify-content:center;pointer-events:none;';
     speechBarEl.innerHTML = `
       <div style="pointer-events:auto;display:flex;align-items:center;gap:10px;padding:8px 12px;background:${C.bgSoft};border:1px solid ${C.border};border-radius:16px;box-shadow:0 12px 40px rgba(0,0,0,.5);">
-        <button class="js-sp-mute" title="Mute" style="width:40px;height:40px;border-radius:50%;background:${C.bgHover};border:1px solid ${C.border};color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;">${ICONS.volume}</button>
-        <button class="js-sp-stop" title="Stop" style="width:40px;height:40px;border-radius:50%;background:${C.bgHover};border:1px solid ${C.border};color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;">${ICONS.stop}</button>
-        <button class="js-sp-send" title="Send" style="width:52px;height:52px;border-radius:50%;background:${C.accent};border:none;color:#fff;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;">${ICONS.send}</button>
-        <button class="js-sp-chat" title="Chat mode" style="width:40px;height:40px;border-radius:50%;background:${C.bgHover};border:1px solid ${C.border};color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;">${ICONS.chat}</button>
+        <button class="js-sp-mute" title="Mikrofon aus" style="width:44px;height:44px;border-radius:14px;background:${C.bgHover};border:1px solid ${C.border};color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;">${ICONS.mic}</button>
+        <button class="js-sp-stop" title="Stopp" style="width:44px;height:44px;border-radius:14px;background:${C.bgHover};border:1px solid ${C.border};color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;">${ICONS.stop}</button>
+        <button class="js-sp-send" title="Senden" style="width:44px;height:44px;border-radius:14px;background:${C.bgHover};border:1px solid ${C.border};color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;">${ICONS.send}</button>
+        <button class="js-sp-chat" title="Chat-Modus" style="width:44px;height:44px;border-radius:14px;background:${C.bgHover};border:1px solid ${C.border};color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;">${ICONS.chat}</button>
       </div>
     `;
     document.body.appendChild(speechBarEl);
+
+    // Sprachmodus-Beschriftung (live erkannte Wörter + Jarvis-Antwort). In
+    // Speech-Mode ist der Chatverlauf versteckt, also bleibt hier eine
+    // lesbare Zeile darüber, was gerade passiert.
+    speechCaptionEl = document.createElement('div');
+    speechCaptionEl.id = 'jsSpeechCaption';
+    speechCaptionEl.style.cssText = `position:fixed;left:0;right:0;bottom:92px;z-index:50;display:none;justify-content:center;pointer-events:none;`;
+    speechCaptionEl.innerHTML = `
+      <div style="pointer-events:auto;max-width:720px;width:calc(100% - 64px);padding:10px 16px;background:${C.bgSoft};border:1px solid ${C.border};border-radius:14px;box-shadow:0 12px 40px rgba(0,0,0,.5);display:flex;flex-direction:column;gap:4px;">
+        <div class="js-spc-status" style="font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:${C.textDim};">Listen</div>
+        <div class="js-spc-user" style="font-size:15px;color:${C.text};min-height:20px;white-space:pre-wrap;word-break:break-word;">…</div>
+        <div class="js-spc-reply" style="font-size:14px;color:${C.textSoft};min-height:0;white-space:pre-wrap;word-break:break-word;"></div>
+      </div>
+    `;
+    spcStatusEl = $('.js-spc-status', speechCaptionEl);
+    spcUserEl = $('.js-spc-user', speechCaptionEl);
+    spcReplyEl = $('.js-spc-reply', speechCaptionEl);
+    document.body.appendChild(speechCaptionEl);
 
     // Settings-Sheet (kein Fake-Profil — echte Einstellungen hier).
     settingsSheetEl = document.createElement('div');
@@ -517,6 +560,8 @@
     said.classList.add('thinking');
     said.textContent = '';
     setBusy(true);
+    noteSpeechReply('');
+    setSpeechStatus('Denke');
 
     const parts = [];
     let fullText = '';
@@ -548,7 +593,11 @@
             said.classList.remove('thinking');
             if (evt.text) parts.push(evt.text);
             said.textContent = parts.join(' ');
-            if (evt.audio) await playClip(base64ToBlob(evt.audio, evt.mime || 'audio/mpeg'));
+            noteSpeechReply(parts.join(' '));
+          } else if (evt.type === 'audio') {
+            // Sprache kommt als separates Event; in die Warteschlange statt
+            // await (sonst hängt der Text hinter dem vertonten Satz).
+            enqueueClip(base64ToBlob(evt.audio, evt.mime || 'audio/mpeg'));
           } else if (evt.type === 'done') {
             fullText = evt.full_text || '';
           }
@@ -846,7 +895,13 @@
       else { pcmRing.push(data); if (pcmRing.length > 9) pcmRing.shift(); }
     };
   }
-  function beginUtterance() { utterancePCM = pcmRing.slice(); utteranceStartedAt = Date.now(); }
+  function beginUtterance() {
+    utterancePCM = pcmRing.slice();
+    utteranceStartedAt = Date.now();
+    lastLiveStt = '';
+    noteSpeechWords('…');
+    setSpeechStatus('Hören');
+  }
   function stopRecording() {
     const chunks = utterancePCM || [];
     utterancePCM = null;
@@ -875,6 +930,48 @@
       if (sendBtn) sendBtn.disabled = false;
     }
   }
+
+  // ------------------------------------------- Sprachmodus-Beschriftung
+  function showSpeechCaption() {
+    if (speechCaptionEl) speechCaptionEl.style.display = 'flex';
+  }
+  function hideSpeechCaption() {
+    if (speechCaptionEl) speechCaptionEl.style.display = 'none';
+  }
+  function setSpeechStatus(s) {
+    if (spcStatusEl) spcStatusEl.textContent = s;
+  }
+  function noteSpeechWords(t) {
+    if (spcUserEl) spcUserEl.textContent = t || '…';
+  }
+  function noteSpeechReply(t) {
+    if (spcReplyEl) { spcReplyEl.textContent = t || ''; spcReplyEl.style.minHeight = t ? '' : '0'; }
+  }
+
+  // Live-Transkription: solange eine Sprachaufnahme läuft, wird der wachsende
+  // Puffer ~alle 700ms an /stt geschickt und die erkannten Wörter als Live-
+  // Beschriftung gezeigt — so sieht man die Wörter beim Sprechen mitwaschen.
+  let liveSttTimer = null, lastLiveStt = '';
+  function startLiveStt() {
+    if (liveSttTimer) return;
+    liveSttTimer = setInterval(async () => {
+      if (!speechMode || !utterancePCM || !utterancePCM.length) return;
+      try {
+        const blob = encodeWav(concatFloat32(utterancePCM), pcmSampleRate);
+        const fd = new FormData(); fd.append('audio', blob, 'speech.wav');
+        const r = await fetch('/stt', { method: 'POST', body: fd });
+        const j = await r.json();
+        const t = (j.text || '').trim();
+        if (t && t !== lastLiveStt) { lastLiveStt = t; noteSpeechWords(t); }
+      } catch (e) { /* STT darf nie laufen stören */ }
+    }, 700);
+  }
+  function stopLiveStt() {
+    if (liveSttTimer) { clearInterval(liveSttTimer); liveSttTimer = null; }
+    lastLiveStt = '';
+    noteSpeechWords('…');
+  }
+
   function vadTick() {
     if (!vadAnalyser || !vadData) return;
     vadAnalyser.getByteTimeDomainData(vadData);
@@ -888,23 +985,45 @@
     if (above && !utterancePCM) { if (listening) beginUtterance(); }
     if (utterancePCM) {
       if (above) { silenceStreak = 0; }
-      else { silenceStreak++; if (silenceStreak >= 14) { silenceStreak = 0; stopRecording(); } }
+      else {
+        // Auto-Send: nach ~640 ms Stille (8 Ticks à 80 ms) automatisch
+        // absenden, nicht auf den Senden-Button warten. Notbremse: eine
+        // Äußerung, die länger als 12 s geht, wird trotzdem abgeschickt,
+        // falls die Stille-Erkennung wegen Umgebungsgeräuschen nie greift.
+        silenceStreak++;
+        if (silenceStreak >= 8 || Date.now() - utteranceStartedAt > 12000) { silenceStreak = 0; stopRecording(); }
+      }
     }
   }
 
   function updateMuteIcon() {
     if (!spMuteBtn) return;
-    spMuteBtn.innerHTML = muted ? ICONS.muted : ICONS.volume;
-    spMuteBtn.title = muted ? 'Unmute' : 'Mute';
+    spMuteBtn.innerHTML = muted ? ICONS.micOff : ICONS.mic;
+    spMuteBtn.title = muted ? 'Mikrofon an' : 'Mikrofon aus';
+  }
+
+  // Speech-Bar über dem Chat-Bereich zentrieren (gleicher Mittelpunkt wie der
+  // Orb), nicht über dem Vollbild — die Sidebar verschiebt den Chat-Bereich.
+  function layoutSpeechBar() {
+    if (!speechBarEl || !chatRootEl) return;
+    const rect = chatRootEl.getBoundingClientRect();
+    const cx = rect.left + rect.width / 2;
+    const delta = cx - window.innerWidth / 2;
+    const inner = speechBarEl.firstElementChild;
+    if (inner) inner.style.transform = 'translateX(' + delta + 'px)';
   }
 
   function enterSpeech() {
     ensureMic().then(() => {
       speechMode = true;
       showOrb();
+      showSpeechCaption();
+      setSpeechStatus('Bereit');
+      startLiveStt();
       if (composerTray) composerTray.style.display = 'none';
       if (chatRootEl) chatRootEl.classList.add('js-speech-active');
       if (speechBarEl) speechBarEl.style.display = 'flex';
+      layoutSpeechBar();
       if (speechBtn) speechBtn.classList.add('on');
     }).catch(() => {
       if (speechBtn) speechBtn.title = 'Microphone denied — typing still works';
@@ -913,6 +1032,8 @@
   function exitSpeech() {
     speechMode = false;
     hideOrb();
+    hideSpeechCaption();
+    stopLiveStt();
     cancelRecording();
     if (composerTray) composerTray.style.display = '';
     if (chatRootEl) chatRootEl.classList.remove('js-speech-active');
@@ -952,8 +1073,20 @@
     }
     return pts;
   }
-  let orbPoints = makeSpherePoints(420);
+  let orbPoints = makeSpherePoints(600);
   let orbRotY = 0, orbRotX = -0.38;
+
+  // Eine konstante Farbe für alle Zustände — die Status werden nur über die
+  // BEWEGUNG erzählt (wie in der alten JARVIS-Kugel), nicht über Farbwechsel.
+  const ORB_COLOR = C.accent;
+
+  // aktueller Orb-Zustand: jeder bekommt eine eigene Animation
+  function orbStatus() {
+    if (speaking) return 'speaking';
+    if (busy) return 'thinking';
+    if (speechMode && !muted) return 'listening';
+    return 'idle';
+  }
 
   function drawOrb(now) {
     const cw = orbCanvas.clientWidth, ch = orbCanvas.clientHeight;
@@ -962,38 +1095,94 @@
     if (orbCanvas.width !== cw * dpr || orbCanvas.height !== ch * dpr) { orbCanvas.width = cw * dpr; orbCanvas.height = ch * dpr; }
     orbCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
     orbCtx.clearRect(0, 0, cw, ch);
-    // Zentrum über dem Chat-Bereich (rechts der Sidebar), nicht der Mitte
-    // des Vollbildes — ein <canvas> ist ein replaced element, seine Box ist
-    // also das, was width/height/clientWidth melden; die Position des
-    // Sprechbereichs holen wir daher über den echten Layout-Container.
+    // Zentrum über dem Chat-Bereich (rechts der Sidebar)
     const rect = chatRootEl ? chatRootEl.getBoundingClientRect() : { left: 0, top: 0, width: cw, height: ch };
     const cx = rect.left + rect.width / 2;
     const cy = rect.top + rect.height / 2;
-    const R = Math.min(rect.width, rect.height) * 0.32;
+    const R = Math.min(rect.width, rect.height) * 0.22;   // kleiner
     const lvl = orbLevel || 0;
-    // langsame Rotation, beim Sprechen beschleunigt
-    orbRotY += 0.0042 + lvl * 0.012;
+    const status = orbStatus();
+    const t = now / 1000;
+
+    // Rotationsgeschwindigkeit je Zustand
+    let rotSpeed = 0.0028;
+    if (status === 'listening') rotSpeed = 0.0035 + lvl * 0.02;
+    else if (status === 'thinking') rotSpeed = 0.006;
+    else if (status === 'speaking') rotSpeed = 0.0065;
+    orbRotY += rotSpeed;
+    orbRotX = -0.38 + Math.sin(t * 0.7) * 0.04;   // sanftes Wanken
+
+    // Denk-Sweep: ein Band wandert von oben nach unten (0 = oben … 1 = unten).
+    // Dreieck-Welle, damit es ohne Sprung durchläuft — wie in der alten Kugel.
+    let sweepT = -1;
+    if (status === 'thinking') {
+      const period = 1.6;
+      const phase = (t % (period * 2)) / (period * 2);
+      sweepT = phase < 0.5 ? phase * 2 : 2 - phase * 2;
+    }
+
     const cosY = Math.cos(orbRotY), sinY = Math.sin(orbRotY);
     const cosX = Math.cos(orbRotX), sinX = Math.sin(orbRotX);
-    orbCtx.fillStyle = DOT_COLOR;
+
+    // weicher Glow hinter der Kugel (eine Farbe, keine Status-Änderung)
+    const glow = orbCtx.createRadialGradient(cx, cy, 0, cx, cy, R * 1.5);
+    glow.addColorStop(0, ORB_COLOR + '22');
+    glow.addColorStop(1, ORB_COLOR + '00');
+    orbCtx.globalAlpha = 0.5;
+    orbCtx.fillStyle = glow;
+    orbCtx.beginPath();
+    orbCtx.arc(cx, cy, R * 1.5, 0, Math.PI * 2);
+    orbCtx.fill();
+
+    orbCtx.fillStyle = ORB_COLOR;
     for (let i = 0; i < orbPoints.length; i++) {
       const p = orbPoints[i];
+      const bx = p.x, by = p.y, bz = p.z;
+
+      // POSITIONS-Dynamik: radialer Versatz je Punkt — die Punkte bewegen sich,
+      // die Farbe bleibt gleich. Alle Wellen basieren auf der POSITION (nicht
+      // auf Zufall), damit Nachbarpunkte kohärent zusammenlaufen statt
+      // chaotisch zu zucken — wie in der alten Kugel.
+      let dr = 0;
+      if (status === 'idle') {
+        // ruhiges, synchrones Atmen + sehr langsame kohärente Welle
+        const breathe = Math.sin(t * 0.7);
+        const wave = Math.sin(bx * 2.1 + by * 1.8 + t * 0.5);
+        dr = breathe * 0.018 + wave * 0.03;
+      } else if (status === 'listening') {
+        // Rippel: kohärente Welle über die Position, von der Lautstärke gesteuert
+        const ripple = Math.sin(bx * 4 + t * 2.4) * Math.cos(by * 4 - t * 1.7);
+        dr = lvl * 0.28 * ripple;
+      } else if (status === 'thinking') {
+        // Sweep-Band wandert von oben nach unten (Dreieck-Welle) und drückt
+        // die Punkte darin nach außen; leichte kohärente Welle dazu
+        const rowT = (1 - by) / 2;
+        const sweep = sweepT >= 0 ? Math.exp(-Math.pow((rowT - sweepT) * 6, 2)) : 0;
+        dr = 0.14 * sweep + 0.028 * Math.sin(bx * 2 + bz * 2 + t * 1.2);
+      } else { // speaking — mehrere kohärente Wellen; jeder Punkt hat seinen
+               // eigenen Wert, aber Bewegungen laufen als Wellen über die Fläche
+        const rippleA = Math.sin(bx * 3.5 + t * 3.1) * Math.cos(by * 3.3 - t * 2.6);
+        const rippleB = Math.sin(bz * 4.2 - t * 2.9);
+        const rippleC = Math.sin((bx + bz) * 2.6 + t * 3.8);
+        dr = 0.09 * rippleA + 0.06 * rippleB + 0.05 * rippleC;
+      }
+      const r = 1 + dr;
+      const x = bx * r, y = by * r, z = bz * r;
       // Rotation um Y
-      const x = p.x * cosY + p.z * sinY;
-      const z = -p.x * sinY + p.z * cosY;
-      // Rotation um X (dauerhafter Kippwinkel)
-      const y = p.y * cosX - z * sinX;
-      const zT = p.y * sinX + z * cosX;
-      // perspektivische Projektion — näher = größer
+      const x1 = x * cosY + z * sinY;
+      const z1 = -x * sinY + z * cosY;
+      // Rotation um X (Kippwinkel)
+      const y1 = y * cosX - z1 * sinX;
+      const z2 = y * sinX + z1 * cosX;
       const persp = 3.4;
-      const scale = persp / (persp - zT);
-      const sx = cx + x * R * scale;
-      const sy = cy + y * R * scale;
-      const depth = (zT + 1) / 2;                 // 0 fern … 1 nah
-      const pulse = lvl * (0.4 + 0.6 * depth);
-      const size = 1.2 + depth * 2.0 + pulse * 2.6;
-      const alpha = Math.min(1, 0.12 + depth * 0.5 + pulse * 0.35);
-      orbCtx.globalAlpha = alpha;
+      const scale = persp / (persp - z2);
+      const sx = cx + x1 * R * scale;
+      const sy = cy + y1 * R * scale;
+      const depth = (z2 + 1) / 2;                 // 0 fern … 1 nah
+      // fettere Punkte, dicht beieinander; Alpha nur = Tiefenausblendung
+      const size = 1.4 + depth * 1.9;
+      const alpha = 0.16 + depth * 0.55;
+      orbCtx.globalAlpha = Math.min(1, Math.max(0, alpha));
       orbCtx.beginPath();
       orbCtx.arc(sx, sy, size, 0, Math.PI * 2);
       orbCtx.fill();
@@ -1003,7 +1192,9 @@
 
   function orbLoop(now) {
     if (!orbVisible) return;
-    orbLevel = Math.max(0, orbLevel * 0.9 + getMicLevel() * 0.1);
+    // Pegel nur aus dem Mikrofon, wenn gerade zugehört wird
+    const listening = speechMode && !muted && !busy && !speaking;
+    orbLevel = Math.max(0, orbLevel * 0.9 + (listening ? getMicLevel() : 0) * 0.1);
     drawOrb(now);
     orbRaf = requestAnimationFrame(orbLoop);
   }
@@ -1034,7 +1225,9 @@
       const comp = $('.js-composer', uiEl);
       if (comp) comp.style.left = open ? '0' : '308px';
       if (orbCanvas) orbCanvas.style.left = open ? '0' : '308px';
+      layoutSpeechBar();
     });
+    window.addEventListener('resize', layoutSpeechBar);
     fetch('/models').then((r) => r.json()).then((j) => { if (j.current) setModelLabel(j.current); }).catch(() => {});
     openPanelSocket();
   }
