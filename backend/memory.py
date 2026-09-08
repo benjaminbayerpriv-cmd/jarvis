@@ -41,11 +41,27 @@ def initialize() -> None:
             )
 
 
+def _index_new_line(source: str, line: str) -> None:
+    """Best-effort: make a just-written line searchable via
+    vector_memory.semantic_context_for immediately, not just after the
+    next full reindex_all() backfill. Never lets an unreachable embedding
+    model turn into a failed note/task/etc. — same fail-soft rule as
+    everywhere else memory.py talks to the model."""
+    from . import vector_memory  # local: vector_memory imports this module too
+
+    try:
+        vector_memory.index_entry(source, line)
+    except Exception as exc:  # noqa: BLE001 - indexing must never break the write it followed
+        print(f"[memory] Konnte neue Zeile nicht indizieren: {exc}")
+
+
 def add_note(text: str) -> str:
     initialize()
     stamp = dt.datetime.now().strftime("%Y-%m-%d %H:%M")
+    line = f"- [{stamp}] {text}"
     with _lock, NOTES.open("a", encoding="utf-8") as handle:
-        handle.write(f"- [{stamp}] {text}\n")
+        handle.write(line + "\n")
+    _index_new_line("Notizen", line)
     return "Notiz in Obsidian gespeichert."
 
 
@@ -61,13 +77,16 @@ def add_task(text: str, status: str = "offen") -> str:
         # same list item. With a literal backslash-n, every task instead
         # showed up as one line with visible "\n" text right in the note.
         handle.write(f"- [{marker}] {text}  \n  status:: {status}  \n  erstellt:: {stamp}\n")
+    _index_new_line("Aufgaben", f"- [{marker}] {text}")
     return f"Aufgabe als {status} in Obsidian gespeichert."
 
 
 def remember_preference(text: str) -> str:
     initialize()
+    line = f"- {text}"
     with _lock, PROFILE.open("a", encoding="utf-8") as handle:
-        handle.write(f"- {text}\n")
+        handle.write(line + "\n")
+    _index_new_line("Profil", line)
     return "Präferenz in Obsidian gespeichert."
 
 
@@ -76,24 +95,35 @@ def add_knowledge(title: str, content: str) -> str:
     slug = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-") or "wissen"
     path = KNOWLEDGE / f"{slug}.md"
     path.write_text(_frontmatter("jarvis-knowledge", created=dt.date.today().isoformat(), tags="[jarvis]") + f"# {title}\n\n{content}\n", encoding="utf-8")
+    # Indexed as one chunk (title + content), not line by line — unlike
+    # notes/tasks, a knowledge entry is prose meant to be found as a whole.
+    _index_new_line(f"Wissen/{slug}", f"{title}: {content}")
     return f"Wissen in [[Jarvis/Wissen/{slug}]] gespeichert."
 
 
-def log_summary(user_text: str, assistant_text: str) -> None:
-    """Store a concise daily trace, never an unbounded raw chat transcript."""
-    initialize()
-    day = JOURNAL / f"{dt.date.today().isoformat()}.md"
-    if not day.exists():
-        day.write_text(_frontmatter("jarvis-daily", date=dt.date.today().isoformat()) + f"# {dt.date.today().isoformat()}\n", encoding="utf-8")
-    clean_user = " ".join(user_text.split())[:180]
-    clean_reply = " ".join(assistant_text.split())[:220]
-    with _lock, day.open("a", encoding="utf-8") as handle:
-        handle.write(f"\n- Anfrage: {clean_user}\n  Ergebnis: {clean_reply}\n")
-
-
 def context_for(query: str, limit: int = 4) -> str:
-    """Return only matching local memories for a model prompt."""
+    """Return only matching local memories for a model prompt.
+
+    Tries semantic search first (vector_memory.semantic_context_for) —
+    finds relevant memories that don't share a single word with the
+    query, which plain substring matching below never could. Falls back
+    to the original keyword match whenever semantic search is
+    unavailable (embedding model not loaded in LM Studio, LM Studio
+    itself unreachable, ...), so this degrades to prior behaviour rather
+    than going silent.
+    """
     initialize()
+
+    from . import vector_memory  # local: vector_memory imports this module too
+
+    try:
+        semantic = vector_memory.semantic_context_for(query, limit=limit)
+    except Exception as exc:  # noqa: BLE001 - a memory lookup must never break the chat turn
+        print(f"[memory] Semantische Suche fehlgeschlagen, nutze Keyword-Suche: {exc}")
+        semantic = None
+    if semantic is not None:
+        return semantic
+
     words = {word.lower() for word in re.findall(r"[A-Za-zÄÖÜäöüß]{4,}", query)}
     if not words:
         return ""

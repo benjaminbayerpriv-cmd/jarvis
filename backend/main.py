@@ -15,7 +15,7 @@ from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import browser_agent, config, conversations, fillers, llm_client, memory, panel, stt, transcript_log, tts
+from . import browser_agent, config, conversations, fillers, llm_client, memory, panel, stt, transcript_log, tts, vector_memory
 
 app = FastAPI(title="Jarvis")
 app.add_middleware(
@@ -79,6 +79,11 @@ async def on_startup():
     # surfaces here, in the log, rather than on the user's first sentence —
     # model construction alone never touches cuBLAS/cuDNN.
     loop.run_in_executor(None, stt.selftest)
+    # Backfills the semantic-search index for any vault content written
+    # before this feature existed (or added directly in Obsidian, outside
+    # Jarvis) — see backend/vector_memory.py. Already-indexed lines are
+    # skipped, so this is cheap on every startup after the first.
+    loop.run_in_executor(None, vector_memory.reindex_all)
     loop.create_task(_pump_panel())
 
 
@@ -254,7 +259,6 @@ def chat_stream(req: ChatRequest):
                         {"type": "done", "full_text": event["full_text"], "conversation_id": conv_id}
                     ) + "\n"
             if full_text:
-                memory.log_summary(req.message, full_text)
                 transcript_log.log_turn(req.message, full_text)
                 conv = conversations.append_turn(conv_id, req.message, full_text)
                 if conv.get("title") is None and len(conv.get("turns", [])) == 2:

@@ -25,6 +25,13 @@ WHISPER_MODEL = os.environ.get("WHISPER_MODEL", "medium")
 LM_STUDIO_BASE_URL = os.environ.get("LM_STUDIO_BASE_URL", "http://localhost:1234/v1")
 LM_STUDIO_MODEL = os.environ.get("LM_STUDIO_MODEL", "google/gemma-4-e4b")
 
+# Embedding model for semantic memory search (backend/vector_memory.py) —
+# served by the same LM Studio instance as the chat model, over its
+# OpenAI-compatible /embeddings endpoint. Load it in LM Studio like any
+# other model; if it's never loaded, semantic search just falls back to
+# memory.py's plain keyword match (see vector_memory.embed).
+EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "text-embedding-nomic-embed-text-v1.5")
+
 # Optional cloud LLM (DeepSeek, OpenAI-compatible). When DEEPSEEK_API_KEY is
 # set, text generation switches to it; screen vision stays on LM Studio, since
 # DeepSeek's hosted API has no multimodal model.
