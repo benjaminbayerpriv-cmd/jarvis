@@ -30,7 +30,7 @@
   // Echte Lucide-Ikonen, 1:1 aus dem Internet (lucide-static), stroke=currentColor.
   const ICONS = {
     menu: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><line x1="4" x2="20" y1="6" y2="6"/><line x1="4" x2="20" y1="12" y2="12"/><line x1="4" x2="20" y1="18" y2="18"/></svg>',
-    plus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M5 12h14"/><path d="M12 5v14"/></svg>',
+    plus: '<svg viewBox="172 172 656 656" fill="currentColor" fill-rule="evenodd" aria-hidden="true"><path d="M472 200Q472 188 480.0 180.0Q488 172 500 172Q512 172 520.0 180.0Q528 188 528 200V800Q528 812 520.0 820.0Q512 828 500 828Q488 828 480.0 820.0Q472 812 472 800ZM800 472Q812 472 820.0 480.0Q828 488 828 500Q828 512 820.0 520.0Q812 528 800 528H200Q188 528 180.0 520.0Q172 512 172 500Q172 488 180.0 480.0Q188 472 200 472Z"/></svg>',
     chat: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z"/></svg>',
     code: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m18 16 4-4-4-4"/><path d="m6 8-4 4 4 4"/><path d="m14.5 4-5 16"/></svg>',
     mic: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/></svg>',
@@ -44,7 +44,7 @@
     close: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>',
     volume: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 4.702a.705.705 0 0 0-1.203-.498L6.413 7.587A1.4 1.4 0 0 1 5.416 8H3a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2.416a1.4 1.4 0 0 1 .997.413l3.383 3.384A.705.705 0 0 0 11 19.298z"/><path d="M16 9a5 5 0 0 1 0 6"/><path d="M19.364 18.364a9 9 0 0 0 0-12.728"/></svg>',
     muted: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 4.702a.7.7 0 0 0-1.203-.498L6.413 7.587A1.4 1.4 0 0 1 5.416 8H3a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2.416a1.4 1.4 0 0 1 .997.413l3.383 3.384A.7.7 0 0 0 11 19.298z"/><path d="m16.5 14.5 5-5"/><path d="m16.5 9.5 5 5"/></svg>',
-    folder: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg>',
+    folder: '<svg viewBox="131 97 738 806" fill="currentColor" fill-rule="evenodd" aria-hidden="true"><path d="M225 303Q213 303 205.0 295.0Q197 287 197 275Q197 263 205.0 255.0Q213 247 225 247H775Q787 247 795.0 255.0Q803 263 803 275Q803 287 795.0 295.0Q787 303 775 303ZM300 153Q288 153 280.0 145.0Q272 137 272 125Q272 113 280.0 105.0Q288 97 300 97H700Q712 97 720.0 105.0Q728 113 728 125Q728 137 720.0 145.0Q712 153 700 153ZM209 397H791Q815 397 834.0 410.0Q853 423 862.5 443.5Q872 464 868 488L810 838Q805 866 783.0 884.5Q761 903 733 903H267Q239 903 217.0 884.5Q195 866 190 838L132 488Q128 464 137.5 443.5Q147 423 166.0 410.0Q185 397 209 397ZM209 453Q199 453 192.5 461.0Q186 469 187 479L246 829Q247 837 253.0 842.0Q259 847 267 847H733Q741 847 747.0 842.0Q753 837 754 829L813 479Q814 469 807.5 461.0Q801 453 791 453Z"/></svg>',
     search: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>',
     sort: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 16 4 4 4-4"/><path d="M7 20V4"/><path d="m21 8-4-4-4 4"/><path d="M17 4v16"/></svg>',
     dots: '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg>',
@@ -378,30 +378,30 @@
     uiEl.id = 'jsApp';
     uiEl.style.cssText = `position:fixed;inset:0;z-index:30;display:flex;background:${C.bg};color:${C.text};font-family:${C.font};`;
     uiEl.innerHTML = `
-      <button class="js-side-toggle" title="Toggle sidebar" style="position:absolute;top:18px;left:16px;z-index:31;background:none;border:none;color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;border-radius:8px;">${ICONS.menu}</button>
+      <button class="js-side-toggle" title="Sidebar umschalten" style="position:absolute;top:18px;left:16px;z-index:31;background:none;border:none;color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;border-radius:8px;">${ICONS.menu}</button>
       <aside class="js-sidebar" style="width:308px;flex:0 0 308px;height:100%;display:flex;flex-direction:column;background:${C.bgSoft};border-right:1px solid ${C.border};">
         <div class="js-sidebar-top" style="padding:16px 12px 6px;display:flex;flex-direction:column;gap:12px;">
           <div class="js-mode" style="display:flex;padding:3px;gap:3px;background:${C.bgHover};border:1px solid ${C.border};border-radius:11px;margin-left:44px;">
             <button class="js-pill active" data-mode="chat" style="flex:1;display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:7px 10px;border-radius:8px;border:none;background:transparent;color:${C.textSoft};font-size:13px;font-weight:500;cursor:pointer;transition:background .15s,color .15s;">${ICONS.chat}<span>Chat</span></button>
-            <button class="js-pill" data-mode="code" title="Code with opencode" style="flex:1;display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:7px 10px;border-radius:8px;border:none;background:transparent;color:${C.textSoft};font-size:13px;font-weight:500;cursor:pointer;transition:background .15s,color .15s;">${ICONS.code}<span>Code</span></button>
+            <button class="js-pill" data-mode="code" title="Code mit JARVIS Code" style="flex:1;display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:7px 10px;border-radius:8px;border:none;background:transparent;color:${C.textSoft};font-size:13px;font-weight:500;cursor:pointer;transition:background .15s,color .15s;">${ICONS.code}<span>Code</span></button>
           </div>
-          <button class="js-new" style="display:flex;align-items:center;gap:8px;padding:9px 12px;background:${C.bgHover};border:1px solid ${C.border};border-radius:11px;color:${C.text};font-size:13px;font-weight:500;cursor:pointer;transition:background .15s;">${ICONS.plus}<span>New conversation</span></button>
-          <button class="js-projects" style="display:flex;align-items:center;gap:8px;padding:9px 12px;background:${C.bgHover};border:1px solid ${C.border};border-radius:11px;color:${C.text};font-size:13px;font-weight:500;cursor:pointer;transition:background .15s;">${ICONS.folder}<span>Projekte</span></button>
+          <button class="js-new" style="display:flex;align-items:center;gap:8px;padding:9px 12px;background:${C.bgHover};border:none;border-radius:11px;color:${C.text};font-size:13px;font-weight:500;cursor:pointer;transition:background .15s;">${ICONS.plus}<span>Neu</span></button>
+          <button class="js-projects" style="display:flex;align-items:center;gap:8px;padding:9px 12px;background:${C.bgHover};border:none;border-radius:11px;color:${C.text};font-size:13px;font-weight:500;cursor:pointer;transition:background .15s;">${ICONS.folder}<span>Projekte</span></button>
           <button class="js-chats-toggle" style="display:flex;align-items:center;gap:4px;padding:2px 8px 4px;background:none;border:none;font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:${C.textDim};cursor:pointer;font-family:${C.font};">
             <span class="js-chats-chevron" style="display:inline-flex;transition:transform .15s;">${ICONS.chevronDown}</span>
-            <span>Conversations</span>
+            <span>Verlauf</span>
           </button>
         </div>
         <div class="js-chats" style="flex:1 1 auto;overflow-y:auto;padding:2px 8px 10px;"></div>
         <div class="js-settings-row" style="padding:10px 12px;border-top:1px solid ${C.border};display:flex;align-items:center;gap:8px;">
           <button class="js-settings" title="Settings" style="width:32px;height:32px;border-radius:9px;background:none;border:none;color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;transition:background .15s;">${ICONS.settings}</button>
-          <span class="js-settings-label" style="font-size:13px;color:${C.textSoft};">Settings</span>
+          <span class="js-settings-label" style="font-size:13px;color:${C.textSoft};">Einstellungen</span>
         </div>
       </aside>
       <div class="js-main" style="flex:1;height:100%;display:flex;flex-direction:column;min-width:0;position:relative;">
         <div class="js-welcome" style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:0 32px;gap:14px;">
           <h1 class="js-welcome-title" style="font-family:${C.serif};font-size:30px;font-weight:600;letter-spacing:-.01em;color:${C.text};margin:0 0 4px;">${timeGreeting()}</h1>
-          <p class="js-welcome-sub" style="font-size:14px;color:${C.textSoft};margin:0;max-width:440px;line-height:1.55;">How can I help you today? Speak, dictate, or just type.</p>
+          <p class="js-welcome-sub" style="font-size:14px;color:${C.textSoft};margin:0;max-width:440px;line-height:1.55;">Wie kann ich dir heute helfen? Sprich, diktiere oder schreibe einfach.</p>
         </div>
         <div class="js-thread" style="flex:1;overflow-y:auto;scrollbar-width:thin;position:relative;"></div>
         <div class="js-codeview" style="position:absolute;inset:0;display:none;flex-direction:column;min-width:0;min-height:0;">
@@ -472,17 +472,17 @@
         <div style="max-width:760px;margin:0 auto;position:relative;">
           <div style="background:${C.bgSoft};border:1px solid ${C.border};border-radius:18px;box-shadow:0 10px 34px rgba(0,0,0,.38);">
             <div class="js-attach-preview" style="display:none;gap:8px;padding:12px 16px 0;flex-wrap:wrap;"></div>
-            <div class="js-editor" contenteditable="true" data-placeholder="Describe a task or ask a question" style="min-height:60px;max-height:200px;overflow-y:auto;padding:16px;color:${C.text};font-size:15px;line-height:1.5;outline:none;white-space:pre-wrap;word-break:break-word;"></div>
+            <div class="js-editor" contenteditable="true" data-placeholder="Beschreibe eine Aufgabe oder stelle eine Frage" style="min-height:60px;max-height:200px;overflow-y:auto;padding:16px;color:${C.text};font-size:15px;line-height:1.5;outline:none;white-space:pre-wrap;word-break:break-word;"></div>
             <div style="display:flex;align-items:center;gap:8px;padding:6px 10px 10px;">
-              <button class="js-upload" title="Attach files" style="width:34px;height:34px;border-radius:9px;background:none;border:none;color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;transition:background .15s;">${ICONS.paperclip}</button>
+              <button class="js-upload" title="Dateien anhängen" style="width:34px;height:34px;border-radius:9px;background:none;border:none;color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;transition:background .15s;">${ICONS.paperclip}</button>
               <div style="flex:1;"></div>
-              <button class="js-model" title="Change model" style="display:inline-flex;align-items:center;gap:6px;padding:6px 10px;background:none;border:none;color:${C.textSoft};font-size:13px;cursor:pointer;transition:background .15s;">
-                <span class="js-model-label">Model…</span>
+              <button class="js-model" title="Modell wechseln" style="display:inline-flex;align-items:center;gap:6px;padding:6px 10px;background:none;border:none;color:${C.textSoft};font-size:13px;cursor:pointer;transition:background .15s;">
+                <span class="js-model-label">Modell…</span>
                 <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
               </button>
-              <button class="js-note" title="Dictate" style="width:34px;height:34px;border-radius:9px;background:none;border:none;color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;transition:background .15s;">${ICONS.mic}</button>
-              <button class="js-speech" title="Voice mode" style="width:38px;height:38px;border-radius:50%;background:${C.bgHover};border:1px solid ${C.border};color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;transition:background .15s;">${ICONS.audio}</button>
-              <button class="js-send" title="Send" style="width:38px;height:38px;border-radius:50%;background:${C.accent};border:none;color:#fff;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;">${ICONS.send}</button>
+              <button class="js-note" title="Diktieren" style="width:34px;height:34px;border-radius:9px;background:none;border:none;color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;transition:background .15s;">${ICONS.mic}</button>
+              <button class="js-speech" title="Sprachmodus" style="width:38px;height:38px;border-radius:50%;background:${C.bgHover};border:1px solid ${C.border};color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;transition:background .15s;">${ICONS.audio}</button>
+              <button class="js-send" title="Senden" style="width:38px;height:38px;border-radius:50%;background:${C.accent};border:none;color:#fff;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;">${ICONS.send}</button>
             </div>
           </div>
           <div class="js-modelmenu" style="display:none;position:absolute;width:220px;max-height:280px;overflow-y:auto;background:${C.bgSoft};border:1px solid ${C.border};border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.4);z-index:10;"></div>
@@ -514,7 +514,7 @@
     speechCaptionEl.style.cssText = `position:fixed;left:0;right:0;bottom:92px;z-index:50;display:none;justify-content:center;pointer-events:none;`;
     speechCaptionEl.innerHTML = `
       <div style="pointer-events:auto;max-width:720px;width:calc(100% - 64px);padding:10px 16px;background:${C.bgSoft};border:1px solid ${C.border};border-radius:14px;box-shadow:0 12px 40px rgba(0,0,0,.5);display:flex;flex-direction:column;gap:4px;">
-        <div class="js-spc-status" style="font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:${C.textDim};">Listen</div>
+        <div class="js-spc-status" style="font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:${C.textDim};">Zuhören</div>
         <div class="js-spc-user" style="font-size:15px;color:${C.text};min-height:20px;white-space:pre-wrap;word-break:break-word;">…</div>
         <div class="js-spc-reply" style="font-size:14px;color:${C.textSoft};min-height:0;white-space:pre-wrap;word-break:break-word;"></div>
       </div>
@@ -531,19 +531,19 @@
     settingsSheetEl.innerHTML = `
       <div style="width:340px;max-width:90vw;background:${C.bgSoft};border:1px solid ${C.border};border-radius:16px;box-shadow:0 20px 60px rgba(0,0,0,.5);overflow:hidden;">
         <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:1px solid ${C.border};">
-          <span style="font-size:15px;font-weight:600;color:${C.text};">Settings</span>
+          <span style="font-size:15px;font-weight:600;color:${C.text};">Einstellungen</span>
           <button class="js-settings-close" title="Close" style="width:28px;height:28px;border-radius:8px;background:none;border:none;color:${C.textSoft};cursor:pointer;font-size:16px;line-height:1;">×</button>
         </div>
         <div style="padding:12px 6px;">
-          <div style="padding:6px 10px;font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:${C.textDim};">Model</div>
+          <div style="padding:6px 10px;font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:${C.textDim};">Modell</div>
           <div class="js-settings-models"></div>
         </div>
         <div style="padding:12px 6px 16px;border-top:1px solid ${C.border};">
           <div style="padding:6px 10px;font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:${C.textDim};">Code</div>
           <div style="padding:4px 10px;display:flex;flex-direction:column;gap:8px;">
-            <span style="font-size:12px;color:${C.textSoft};">Working directory for opencode</span>
+            <span style="font-size:12px;color:${C.textSoft};">Arbeitsverzeichnis für JARVIS Code</span>
             <input class="js-code-dir-input" type="text" placeholder="~/Developer" spellcheck="false" style="width:100%;box-sizing:border-box;padding:9px 10px;background:${C.bg};border:1px solid ${C.border};border-radius:8px;color:${C.text};font-size:13px;outline:none;font-family:${C.font};" />
-            <button class="js-code-dir-save" style="align-self:flex-start;padding:7px 12px;border:none;border-radius:8px;background:${C.accent};color:#fff;font-size:12px;cursor:pointer;font-family:${C.font};">Save</button>
+            <button class="js-code-dir-save" style="align-self:flex-start;padding:7px 12px;border:none;border-radius:8px;background:${C.accent};color:#fff;font-size:12px;cursor:pointer;font-family:${C.font};">Speichern</button>
           </div>
         </div>
       </div>
@@ -801,7 +801,7 @@
       ico.innerHTML = ICONS.bullet;
       const txt = document.createElement('span');
       txt.className = 'js-txt';
-      txt.textContent = conv.title || 'New chat';
+      txt.textContent = conv.title || 'Neu';
       txt.title = txt.textContent;
       el.appendChild(ico);
       el.appendChild(txt);
@@ -2032,7 +2032,7 @@
     }
     dictating = should;
     if (noteBtn) noteBtn.classList.toggle('on', should);
-    if (noteBtn) noteBtn.title = should ? 'Dictation off' : 'Dictate';
+    if (noteBtn) noteBtn.title = should ? 'Diktat aus' : 'Diktieren';
     if (should) { dictBase = null; startListening(); } else stopListening();
   }
 

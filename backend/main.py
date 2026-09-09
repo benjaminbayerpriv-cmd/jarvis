@@ -636,7 +636,7 @@ async def code_tty_ws(websocket: WebSocket):
     await websocket.accept()
     wdir = opencode_agent.get_code_dir()
     try:
-        master, proc = opencode_agent.start_tty(wdir)
+        tty = opencode_agent.start_tty(wdir)
     except RuntimeError as exc:
         # e.g. no PTY on this OS (Windows) — tell the client plainly instead
         # of letting the exception surface as a raw traceback in the log.
@@ -653,15 +653,15 @@ async def code_tty_ws(websocket: WebSocket):
         """Blocking PTY reader: answer OpenTUI queries, forward raw bytes."""
         try:
             while True:
-                data = os.read(master, 65536)
+                data = tty.read(65536)
                 if not data:
                     break
-                opencode_agent.answer_terminal_queries(master, data, tty_state)
+                opencode_agent.answer_terminal_queries(tty, data, tty_state)
                 loop.call_soon_threadsafe(out_q.put_nowait, ("data", data))
         except OSError:
             pass
         finally:
-            loop.call_soon_threadsafe(out_q.put_nowait, ("exit", proc.poll()))
+            loop.call_soon_threadsafe(out_q.put_nowait, ("exit", tty.poll()))
 
     threading.Thread(target=_reader, daemon=True).start()
 
@@ -684,11 +684,8 @@ async def code_tty_ws(websocket: WebSocket):
     sender_task = asyncio.create_task(_sender())
 
     def _cleanup() -> None:
-        opencode_agent.kill_tty(proc)
-        try:
-            os.close(master)
-        except OSError:
-            pass
+        opencode_agent.kill_tty(tty)
+        tty.close()
 
     try:
         while True:
@@ -700,7 +697,7 @@ async def code_tty_ws(websocket: WebSocket):
                 break
             if msg.get("bytes") is not None:
                 try:
-                    os.write(master, msg["bytes"])
+                    tty.write(msg["bytes"])
                 except OSError:
                     break
             elif msg.get("text") is not None:
@@ -713,7 +710,7 @@ async def code_tty_ws(websocket: WebSocket):
                     rows = int(data.get("rows") or 24)
                     tty_state["cols"] = cols
                     tty_state["rows"] = rows
-                    opencode_agent.resize_tty(master, proc, cols, rows)
+                    opencode_agent.resize_tty(tty, cols, rows)
     except WebSocketDisconnect:
         pass
     finally:

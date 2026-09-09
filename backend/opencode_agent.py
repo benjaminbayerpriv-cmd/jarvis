@@ -45,10 +45,28 @@ except ImportError:
     pty = None
     termios = None
 
+# Windows: unter ConPTY (pywinpty) gibt es keinen POSIX-PTY-fd, daher fährt der
+# Code-Tab dort eine PtyProcess. Der Import gelingt nur unter Windows; auf
+# POSIX (macOS/Linux) bleibt er None und der gewohnte openpty-Pfad läuft.
+WIN = os.name == "nt"
+try:
+    if WIN:
+        from winpty import PtyProcess
+    else:
+        PtyProcess = None
+except ImportError:
+    PtyProcess = None
+
 from . import config
 
-# Overridable via env; the user installed opencode to this binary.
-OPENCODE_BIN = os.environ.get("OPENCODE_BIN", "/Users/benjaminbayer/.opencode/bin/opencode")
+# JARVIS Code: eigene opencode-Binary (Rebrand) mit plattformabhängigem Pfad.
+# Per Env überschreibbar: OPENCODE_BIN=/pfad/zum/binary
+if os.name == "nt":
+    # Windows: lokale JARVIS-Code-Binary (Build-Output unter ~/src/opencode/releases).
+    _JARVIS_CODE_BIN = str(pathlib.Path.home() / "src" / "opencode" / "releases" / "jarvis-code-windows-x64.exe")
+else:
+    _JARVIS_CODE_BIN = "/Users/benjaminbayer/src/opencode/releases/jarvis-code-darwin-arm64"
+OPENCODE_BIN = os.environ.get("OPENCODE_BIN", _JARVIS_CODE_BIN)
 
 # Where opencode reads its provider config. We MERGE into it, never overwrite.
 OPENCODE_CONFIG = pathlib.Path.home() / ".config" / "opencode" / "opencode.json"
@@ -191,27 +209,149 @@ def ensure_provider_config(models: list[dict], default_model_name: str) -> dict:
     return cfg
 
 
-def start_tty(workdir: str) -> tuple[int, subprocess.Popen]:
-    """Start the real opencode TUI in a PTY; return ``(master_fd, process)``.
+class TtyHandle:
+    """Plattform-Abstraktion über den Code-Tab-Prozess.
 
-    Refreshes the opencode provider config first so the TUI sees the LM Studio
-    models, then spawns ``opencode <workdir>`` on an xterm-256color PTY with the
-    child in a new session (so it can be signalled as a process group). The
-    caller owns the master fd — it reads the raw ANSI stream from it, writes
-    keystrokes to it, and resizes it via ``TIOCSWINSZ``.
-
-    Returns the open master fd plus the Popen handle; the caller must hand the
-    slot back to the child (close the slave) and reap the process on teardown.
+    Der WebSocket-Handler in main.py spricht nur noch mit diesem Objekt
+    (``read``/``write``/``resize``/``kill``/``close``/``poll``) und kümmert
+    sich nicht um die Plattform. Unter macOS/Linux kapselt es einen echten
+    PTY-master-fd (openpty + Prozessgruppe); unter Windows eine pywinpty
+    :class:`PtyProcess` (ConPTY), die keinen fd hat — dort laufen read/write
+    über den ConPTY-Kanal und erwarten bzw. liefern Text, der hier auf Bytes
+    umgemappt wird.
     """
-    if pty is None:
-        raise RuntimeError("Code-Tab wird auf Windows noch nicht unterstützt (braucht ein PTY, das gibt es dort nicht).")
 
+    def __init__(self) -> None:
+        self.platform = "posix"
+        self.master: int | None = None
+        self.proc: subprocess.Popen | None = None
+        self.winpty = None  # pywinpty PtyProcess (nur Windows)
+
+    @classmethod
+    def posix(cls, master: int, proc: subprocess.Popen) -> "TtyHandle":
+        h = cls()
+        h.platform = "posix"
+        h.master = master
+        h.proc = proc
+        return h
+
+    @classmethod
+    def windows(cls, winpty_proc) -> "TtyHandle":
+        h = cls()
+        h.platform = "windows"
+        h.winpty = winpty_proc
+        h.proc = winpty_proc
+        return h
+
+    def read(self, n: int = 65536) -> bytes:
+        """Raw-Ausgabe als Bytes. Gibt ``b""`` bei EOF zurück."""
+        if self.platform == "windows":
+            try:
+                s = self.winpty.read(n)
+            except EOFError:
+                return b""
+            return (s or "").encode("utf-8", errors="replace")
+        return os.read(self.master, n)
+
+    def write(self, data: bytes) -> None:
+        """Tastendruck-/Byte-Strom in den Prozess stdin."""
+        if self.platform == "windows":
+            self.winpty.write(data.decode("utf-8", errors="replace"))
+            return
+        os.write(self.master, data)
+
+    def resize(self, cols: int, rows: int) -> None:
+        """Teile dem Terminal die neue Größe mit und nudge zum Reflow."""
+        if self.platform == "windows":
+            self.winpty.setwinsize(rows, cols)
+            return
+        try:
+            fcntl.ioctl(self.master, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
+        except OSError:
+            return
+        if self.proc and self.proc.poll() is None:
+            try:
+                os.killpg(os.getpgid(self.proc.pid), signal.SIGWINCH)
+            except (ProcessLookupError, PermissionError, OSError):
+                pass
+
+    def kill(self, grace: float = 2.0) -> None:
+        """Prozess beenden — Windows via ConPTY, POSIX als Prozessgruppe."""
+        if self.platform == "windows":
+            try:
+                self.winpty.terminate(force=True)
+            except Exception:  # noqa: BLE001 - best effort
+                pass
+            return
+        if self.proc.poll() is not None:
+            return
+        try:
+            os.killpg(os.getpgid(self.proc.pid), signal.SIGTERM)
+        except (ProcessLookupError, PermissionError):
+            try:
+                self.proc.terminate()
+            except ProcessLookupError:
+                pass
+        try:
+            self.proc.wait(grace)
+        except subprocess.TimeoutExpired:
+            if self.proc.poll() is None:
+                try:
+                    os.killpg(os.getpgid(self.proc.pid), signal.SIGKILL)
+                except (ProcessLookupError, PermissionError):
+                    self.proc.kill()
+                try:
+                    self.proc.wait()
+                except Exception:  # noqa: BLE001 - best-effort reap
+                    pass
+
+    def close(self) -> None:
+        """Gebe den PTY-fd frei (no-op auf Windows, ConPTY hat keinen fd)."""
+        if self.platform == "windows":
+            return
+        try:
+            os.close(self.master)
+        except OSError:
+            pass
+        self.master = None
+
+    def poll(self) -> int | None:
+        """Exit-Code, oder None solange der Prozess noch läuft."""
+        if self.platform == "windows":
+            return None if self.winpty.isalive() else 0
+        return self.proc.poll()
+
+
+def start_tty(workdir: str) -> TtyHandle:
+    """Starte die echte opencode-TUI in einem PTY/ConPTY; gib einen TtyHandle.
+
+    Aktualisiert zuerst die opencode-Provider-Konfiguration, damit die TUI die
+    LM-Studio-Modelle sieht, und startet ``opencode <workdir>`` auf einem
+    xterm-256color-Terminal. Auf POSIX läuft der Kindprozess in einer eigenen
+    Session (Prozessgruppe → per SIGTERM/SIGWINCH steuerbar); auf Windows
+    übernimmt eine pywinpty-PtyProcess (ConPTY). Der Aufrufer besitzt das
+    Handle und erklärt sich bereit, es am Ende zu schließen/abzuräumen.
+    """
     models = list_models()
     if models:
         ensure_provider_config(models, default_model())
 
     env = dict(os.environ)
     env["TERM"] = "xterm-256color"
+
+    if WIN:
+        if PtyProcess is None:
+            raise RuntimeError("pywinpty ist nicht installiert – bitte `pip install pywinpty` ausführen, um den Code-Tab auf Windows zu nutzen.")
+        wp = PtyProcess.spawn(
+            [OPENCODE_BIN, workdir],
+            cwd=workdir or None,
+            env=env,
+            dimensions=(24, 120),  # rows, cols
+        )
+        return TtyHandle.windows(wp)
+
+    if pty is None:
+        raise RuntimeError("Code-Tab erfordert ein PTY, das auf diesem System nicht verfügbar ist.")
 
     master, slave = pty.openpty()
     proc = subprocess.Popen(
@@ -224,38 +364,30 @@ def start_tty(workdir: str) -> tuple[int, subprocess.Popen]:
         start_new_session=True,
     )
     os.close(slave)  # child owns the slave; we keep only the master.
-    return master, proc
+    return TtyHandle.posix(master, proc)
 
 
-def resize_tty(master: int, proc: subprocess.Popen, cols: int, rows: int) -> None:
-    """Tell the PTY its new size and nudge the TUI to reflow (SIGWINCH)."""
-    try:
-        fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
-    except OSError:
-        return
-    if proc.poll() is None:
-        try:
-            os.killpg(os.getpgid(proc.pid), signal.SIGWINCH)
-        except (ProcessLookupError, PermissionError, OSError):
-            pass
+def resize_tty(tty: TtyHandle, cols: int, rows: int) -> None:
+    """Größenänderung an das TtyHandle durchreichen (POSIX: TIOCSWINSZ+SIGWINCH)."""
+    tty.resize(cols, rows)
 
 
-def answer_terminal_queries(master: int, data: bytes, state: dict) -> None:
-    """Answer OpenTUI terminal queries xterm.js does not handle.
+def answer_terminal_queries(tty: TtyHandle, data: bytes, state: dict) -> None:
+    r"""Beantworte OpenTUI-Terminalanfragen, die xterm.js nicht abdeckt.
 
-    opencode's TUI (OpenTUI) probes the terminal and blocks until it gets answers
-    to three queries that xterm.js leaves unanswered (it answers DSR, DECRQM,
-    DA1 and OSC 10/11 itself, over its ``onData`` hook):
+    Die opencode-TUI (OpenTUI) prüft das Terminal und blockiert, bis sie eine
+    Antwort auf drei Anfragen bekommt, die xterm.js offen lässt (DSR, DECRQM,
+    DA1 und OSC 10/11 beantwortet es selbst über seinen ``onData``-Hook):
 
-      - ``ESC[>0q``           DA2, secondary device attributes
-      - ``ESC P + q <hex> ESC \``  XTGETTCAP, terminfo string query
-      - ``ESC[14t``           XTREPORTWIN, window size in pixels
+      - ``ESC[>0q``           DA2, sekundäre Geräteattribute
+      - ``ESC P + q <hex> ESC \``  XTGETTCAP, Terminfo-Stringabfrage
+      - ``ESC[14t``           XTREPORTWIN, Fenstergröße in Pixeln
 
-    We keep a short rolling buffer in ``state`` so a query split across two
-    ``os.read`` calls is still detected, then write the reply straight into the
-    PTY master (the way a real terminal emulator answers).
+    Wir halten in ``state`` einen kurzen Rolling-Buffer, damit eine über zwei
+    ``read``-Aufrufe verteilte Anfrage trotzdem erkannt wird, und schreiben die
+    Antwort dann direkt ins TtyHandle (so wie es ein echter Terminalemulator
+    tun würde).
     """
-    # Reset the probe buffer whenever a fresh spawn begins.
     buf = state.get("term_buf", b"") + data
     state["term_buf"] = buf[-512:]
     cols = int(state.get("cols", 80))
@@ -263,43 +395,23 @@ def answer_terminal_queries(master: int, data: bytes, state: dict) -> None:
     answers: list[bytes] = []
 
     if b"\x1b[>0q" in buf:
-        answers.append(b"\x1b[>1;276;0c")  # xterm-like, 256 colour, DA2 reply
+        answers.append(b"\x1b[>1;276;0c")  # xterm-like, 256 Farben, DA2-Antwort
 
     for m in re.finditer(rb"\x1bP\+q([0-9A-Za-z]+)\x1b\\", buf):
-        # Declare the requested terminfo string as unsupported (empty value).
+        # Gemeldete Terminfo-Strings als nicht unterstützt (leerer Wert) deklarieren.
         answers.append(b"\x1bP1+r" + m.group(1) + b"=\x1b\\")
 
     if b"\x1b[14t" in buf:
-        # Pixel size, ~19px/row and ~8px/col for a 13px monospace cell.
+        # Pixelgröße, ~19px/Zeile und ~8px/Spalte bei einer 13px-Monospace-Zelle.
         answers.append(b"\x1b[4;%d;%dt" % (rows * 19, cols * 8))
 
     for a in answers:
         try:
-            os.write(master, a)
+            tty.write(a)
         except OSError:
             break
 
 
-def kill_tty(proc: subprocess.Popen, grace: float = 2.0) -> None:
-    """Terminate the whole opencode process group, escalating to SIGKILL."""
-    if proc.poll() is not None:
-        return
-    try:
-        os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
-    except (ProcessLookupError, PermissionError):
-        try:
-            proc.terminate()
-        except ProcessLookupError:
-            pass
-    try:
-        proc.wait(grace)
-    except subprocess.TimeoutExpired:
-        if proc.poll() is None:
-            try:
-                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-            except (ProcessLookupError, PermissionError):
-                proc.kill()
-            try:
-                proc.wait()
-            except Exception:  # noqa: BLE001 - best-effort reap
-                pass
+def kill_tty(tty: TtyHandle, grace: float = 2.0) -> None:
+    """Beenden an das TtyHandle durchreichen (Windows ConPTY, POSIX Prozessgruppe)."""
+    tty.kill(grace)
