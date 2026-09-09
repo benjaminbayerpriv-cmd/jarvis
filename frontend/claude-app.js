@@ -49,7 +49,7 @@
     sort: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 16 4 4 4-4"/><path d="M7 20V4"/><path d="m21 8-4-4-4 4"/><path d="M17 4v16"/></svg>',
     dots: '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg>',
     chevronDown: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>',
-    bullet: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="8" x2="21" y1="6" y2="6"/><line x1="8" x2="21" y1="12" y2="12"/><line x1="8" x2="21" y1="18" y2="18"/><line x1="3" x2="3.01" y1="6" y2="6"/><line x1="3" x2="3.01" y1="12" y2="12"/><line x1="3" x2="3.01" y1="18" y2="18"/></svg>',
+    bullet: '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="12" cy="12" r="5"/></svg>',
     arrowLeft: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></svg>',
     arrowRight: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>',
   };
@@ -932,13 +932,21 @@
 
     if (pinnedChatListEl) {
       pinnedChatListEl.innerHTML = '';
-      pinned.forEach((c) => pinnedChatListEl.appendChild(renderChatItem(c)));
+      if (pinned.length) {
+        pinned.forEach((c) => pinnedChatListEl.appendChild(renderChatItem(c)));
+      } else {
+        const d = document.createElement('div');
+        d.className = 'js-chat-item';
+        d.style.color = C.textDim;
+        d.style.cursor = 'default';
+        d.textContent = 'Noch nichts angeheftet';
+        pinnedChatListEl.appendChild(d);
+      }
     }
+    // Immer sichtbar, auch ohne angeheftete Elemente — nur das Auf-/
+    // Zuklappen entscheidet, ob die Liste (mit Leerzustand) zu sehen ist.
     const pinnedToggle = uiEl ? $('.js-pinned-toggle', uiEl) : null;
-    if (pinnedToggle) pinnedToggle.style.display = pinned.length ? 'flex' : 'none';
-    // Ohne angeheftete Elemente ganz ausblenden, unabhängig vom
-    // Auf-/Zugeklappt-Zustand — der greift nur, solange es welche gibt.
-    if (pinnedChatListEl) pinnedChatListEl.style.display = pinned.length ? '' : 'none';
+    if (pinnedToggle) pinnedToggle.style.display = 'flex';
 
     chatListEl.innerHTML = '';
     if (!unpinned.length) {
@@ -1090,11 +1098,15 @@
     const pinned = list.filter((p) => p.pinned);
     const rest = list.filter((p) => !p.pinned);
 
+    // Immer sichtbar, auch ohne angeheftete Projekte — nur das Auf-/
+    // Zuklappen entscheidet, ob das Grid (mit Leerzustand) zu sehen ist.
     const pinnedToggle = $('.js-projects-pinned-toggle', uiEl);
-    if (pinnedToggle) pinnedToggle.style.display = pinned.length ? 'flex' : 'none';
+    if (pinnedToggle) pinnedToggle.style.display = 'flex';
     if (projectsPinnedGridEl) {
-      projectsPinnedGridEl.style.display = pinned.length && !projectsPinnedGridEl.classList.contains('is-collapsed') ? 'grid' : 'none';
-      projectsPinnedGridEl.innerHTML = pinned.map(projectCardHtml).join('');
+      projectsPinnedGridEl.style.display = projectsPinnedGridEl.classList.contains('is-collapsed') ? 'none' : 'grid';
+      projectsPinnedGridEl.innerHTML = pinned.length
+        ? pinned.map(projectCardHtml).join('')
+        : `<div style="grid-column:1/-1;color:${C.textDim};font-size:13px;">Noch nichts angeheftet.</div>`;
     }
 
     if (!rest.length) {
