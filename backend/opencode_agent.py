@@ -1,37 +1,36 @@
-"""Headless OpenCode for the JARVIS Code-Tab.
+"""PTY bridge for the real OpenCode TUI in the JARVIS Code-Tab.
 
-The Code-Tab runs the real OpenCode coding agent, but driven headlessly
-(`opencode run --format json`) and rendered as a custom chat UI — no terminal
-emulator. This module owns the transport.
+The Code-Tab opens the actual OpenCode terminal UI (`opencode <dir>`) inside an
+embedded xterm.js terminal — not a custom chat view. The browser attaches to
+`/code/tty/ws`; the server spawns opencode on an xterm-256color PTY and streams
+raw bytes both ways (PTY→WS as binary frames, WS→PTY for keystrokes) plus
+terminal resizes and exit handling.
 
-Why a PTY: `opencode run --format json` buffers its stdout when it is piped
-(block buffering), so nothing reaches the browser until the whole turn is done
-and the process exits. Pointing the child's stdout at a *pseudo-terminal*
-instead flushes per line, so the events stream to the browser as they are
-produced. We never render the terminal — we read raw bytes from the PTY master,
-slice them into lines and `json.loads` each one. opencode's own logs go to
-stderr (dropped here) so the PTY stream stays pure JSON.
+Why a PTY: opencode's TUI is an interactive OpenTUI app. It needs a real tty to
+render the alternate screen, capture the mouse and handle bracketed paste, and
+it line-buffers when piped. Streaming the child's stdout through a
+pseudo-terminal yields the exact bytes the TUI would emit on a real terminal.
 
-The second constraint surfaced while wiring this up: opencode's system prompt
-plus tools is ~20.7k tokens. LM Studio loads a model with a *model-specific*
-context length that is NOT its maximum (e.g. google/gemma-4-e4b -> 34304 but
-qwen2.5-coder-14b-instruct-uncensored -> 8448). A model whose *loaded* context
-is under ~24k cannot run opencode at all (LM Studio returns
-`exceed_context_size_error`). The model list the UI sees therefore includes each
-model's loaded context so a too-small selection can be flagged instead of
-silently failing.
+The one thing this module keeps from the earlier headless approach is the LM
+Studio wiring: the TUI must know about the local models, so before it starts we
+merge an `lmstudio` provider into ~/.config/opencode/opencode.json (preserving
+the user's other providers) and point opencode at the off-`PROVIDER_ID` model
+that can actually run it (see CODE_MIN_CONTEXT) so it does not start on a model
+whose loaded context is too small.
 """
 
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 import pathlib
 import pty
+import re
+import signal
+import struct
 import subprocess
-import threading
-from typing import AsyncIterator
+import termios
+import fcntl
 
 from . import config
 
@@ -179,111 +178,112 @@ def ensure_provider_config(models: list[dict], default_model_name: str) -> dict:
     return cfg
 
 
-async def run(
-    prompt: str,
-    model: str,
-    workdir: str,
-    session_id: str | None = None,
-    cancel: asyncio.Event | None = None,
-) -> AsyncIterator[dict]:
-    """Run one opencode turn, yielding each parsed ``--format json`` event.
+def start_tty(workdir: str) -> tuple[int, subprocess.Popen]:
+    """Start the real opencode TUI in a PTY; return ``(master_fd, process)``.
 
-    The child's stdout is attached to a PTY so it line-buffers; a reader thread
-    pulls bytes off the PTY master and pushes parsed events onto an asyncio
-    queue. The process is terminated when ``cancel`` is set or the caller's task
-    is cancelled.
+    Refreshes the opencode provider config first so the TUI sees the LM Studio
+    models, then spawns ``opencode <workdir>`` on an xterm-256color PTY with the
+    child in a new session (so it can be signalled as a process group). The
+    caller owns the master fd — it reads the raw ANSI stream from it, writes
+    keystrokes to it, and resizes it via ``TIOCSWINSZ``.
+
+    Returns the open master fd plus the Popen handle; the caller must hand the
+    slot back to the child (close the slave) and reap the process on teardown.
     """
-    cmd = [OPENCODE_BIN, "run", prompt, "--dir", workdir, "--format", "json"]
-    if model:
-        cmd += ["-m", f"{PROVIDER_ID}/{model}"]
-    if session_id:
-        cmd += ["--session", session_id]
+    models = list_models()
+    if models:
+        ensure_provider_config(models, default_model())
+
+    env = dict(os.environ)
+    env["TERM"] = "xterm-256color"
 
     master, slave = pty.openpty()
     proc = subprocess.Popen(
-        cmd,
-        stdin=subprocess.DEVNULL,
+        [OPENCODE_BIN, workdir],
+        stdin=slave,
         stdout=slave,
-        stderr=subprocess.DEVNULL,
+        stderr=slave,
+        env=env,
         cwd=workdir or None,
         start_new_session=True,
     )
-    os.close(slave)  # child owns it now; we only keep the master.
+    os.close(slave)  # child owns the slave; we keep only the master.
+    return master, proc
 
-    loop = asyncio.get_running_loop()
-    queue: asyncio.Queue[dict | None] = asyncio.Queue()
-    buffer = bytearray()
 
-    def _read_and_enqueue() -> None:
-        """Blocking reader: pull bytes off the master, split into JSON lines."""
+def resize_tty(master: int, proc: subprocess.Popen, cols: int, rows: int) -> None:
+    """Tell the PTY its new size and nudge the TUI to reflow (SIGWINCH)."""
+    try:
+        fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
+    except OSError:
+        return
+    if proc.poll() is None:
         try:
-            while True:
-                chunk = os.read(master, 65536)
-                if not chunk:
-                    break
-                buffer.extend(chunk)
-                while b"\n" in buffer:
-                    line, _, rest = buffer.partition(b"\n")
-                    del buffer[: len(line) + 1]
-                    ev = _parse_json_line(line)
-                    if ev is not None:
-                        loop.call_soon_threadsafe(queue.put_nowait, ev)
-        except OSError:
+            os.killpg(os.getpgid(proc.pid), signal.SIGWINCH)
+        except (ProcessLookupError, PermissionError, OSError):
             pass
-        finally:
-            loop.call_soon_threadsafe(queue.put_nowait, None)  # EOF sentinel
 
-    thread = threading.Thread(target=_read_and_enqueue, daemon=True)
-    thread.start()
 
-    def _shutdown() -> None:
+def answer_terminal_queries(master: int, data: bytes, state: dict) -> None:
+    """Answer OpenTUI terminal queries xterm.js does not handle.
+
+    opencode's TUI (OpenTUI) probes the terminal and blocks until it gets answers
+    to three queries that xterm.js leaves unanswered (it answers DSR, DECRQM,
+    DA1 and OSC 10/11 itself, over its ``onData`` hook):
+
+      - ``ESC[>0q``           DA2, secondary device attributes
+      - ``ESC P + q <hex> ESC \``  XTGETTCAP, terminfo string query
+      - ``ESC[14t``           XTREPORTWIN, window size in pixels
+
+    We keep a short rolling buffer in ``state`` so a query split across two
+    ``os.read`` calls is still detected, then write the reply straight into the
+    PTY master (the way a real terminal emulator answers).
+    """
+    # Reset the probe buffer whenever a fresh spawn begins.
+    buf = state.get("term_buf", b"") + data
+    state["term_buf"] = buf[-512:]
+    cols = int(state.get("cols", 80))
+    rows = int(state.get("rows", 24))
+    answers: list[bytes] = []
+
+    if b"\x1b[>0q" in buf:
+        answers.append(b"\x1b[>1;276;0c")  # xterm-like, 256 colour, DA2 reply
+
+    for m in re.finditer(rb"\x1bP\+q([0-9A-Za-z]+)\x1b\\", buf):
+        # Declare the requested terminfo string as unsupported (empty value).
+        answers.append(b"\x1bP1+r" + m.group(1) + b"=\x1b\\")
+
+    if b"\x1b[14t" in buf:
+        # Pixel size, ~19px/row and ~8px/col for a 13px monospace cell.
+        answers.append(b"\x1b[4;%d;%dt" % (rows * 19, cols * 8))
+
+    for a in answers:
+        try:
+            os.write(master, a)
+        except OSError:
+            break
+
+
+def kill_tty(proc: subprocess.Popen, grace: float = 2.0) -> None:
+    """Terminate the whole opencode process group, escalating to SIGKILL."""
+    if proc.poll() is not None:
+        return
+    try:
+        os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+    except (ProcessLookupError, PermissionError):
+        try:
+            proc.terminate()
+        except ProcessLookupError:
+            pass
+    try:
+        proc.wait(grace)
+    except subprocess.TimeoutExpired:
         if proc.poll() is None:
             try:
-                os.killpg(os.getpgid(proc.pid), 15)  # SIGTERM the whole group
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
             except (ProcessLookupError, PermissionError):
-                try:
-                    proc.terminate()
-                except ProcessLookupError:
-                    pass
-
-    try:
-        while True:
-            if cancel is not None and cancel.is_set():
-                _shutdown()
-                break
-            item = await queue.get()
-            if item is None:  # EOF / reader done
-                break
-            yield item
-    except asyncio.CancelledError:
-        _shutdown()
-        raise
-    finally:
-        _shutdown()
-        try:
-            await asyncio.to_thread(proc.wait, 2)  # brief grace period
-        except Exception:
-            if proc.poll() is None:  # noqa: PLR1702
-                try:
-                    os.killpg(os.getpgid(proc.pid), 9)
-                except (ProcessLookupError, PermissionError):
-                    proc.kill()
-                await asyncio.to_thread(proc.wait)
-        os.close(master)
-        thread.join(timeout=2)
-
-
-def _parse_json_line(raw: bytes) -> dict | None:
-    """Clean one PTY line and parse it as a JSON event; None if it isn't one."""
-    text = raw.decode("utf-8", "replace").strip()
-    if not text:
-        return None
-    # Drop ANSI escapes and stray control chars (e.g. the ^D a wrapper can inject).
-    text = "".join(ch for ch in text if ord(ch) >= 32 or ch in "\t")
-    start, end = text.find("{"), text.rfind("}")
-    if start < 0 or end <= start:
-        return None
-    try:
-        return json.loads(text[start : end + 1])
-    except json.JSONDecodeError:
-        return None
+                proc.kill()
+            try:
+                proc.wait()
+            except Exception:  # noqa: BLE001 - best-effort reap
+                pass

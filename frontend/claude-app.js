@@ -40,6 +40,7 @@
     settings: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915"/><circle cx="12" cy="12" r="3"/></svg>',
     paperclip: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m16 6-8.414 8.586a2 2 0 0 0 2.829 2.829l8.414-8.586a4 4 0 1 0-5.657-5.657l-8.379 8.551a6 6 0 1 0 8.485 8.485l8.379-8.551"/></svg>',
     stop: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect width="18" height="18" x="3" y="3" rx="4" fill="currentColor"/></svg>',
+    restart: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 2.64-6.36L3 8"/><path d="M3 3v5h5"/></svg>',
     close: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>',
     volume: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 4.702a.705.705 0 0 0-1.203-.498L6.413 7.587A1.4 1.4 0 0 1 5.416 8H3a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2.416a1.4 1.4 0 0 1 .997.413l3.383 3.384A.705.705 0 0 0 11 19.298z"/><path d="M16 9a5 5 0 0 1 0 6"/><path d="M19.364 18.364a9 9 0 0 0 0-12.728"/></svg>',
     muted: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 4.702a.7.7 0 0 0-1.203-.498L6.413 7.587A1.4 1.4 0 0 1 5.416 8H3a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2.416a1.4 1.4 0 0 1 .997.413l3.383 3.384A.7.7 0 0 0 11 19.298z"/><path d="m16.5 14.5 5-5"/><path d="m16.5 9.5 5 5"/></svg>',
@@ -295,13 +296,11 @@
   let speechCaptionEl = null, spcStatusEl = null, spcUserEl = null, spcReplyEl = null;
   let settingsSheetEl = null, settingsModelsEl = null;
 
-  // Code-Tab (headless OpenCode) Anker
-  let codeViewEl = null, codeThreadEl = null, codeEditorEl = null, codeDirEl = null;
-  let codeModelEl = null, codeModelMenuEl = null, codeSendBtn = null, codeCancelBtn = null;
-  let codeWs = null, codeWsOpen = false, codeReconnectTimer = null;
-  let codeRunning = false, codeCancelled = false;
-  let codeModel = '', codeDefault = '', codeModels = [], codeMinContext = 24000, codeSessionActive = false;
-  let codeActiveBubble = null, codeBubbleMd = '';
+  // Code-Tab (echte opencode-TUI in einem eingebetteten xterm.js-Terminal)
+  let codeViewEl = null, codeTermEl = null, codeDirEl = null;
+  let codeStatusLabelEl = null, codeDotEl = null, codeRestartBtn = null;
+  let codeTerm = null, codeFit = null;
+  let codeWs = null, codeWsOpen = false, codeReconnectTimer = null, codeExited = false;
 
   // Sprachmodus + VAD + Diktat + Web-Speech-Erkennung
   let speechMode = false, dictating = false, micReady = false, micStream = null, muted = false;
@@ -382,21 +381,14 @@
         <div class="js-codeview" style="position:absolute;inset:0;display:none;flex-direction:column;min-width:0;min-height:0;">
           <div class="js-code-header" style="display:flex;align-items:center;gap:10px;padding:12px 18px;border-bottom:1px solid ${C.border};flex:0 0 auto;">
             <span class="js-code-title" style="font-size:14px;font-weight:600;color:${C.text};">Code</span>
-            <button class="js-code-model" title="Change opencode model" style="display:inline-flex;align-items:center;gap:6px;padding:5px 10px;background:none;border:1px solid ${C.border};border-radius:9px;color:${C.textSoft};font-size:12px;cursor:pointer;font-family:${C.font};">
-              <span class="js-code-model-label">Model…</span>
-            </button>
-            <span class="js-code-dir" style="flex:1;font-size:12px;color:${C.textDim};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:right;" title="Working directory"></span>
-            <button class="js-code-cancel" title="Stop" style="display:none;align-items:center;gap:6px;padding:5px 10px;background:none;border:1px solid ${C.border};border-radius:9px;color:${C.accent};font-size:12px;cursor:pointer;font-family:${C.font};">Stop</button>
+            <span class="js-code-dir" style="flex:1;font-size:12px;color:${C.textDim};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:left;cursor:pointer;" title="Arbeitsverzeichnis — klicken zum Ändern"></span>
+            <span class="js-code-status" style="display:inline-flex;align-items:center;gap:6px;font-size:11px;color:${C.textDim};">
+              <span class="js-code-dot" style="width:8px;height:8px;border-radius:50%;background:#e5a50a;display:inline-block;"></span>
+              <span class="js-code-status-label">verbinde…</span>
+            </span>
+            <button class="js-code-restart" title="Terminal neu starten" style="display:none;align-items:center;gap:6px;padding:5px 10px;background:none;border:1px solid ${C.border};border-radius:9px;color:${C.textSoft};font-size:12px;cursor:pointer;font-family:${C.font};">${ICONS.restart}</button>
           </div>
-          <div class="js-code-thread" style="flex:1 1 auto;overflow-y:auto;scrollbar-width:thin;padding:24px 22px 96px;"></div>
-          <div class="js-code-composer" style="position:absolute;left:0;right:0;bottom:0;padding:0 22px 20px;background:linear-gradient(transparent,${C.bg} 55%);">
-            <div style="max-width:820px;margin:0 auto;background:${C.bgSoft};border:1px solid ${C.border};border-radius:16px;box-shadow:0 10px 34px rgba(0,0,0,.38);">
-              <div class="js-code-editor" contenteditable="true" data-placeholder="Describe a coding task…" style="min-height:58px;max-height:200px;overflow-y:auto;padding:14px 16px;color:${C.text};font-size:15px;line-height:1.5;outline:none;white-space:pre-wrap;word-break:break-word;"></div>
-              <div style="display:flex;align-items:center;gap:8px;padding:6px 10px 10px;">
-                <button class="js-code-send" title="Send to opencode" style="width:38px;height:38px;border-radius:50%;background:${C.accent};border:none;color:#fff;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;">${ICONS.send}</button>
-              </div>
-            </div>
-          </div>
+          <div class="js-code-terminal" style="flex:1 1 auto;min-width:0;min-height:0;overflow:hidden;background:#12121c;padding:4px 2px 6px;"></div>
         </div>
       </div>
       <div class="js-composer" style="position:absolute;left:308px;right:0;bottom:0;padding:0 24px 22px;background:linear-gradient(transparent,${C.bg} 55%);">
@@ -568,6 +560,16 @@
       ensureCodeSocket();
       return;
     }
+    // Code-Tab verlassen: den Terminal-Socket schließen (der Server beendet die
+    // opencode-TUI). Kein Auto-Reconnect — beim nächsten Betreten wird neu
+    // verbunden und ein frischer opencode-Prozess gestartet.
+    if (codeWs) {
+      const w = codeWs;
+      codeWs = null; codeWsOpen = false;
+      w.onclose = null; w.onerror = null; w.onmessage = null;
+      try { w.close(); } catch (e) {}
+    }
+    if (codeReconnectTimer) { clearTimeout(codeReconnectTimer); codeReconnectTimer = null; }
     if (currentConversationId) localStorage.setItem(modeKey(activeMode), currentConversationId);
     activeMode = mode;
     const saved = localStorage.getItem(modeKey(mode));
@@ -1091,37 +1093,80 @@
      zeigt das Modell-Dropdown die geladene Context-Größe und warnt zu kleine
      Modelle (Exceed-context-Fehler würde LM Studio sonst still schlucken). */
 
+  // ------------------------------------------------------------- code (terminal)
+  /* Der Code-Tab rendert die echte opencode-TUI in einem eingebetteten
+     xterm.js-Terminal. Der Server spawnt `opencode <dir>` auf einem PTY und
+     streamt die rohen Bytes über /code/tty/ws (Binär-Frames). Tastendrücke
+     gehen als Binär-Frames zurück, Resize als {"type":"resize"}. opencode
+     wählt sein Modell selbst über die TUI — es gibt kein JARVIS-Modell-Dropdown
+     mehr, nur das Arbeitsverzeichnis (klickbar → Einstellungen) und einen
+     Neustart-Button. */
   function buildCodeView() {
     if (codeViewEl) return;
     if (!uiEl) return;
     codeViewEl = $('.js-codeview', uiEl);
-    codeThreadEl = $('.js-code-thread', uiEl);
-    codeEditorEl = $('.js-code-editor', uiEl);
+    codeTermEl = $('.js-code-terminal', uiEl);
     codeDirEl = $('.js-code-dir', uiEl);
-    codeModelEl = $('.js-code-model', uiEl);
-    codeModelMenuEl = $('.js-code-modelmenu', uiEl);
-    codeSendBtn = $('.js-code-send', uiEl);
-    codeCancelBtn = $('.js-code-cancel', uiEl);
+    codeStatusLabelEl = $('.js-code-status-label', uiEl);
+    codeDotEl = $('.js-code-dot', uiEl);
+    codeRestartBtn = $('.js-code-restart', uiEl);
 
-    // Modell-Dropdown (schwebt unter dem Header, wird bei Bedarf gefüllt).
-    codeModelMenuEl = document.createElement('div');
-    codeModelMenuEl.className = 'js-code-modelmenu';
-    codeModelMenuEl.style.cssText = `position:absolute;top:52px;left:16px;z-index:25;min-width:230px;background:${C.bgSoft};border:1px solid ${C.border};border-radius:12px;overflow:hidden;box-shadow:0 12px 30px rgba(0,0,0,.4);display:none;`;
-    codeViewEl.appendChild(codeModelMenuEl);
-
-    if (codeSendBtn) codeSendBtn.addEventListener('click', (e) => { e.preventDefault(); sendCodePrompt(); });
-    if (codeEditorEl) {
-      codeEditorEl.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendCodePrompt(); }
-      });
-      codeEditorEl.addEventListener('input', () => {
-        codeEditorEl.classList.toggle('is-empty', codeEditorEl.innerText.trim().length === 0);
-      });
-      codeEditorEl.classList.add('is-empty');
+    if (typeof Terminal === 'undefined' || !codeTermEl) {
+      if (codeTermEl) {
+        codeTermEl.innerHTML = '<div style="padding:24px;color:#5c6370;font-size:13px;">xterm.js nicht geladen.</div>';
+      }
+      return;
     }
-    if (codeCancelBtn) codeCancelBtn.addEventListener('click', (e) => { e.preventDefault(); cancelCodeRun(); });
-    if (codeModelEl) codeModelEl.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); toggleCodeModelMenu(); });
-    window.addEventListener('click', () => { if (codeModelMenuEl) codeModelMenuEl.style.display = 'none'; });
+
+    codeTerm = new Terminal({
+      cursorBlink: true,
+      fontFamily: '"Menlo","Monaco","DejaVu Sans Mono","Courier New",monospace',
+      fontSize: 13,
+      lineHeight: 1.3,
+      scrollback: 5000,
+      theme: {
+        background: '#12121c', foreground: '#d8dee9', cursor: '#6aa6ff',
+        cursorAccent: '#12121c', selectionBackground: '#3b4261',
+        black: '#1b1b27', red: '#e5534b', green: '#3dbd7d', yellow: '#e5a50a',
+        blue: '#6aa6ff', magenta: '#c586c0', cyan: '#56b6c2', white: '#d8dee9',
+        brightBlack: '#5c6370', brightRed: '#ff6b6b', brightGreen: '#4ce0a2',
+        brightYellow: '#ffc857', brightBlue: '#9dbaff', brightMagenta: '#e79ce0',
+        brightCyan: '#6fe0e6', brightWhite: '#ffffff',
+      },
+    });
+    codeFit = new window.FitAddon.FitAddon();
+    codeTerm.loadAddon(codeFit);
+    codeTerm.open(codeTermEl);
+    codeTerm.onData((data) => sendCodeInput(data));
+    if (codeRestartBtn) codeRestartBtn.addEventListener('click', (e) => { e.preventDefault(); restartCodeTerminal(); });
+    if (codeDirEl) codeDirEl.addEventListener('click', (e) => { e.preventDefault(); openSettings(); });
+    if (typeof ResizeObserver !== 'undefined') {
+      const ro = new ResizeObserver(() => fitCodeTerminal());
+      ro.observe(codeTermEl);
+    }
+    fitCodeTerminal();
+    updateCodeStatus('verbinde…', '#e5a50a');
+  }
+
+  function sendCodeInput(data) {
+    if (!codeWs || !codeWsOpen) return;
+    try { codeWs.send(new TextEncoder().encode(data)); } catch (e) {}
+  }
+
+  function fitCodeTerminal() {
+    if (!codeFit || !codeTerm) return;
+    try { codeFit.fit(); } catch (e) {}
+    if (codeWs && codeWsOpen && codeTerm) {
+      try { codeWs.send(JSON.stringify({ type: 'resize', cols: codeTerm.cols, rows: codeTerm.rows })); } catch (e) {}
+    }
+  }
+
+  function updateCodeStatus(label, color) {
+    if (codeStatusLabelEl) codeStatusLabelEl.textContent = label;
+    if (codeDotEl) codeDotEl.style.background = color || '#e5a50a';
+  }
+  function setCodeRestartBtn(show) {
+    if (codeRestartBtn) codeRestartBtn.style.display = show ? 'inline-flex' : 'none';
   }
 
   async function loadCodeStatus() {
@@ -1129,67 +1174,7 @@
       const r = await fetch('/code/status');
       const j = await r.json();
       if (j.dir && codeDirEl) { codeDirEl.textContent = j.dir; codeDirEl.title = j.dir; }
-      if (j.models) { codeModels = j.models || []; codeMinContext = j.min_context || 24000; }
-      if (j.default) codeDefault = j.default;
-      // Start immer mit dem opencode-tauglichen Default (genug Kontext), nicht
-      // mit dem Chat-Modell — das kann zu wenig Kontext haben (siehe Backend).
-      codeModel = codeDefault || j.model || '';
-      setCodeModelLabel(codeModel);
     } catch (e) {}
-  }
-
-  function setCodeModelLabel(id) {
-    const short = String(id || '').split('/').pop();
-    const label = codeModelEl ? codeModelEl.querySelector('.js-code-model-label') : null;
-    if (label) label.textContent = short || 'Model…';
-  }
-
-  function toggleCodeModelMenu() {
-    if (!codeModelMenuEl) return;
-    const open = codeModelMenuEl.style.display === 'block';
-    codeModelMenuEl.style.display = open ? 'none' : 'block';
-    if (!open) renderCodeModelList();
-  }
-
-  function renderCodeModelList() {
-    if (!codeModelMenuEl) return;
-    codeModelMenuEl.innerHTML = '';
-    const list = (codeModels && codeModels.length) ? codeModels : [];
-    if (!list.length) {
-      const d = document.createElement('div');
-      d.textContent = 'Keine LM-Studio-Modelle geladen.';
-      d.style.cssText = `padding:12px 14px;font-size:13px;color:${C.textDim};`;
-      codeModelMenuEl.appendChild(d);
-      return;
-    }
-    // Aufsteigend pro Modell eine Zeile: ID + großer Punkt für genug Context.
-    for (const m of list) {
-      const b = document.createElement('button');
-      const enough = (m.loaded_context || 0) >= codeMinContext;
-      const state = m.state === 'loaded' ? (enough ? 'ready' : 'too-small') : 'not-loaded';
-      const badge = state === 'ready' ? 'bereit'
-        : state === 'too-small' ? `Context zu klein (${fmtK(m.loaded_context)})`
-        : 'nicht geladen';
-      b.style.cssText = `display:block;width:100%;text-align:left;padding:9px 14px;background:none;border:none;color:${C.textSoft};font-size:13px;cursor:pointer;`;
-      b.onmouseenter = () => { b.style.background = C.bgHover; };
-      b.onmouseleave = () => { b.style.background = 'none'; };
-      b.innerHTML = `<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;">
-          <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(m.id)}</span>
-          <span style="color:${state === 'ready' ? '#3dbd7d' : state === 'not-loaded' ? C.textDim : '#e5a50a'};font-size:11px;flex:0 0 auto;">${escapeHtml(badge)}</span>
-        </div>`;
-      b.addEventListener('click', () => {
-        codeModel = m.id;
-        setCodeModelLabel(codeModel);
-        codeModelMenuEl.style.display = 'none';
-      });
-      codeModelMenuEl.appendChild(b);
-    }
-  }
-
-  function fmtK(n) {
-    n = Number(n) || 0;
-    if (n >= 1000) return Math.round(n / 1000) + 'k';
-    return String(n);
   }
 
   function ensureCodeSocket() {
@@ -1201,178 +1186,60 @@
   function openCodeSocket() {
     if (codeWsOpen || codeWs) return;
     try {
-      codeWs = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/code/ws');
+      codeWs = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/code/tty/ws');
     } catch (e) { codeWs = null; scheduleCodeReconnect(); return; }
-    codeWs.onopen = () => { codeWsOpen = true; };
-    codeWs.onmessage = (ev) => { handleCodeMessage(ev); };
-    codeWs.onclose = () => { codeWsOpen = false; codeWs = null; scheduleCodeReconnect(); };
+    codeWs.binaryType = 'arraybuffer';
+    codeWs.onopen = () => {
+      codeWsOpen = true; codeExited = false;
+      updateCodeStatus('verbunden', '#3dbd7d');
+      setCodeRestartBtn(false);
+      // Frischer opencode-Prozess: Terminal zurücksetzen und Steuergröße senden.
+      if (codeTerm) codeTerm.reset();
+      fitCodeTerminal();
+    };
+    codeWs.onmessage = (ev) => {
+      if (typeof ev.data === 'string') { handleCodeControl(ev.data); return; }
+      if (ev.data instanceof ArrayBuffer && codeTerm) codeTerm.write(new Uint8Array(ev.data));
+    };
+    codeWs.onclose = () => {
+      codeWsOpen = false; codeWs = null;
+      if (codeExited) {
+        updateCodeStatus('beendet', '#e5534b');
+        setCodeRestartBtn(true);
+      } else {
+        updateCodeStatus('verbindung verloren', '#e5a50a');
+        setCodeRestartBtn(true);
+        scheduleCodeReconnect();
+      }
+    };
     codeWs.onerror = () => { try { codeWs.close(); } catch (e) {} };
+  }
+
+  function handleCodeControl(text) {
+    let msg; try { msg = JSON.parse(text); } catch (e) { return; }
+    if (msg.type === 'exit') {
+      codeExited = true;
+      updateCodeStatus('beendet (Code ' + String(msg.code == null ? '?' : msg.code) + ')', '#e5534b');
+      setCodeRestartBtn(true);
+    }
   }
 
   function scheduleCodeReconnect() {
     if (codeReconnectTimer || activeMode !== 'code') return;
+    updateCodeStatus('verbinde…', '#e5a50a');
     codeReconnectTimer = setTimeout(() => { codeReconnectTimer = null; openCodeSocket(); }, 2000);
   }
 
-  function handleCodeMessage(ev) {
-    let msg; try { msg = JSON.parse(ev.data); } catch (e) { return; }
-    if (msg.type === 'event') { renderCodeEvent(msg.event); return; }
-    if (msg.type === 'done') {
-      codeRunning = false; codeCancelled = false; updateCodeControls();
-      if (codeActiveBubble) { codeActiveBubble.innerHTML = renderMarkdown(codeBubbleMd); codeActiveBubble = null; }
-      codeBubbleMd = '';
-      return;
-    }
-    if (msg.type === 'error') {
-      renderCodeError(msg.message || 'Fehler');
-      codeRunning = false; codeCancelled = false; updateCodeControls();
-      codeActiveBubble = null; codeBubbleMd = '';
-      return;
-    }
-  }
-
-  function sendCodePrompt() {
-    const text = codeEditorEl ? codeEditorEl.innerText.trim() : '';
-    if (!text || !codeWsOpen || codeRunning) return;
-    const model = codeModel || codeDefault;
-    codeRunning = true; codeCancelled = false;
-    codeBubbleMd = ''; codeActiveBubble = null;
-    addCodeUserTurn(text);
-    if (codeEditorEl) { codeEditorEl.innerText = ''; codeEditorEl.classList.add('is-empty'); }
-    updateCodeControls();
-    codeWs.send(JSON.stringify({ type: 'prompt', text: text, model: model }));
-  }
-
-  function cancelCodeRun() {
-    if (!codeWsOpen || !codeRunning) return;
-    codeCancelled = true;
-    codeWs.send(JSON.stringify({ type: 'cancel' }));
-  }
-
-  function updateCodeControls() {
-    if (codeCancelBtn) codeCancelBtn.style.display = codeRunning ? 'inline-flex' : 'none';
-  }
-
-  function ensureCodeThread() {
-    if (!codeThreadEl && uiEl) codeThreadEl = $('.js-code-thread', uiEl);
-    return codeThreadEl;
-  }
-
-  function addCodeUserTurn(text) {
-    const el = ensureCodeThread();
-    if (!el) return;
-    const row = document.createElement('div');
-    row.style.cssText = `display:flex;justify-content:flex-end;margin:0 auto 22px;max-width:820px;`;
-    const b = document.createElement('div');
-    b.style.cssText = `background:${C.accent};color:#fff;border-radius:20px;padding:10px 16px;max-width:72%;white-space:pre-wrap;word-break:break-word;font-size:14px;line-height:1.55;`;
-    b.textContent = text;
-    row.appendChild(b); el.appendChild(row);
-    el.scrollTop = el.scrollHeight;
-  }
-
-  function renderCodeEvent(ev) {
-    const el = ensureCodeThread();
-    if (!el || !ev) return;
-    const t = ev.type;
-    const part = ev.part || {};
-
-    if (t === 'step_start') {
-      codeActiveBubble = newCodeBubble(el);
-      return;
-    }
-    if (t === 'text' || part.type === 'text') {
-      if (!codeActiveBubble) codeActiveBubble = newCodeBubble(el);
-      codeBubbleMd += part.text || '';
-      codeActiveBubble.appendChild(document.createTextNode(part.text || ''));
-      el.scrollTop = el.scrollHeight;
-      return;
-    }
-    if (t === 'reasoning' || part.type === 'reasoning') {
-      if (!codeActiveBubble) codeActiveBubble = newCodeBubble(el);
-      const line = document.createElement('div');
-      line.style.cssText = `color:${C.textDim};font-style:italic;`;
-      line.textContent = part.text || '';
-      codeActiveBubble.appendChild(line);
-      return;
-    }
-    if (t === 'step_finish') {
-      if (codeActiveBubble) { codeActiveBubble.innerHTML = renderMarkdown(codeBubbleMd); codeActiveBubble = null; }
-      return;
-    }
-    if (t === 'tool' || part.type === 'tool') {
-      addCodeTool(el, part);
-      return;
-    }
-    if (t === 'error') {
-      renderCodeError(part.message || part.text || 'Fehler');
-      return;
-    }
-  }
-
-  function newCodeBubble(el) {
-    const row = document.createElement('div');
-    row.style.cssText = `display:flex;justify-content:flex-start;margin:0 auto 24px;max-width:820px;`;
-    const b = document.createElement('div');
-    b.style.cssText = `color:${C.text};font-size:14px;line-height:1.65;white-space:pre-wrap;word-break:break-word;max-width:100%;`;
-    row.appendChild(b); el.appendChild(row);
-    el.scrollTop = el.scrollHeight;
-    return b;
-  }
-
-  function addCodeTool(el, part) {
-    const name = part.tool || part.name || 'tool';
-    const sub = String(part.title || part.subtitle || '').trim();
-    const state = String(part.state || '').toLowerCase();
-    const col = state === 'done' ? '#3dbd7d' : (state === 'error' || state === 'failed') ? '#e5534b' : C.accent;
-    const b = document.createElement('div');
-    b.style.cssText = `display:flex;align-items:center;gap:8px;max-width:820px;margin:0 auto 10px;padding:8px 12px;border:1px solid ${C.border};border-radius:10px;background:${C.bgSoft};font-size:13px;color:${C.text};`;
-    b.innerHTML = `<span style="width:8px;height:8px;border-radius:50%;background:${col};flex:0 0 auto;"></span><span style="color:${C.text};">${escapeHtml(name)}</span>${sub ? ` <span style="color:${C.textDim};">${escapeHtml(sub)}</span>` : ''}${state && state !== 'running' ? ` <span style="color:${col};flex:0 0 auto;margin-left:auto;">${escapeHtml(state)}</span>` : ''}`;
-    el.appendChild(b);
-    el.scrollTop = el.scrollHeight;
-  }
-
-  function renderCodeError(message) {
-    const el = ensureCodeThread();
-    if (!el) return;
-    const b = document.createElement('div');
-    b.style.cssText = `max-width:820px;margin:0 auto 24px;padding:10px 14px;border:1px solid ${C.border};border-left:3px solid #e5534b;border-radius:10px;background:${C.bgSoft};font-size:13px;color:#e5534b;white-space:pre-wrap;word-break:break-word;`;
-    b.textContent = message || 'Fehler';
-    el.appendChild(b);
-    el.scrollTop = el.scrollHeight;
-  }
-
-  // Minimaler, sicherer Markdown-Renderer (kein CDN). Escapen, dann eine
-  // kleine Teilmenge: Fenced-Code-Blöcke, Inline-Code, Bold, Headlines,
-  // Zeilenumbrüche. In try/catch gekapselt — schlägt es fehl, bleibt der
-  // bereits gerenderte Rohtext als Fallback stehen.
-  function renderMarkdown(src) {
-    // Fenced-Code-Blöcke zuerst aus dem ROHEN Text ziehen (Inhalt genau einmal
-    // escapen), dann den Rest escapen und eine kleine Markdown-Teilmenge
-    // anwenden, zum Schluss die Code-Blöcke wieder einsetzen.
-    try {
-      let text = String(src || '');
-      const codeBlocks = [];
-      text = text.replace(/```([^\n]*)\n([\s\S]*?)```/g, (m, lang, body) => {
-        codeBlocks.push({ lang: String(lang || ''), body: escapeHtml(body) });
-        return '@@CB' + (codeBlocks.length - 1) + '@@';
-      });
-      text = escapeHtml(text);
-      text = text.replace(/`([^`\n]+)`/g, '<code>$1</code>');
-      text = text.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
-      text = text.replace(/\*([^*\n]+)\*/g, '<em>$1</em>');
-      text = text.replace(/^### (.*)$/gm, '<h6>$1</h6>');
-      text = text.replace(/^## (.*)$/gm, '<h5>$1</h5>');
-      text = text.replace(/^# (.*)$/gm, '<h4>$1</h4>');
-      text = text.replace(/\n/g, '<br>');
-      text = text.replace(/@@CB(\d+)@@/g, (m, i) => {
-        const cb = codeBlocks[+i];
-        const lang = cb.lang ? ' · ' + String(cb.lang).trim() : '';
-        return '<details class="js-code" style="border:1px solid ' + C.border + ';border-radius:10px;overflow:hidden;background:#0e1220;margin:10px 0;"><summary style="padding:8px 12px;font-size:12px;color:' + C.textDim + ';cursor:pointer;background:' + C.bgSoft + ';">Code' + lang + '</summary><pre style="margin:0;padding:12px;overflow:auto;font-size:12px;line-height:1.5;color:#d8dee9;white-space:pre-wrap;word-break:break-word;font-family:monospace;">' + cb.body + '</pre></details>';
-      });
-      return text;
-    } catch (e) {
-      return escapeHtml(String(src || ''));
-    }
+  function restartCodeTerminal() {
+    codeExited = false;
+    // Alte Verbindung (falls noch offen) ablösen, ohne dass onclose neu verbindet.
+    const old = codeWs;
+    codeWs = null; codeWsOpen = false;
+    if (old) { old.onclose = null; old.onerror = null; old.onmessage = null; try { old.close(); } catch (e) {} }
+    if (codeReconnectTimer) { clearTimeout(codeReconnectTimer); codeReconnectTimer = null; }
+    if (codeTerm) codeTerm.reset();
+    updateCodeStatus('verbinde…', '#e5a50a');
+    openCodeSocket();
   }
 
   // ---------------------------------------------------------------- settings

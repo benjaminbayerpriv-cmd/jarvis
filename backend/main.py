@@ -206,7 +206,15 @@ def serve_index():
     # umgebaut, und no-store allein hilft nicht gegen ein bereits zuvor
     # gecachtes Skript — ohne ?v= bleibt ein alter Browser hartnäckig bei der
     # alten, kollabierten Version hängen und der User sähe weiter die tote UI.
-    html = html.replace("</body>", f'    <script src="/static/claude-app.js?v={_BUILD}"></script>\n  </body>')
+    # Der Code-Tab rendert die echte opencode-TUI in einem xterm.js-Terminal,
+    # also lokal die xterm-Bundles (als static/*) direkt vor claude-app.js laden.
+    assets = (
+        '    <link rel="stylesheet" href="/static/xterm.css?v={}\">\n'.format(_BUILD)
+        + '    <script src="/static/xterm.js?v={}"></script>\n'.format(_BUILD)
+        + '    <script src="/static/xterm-addon-fit.js?v={}"></script>\n'.format(_BUILD)
+        + '    <script src="/static/claude-app.js?v={}"></script>\n'.format(_BUILD)
+    )
+    html = html.replace("</body>", f"{assets}  </body>")
     return HTMLResponse(html, headers=_NO_CACHE)
 
 
@@ -498,11 +506,9 @@ async def trigger():
 
 
 # ---------------------------------------------------------------------------
-# Code-Tab: headless OpenCode driven over a dedicated WebSocket. The browser
-# opens /code/ws, sends {"type":"prompt",...}, and the server streams parsed
-# `opencode run --format json` events back as {"type":"event","event":...}.
-# See backend/opencode_agent.py for the transport (PTY for line-buffered
-# stdout) and the context-size constraint.
+# Code-Tab: the real OpenCode TUI streamed into an embedded xterm.js terminal.
+# The browser opens /code/tty/ws; the server spawns `opencode <dir>` on a PTY
+# (see backend/opencode_agent.start_tty) and pumps raw bytes both ways.
 # ---------------------------------------------------------------------------
 
 
@@ -534,81 +540,103 @@ def code_set_config(body: dict):
     return {"dir": opencode_agent.get_code_dir()}
 
 
-@app.websocket("/code/ws")
-async def code_ws(websocket: WebSocket):
-    """Bidirectional chat channel for the Code-Tab agent.
+@app.websocket("/code/tty/ws")
+async def code_tty_ws(websocket: WebSocket):
+    """Pipe the real OpenCode TUI into an embedded xterm.js terminal.
 
-    The client sends {"type":"prompt", "text", "model", "dir"} to start a turn,
-    {"type":"cancel"} to abort the running one. The server streams
-    {"type":"event","event":{...}} per opencode event, then {"type":"done"}.
+    Protocol (all frames on one connection, freed of the old JSON chat):
+      Server → Client: binary frames = raw PTY bytes; then one text frame
+        {"type":"exit","code":...} when the TUI exits, and the socket closes.
+      Client → Server: binary frames = keystrokes/bytes written to the PTY
+        stdin; text frame {"type":"resize","cols":N,"rows":N} to resize the PTY.
 
-    A single background "sender" task drains an asyncio queue so all writes to
-    the websocket happen from one coroutine (Starlette's WebSocket is not safe
-    for concurrent sends), while the receive loop and the per-turn runner stay
-    independent.
+    A single background "sender" task drains an asyncio queue so every PTY→WS
+    write happens from one coroutine (Starlette's WebSocket does not allow
+    concurrent sends), while the input/resize receive loop stays independent.
     """
     await websocket.accept()
-    send_q: asyncio.Queue = asyncio.Queue()
-    session_id: str | None = None
-    cancel: asyncio.Event | None = None
-    run_task: asyncio.Task | None = None
+    wdir = opencode_agent.get_code_dir()
+    master, proc = opencode_agent.start_tty(wdir)
+    loop = asyncio.get_running_loop()
+    out_q: asyncio.Queue[tuple[str, object]] = asyncio.Queue()
+    # Per-connection state: the terminal queries we must answer (see
+    # answer_terminal_queries) and the last reported PTY size for XTREPORTWIN.
+    tty_state: dict = {"cols": 80, "rows": 24}
+
+    def _reader() -> None:
+        """Blocking PTY reader: answer OpenTUI queries, forward raw bytes."""
+        try:
+            while True:
+                data = os.read(master, 65536)
+                if not data:
+                    break
+                opencode_agent.answer_terminal_queries(master, data, tty_state)
+                loop.call_soon_threadsafe(out_q.put_nowait, ("data", data))
+        except OSError:
+            pass
+        finally:
+            loop.call_soon_threadsafe(out_q.put_nowait, ("exit", proc.poll()))
+
+    threading.Thread(target=_reader, daemon=True).start()
 
     async def _sender() -> None:
-        while True:
-            item = await send_q.get()
-            if item is None:
-                break
-            await websocket.send_text(item if isinstance(item, str) else json.dumps(item))
+        try:
+            while True:
+                kind, payload = await out_q.get()
+                if kind == "data":
+                    await websocket.send_bytes(payload)
+                else:  # exit
+                    await websocket.send_text(json.dumps({"type": "exit", "code": payload}))
+                    break
+        finally:
+            # Let the receive loop wake, then close the connection for good.
+            try:
+                await websocket.close()
+            except Exception:  # noqa: BLE001 - already closing; best effort
+                pass
 
     sender_task = asyncio.create_task(_sender())
 
-    async def _stream_turn(text: str, model: str, wdir: str) -> None:
-        nonlocal session_id, cancel
-        cancel = asyncio.Event()
+    def _cleanup() -> None:
+        opencode_agent.kill_tty(proc)
         try:
-            # Refresh the provider config once so opencode knows this model.
-            models = opencode_agent.list_models()
-            if models:
-                opencode_agent.ensure_provider_config(models, model)
-            async for ev in opencode_agent.run(text, model, wdir, session_id=session_id, cancel=cancel):
-                sid = ev.get("sessionID")
-                if sid:
-                    session_id = sid
-                await send_q.put({"type": "event", "event": ev})
-            await send_q.put({"type": "done"})
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:  # noqa: BLE001 - map any failure to a UI message
-            await send_q.put({"type": "error", "message": str(exc)})
+            os.close(master)
+        except OSError:
+            pass
 
     try:
         while True:
-            msg = await websocket.receive_json()
-            mtype = msg.get("type")
-            if mtype == "prompt":
-                if run_task and not run_task.done():
-                    await send_q.put({"type": "error", "message": "Ein Lauf läuft bereits."})
+            try:
+                msg = await websocket.receive()
+            except WebSocketDisconnect:
+                break
+            if msg["type"] == "websocket.disconnect":
+                break
+            if msg.get("bytes") is not None:
+                try:
+                    os.write(master, msg["bytes"])
+                except OSError:
+                    break
+            elif msg.get("text") is not None:
+                try:
+                    data = json.loads(msg["text"])
+                except ValueError:
                     continue
-                text = (msg.get("text") or "").strip()
-                if not text:
-                    continue
-                model = msg.get("model") or opencode_agent.default_model()
-                wdir = msg.get("dir") or opencode_agent.get_code_dir()
-                run_task = asyncio.create_task(_stream_turn(text, model, wdir))
-            elif mtype == "cancel":
-                if cancel:
-                    cancel.set()
-            elif mtype == "new_session":
-                session_id = None
+                if data.get("type") == "resize":
+                    cols = int(data.get("cols") or 80)
+                    rows = int(data.get("rows") or 24)
+                    tty_state["cols"] = cols
+                    tty_state["rows"] = rows
+                    opencode_agent.resize_tty(master, proc, cols, rows)
     except WebSocketDisconnect:
         pass
     finally:
-        if cancel:
-            cancel.set()
-        if run_task:
-            run_task.cancel()
-        await send_q.put(None)
+        _cleanup()
         sender_task.cancel()
+        try:
+            await sender_task
+        except (asyncio.CancelledError, RuntimeError):
+            pass
 
 
 @app.websocket("/ws")
