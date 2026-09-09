@@ -60,7 +60,12 @@
   //    statt stillschweigend Datenmüll in den Prompt zu kippen).
   const ATTACH_MAX_CHARS = 20000;
   let pendingImages = [];  // {name, image: Data-URL} der aktuell angehängten Bilder, siehe sendMessage
+  function canSendNow() {
+    const hasText = !!(composerInput && composerInput.innerText.trim());
+    return hasText || pendingImages.length > 0;
+  }
   function renderAttachPreviews() {
+    if (sendBtn) sendBtn.disabled = !canSendNow();
     if (!attachPreviewEl) return;
     if (!pendingImages.length) { attachPreviewEl.style.display = 'none'; attachPreviewEl.innerHTML = ''; return; }
     attachPreviewEl.style.display = 'flex';
@@ -681,7 +686,7 @@
       });
       composerInput.addEventListener('input', () => {
         composerInput.classList.toggle('is-empty', composerInput.innerText.trim().length === 0);
-        if (sendBtn) sendBtn.disabled = composerInput.innerText.trim().length === 0;
+        if (sendBtn) sendBtn.disabled = !canSendNow();
       });
     }
     if (speechBtn) speechBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); speechMode ? exitSpeech() : enterSpeech(); });
@@ -725,10 +730,18 @@
       if (!files.length) return;
       const results = await Promise.all(files.map(readAttachedFile));
       results.forEach((r, i) => { if (r.image) pendingImages.push({ name: files[i].name, image: r.image }); });
+      // Bilder bekommen nur die Vorschau-Kachel, keinen Text ins Eingabefeld
+      // — die Kachel zeigt ja schon, was angehängt ist. Nur Text-/andere
+      // Dateien (kein `.image`) landen weiterhin als Text im Eingabefeld,
+      // weil die gar keine visuelle Vorschau haben.
+      const textResults = results.filter((r) => !r.image);
+      if (textResults.length && composerInput) {
+        const base = composerInput.innerText.trim();
+        const attach = textResults.map((r) => r.text).join('\n\n');
+        composerInput.innerText = base ? base + '\n\n' + attach : attach;
+        composerInput.classList.remove('is-empty');
+      }
       renderAttachPreviews();
-      const base = (composerInput ? composerInput.innerText : '').trim();
-      const attach = results.map((r) => r.text).join('\n\n');
-      if (composerInput) { composerInput.innerText = base ? base + '\n\n' + attach : attach; composerInput.classList.remove('is-empty'); if (sendBtn) sendBtn.disabled = false; }
     });
     document.body.appendChild(fileInput);
 
@@ -758,11 +771,17 @@
   }
   function showThread() {}
 
-  function addThreadTurn(role, text) {
+  function addThreadTurn(role, text, images) {
     const el = ensureThread();
     if (!el) return { classList: { add(){}, remove(){}, toggle(){} }, textContent: '' };
     const row = document.createElement('div');
     row.className = 'js-turn ' + (role === 'you' ? 'js-you' : 'js-jarvis');
+    if (images && images.length) {
+      const imgRow = document.createElement('div');
+      imgRow.style.cssText = `display:flex;gap:6px;flex-wrap:wrap;${text ? 'margin-bottom:8px;' : ''}`;
+      imgRow.innerHTML = images.map((src) => `<img src="${src}" style="width:64px;height:64px;object-fit:cover;border-radius:8px;" />`).join('');
+      row.appendChild(imgRow);
+    }
     const inner = document.createElement('div');
     inner.className = 'js-text';
     inner.textContent = text;
@@ -786,7 +805,7 @@
 
   async function sendMessage(text) {
     text = (text || '').trim();
-    if (!text || busy) return;
+    if ((!text && !pendingImages.length) || busy) return;
     // Sofort abgreifen und leeren: ein Bild, das während dieses laufenden
     // Requests noch angehängt wird, gehört zum NÄCHSTEN Turn, nicht zu
     // diesem hier.
@@ -796,7 +815,7 @@
     if (composerInput) { composerInput.innerText = ''; composerInput.classList.remove('is-empty'); }
     showThread();
     progressHostEl = null; // neue Runde eigener Fortschrittsblöcke
-    addThreadTurn('you', text);
+    addThreadTurn('you', text, imagesForThisTurn);
     const said = addThreadTurn('jarvis', '');
     said.classList.add('thinking');
     said.textContent = '';
@@ -882,7 +901,7 @@
 
   function sendFromComposer() {
     const text = composerInput ? composerInput.innerText.trim() : '';
-    if (text) sendMessage(text);
+    if (text || pendingImages.length) sendMessage(text);
   }
 
   // ------------------------------------------------------ panel / Fortschritt
