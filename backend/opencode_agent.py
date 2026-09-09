@@ -241,7 +241,7 @@ def resize_tty(master: int, proc: subprocess.Popen, cols: int, rows: int) -> Non
 
 
 def answer_terminal_queries(master: int, data: bytes, state: dict) -> None:
-    """Answer OpenTUI terminal queries xterm.js does not handle.
+    r"""Answer OpenTUI terminal queries xterm.js does not handle.
 
     opencode's TUI (OpenTUI) probes the terminal and blocks until it gets answers
     to three queries that xterm.js leaves unanswered (it answers DSR, DECRQM,
