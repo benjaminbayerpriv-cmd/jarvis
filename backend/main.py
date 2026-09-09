@@ -595,7 +595,14 @@ async def code_tty_ws(websocket: WebSocket):
     """
     await websocket.accept()
     wdir = opencode_agent.get_code_dir()
-    master, proc = opencode_agent.start_tty(wdir)
+    try:
+        master, proc = opencode_agent.start_tty(wdir)
+    except RuntimeError as exc:
+        # e.g. no PTY on this OS (Windows) — tell the client plainly instead
+        # of letting the exception surface as a raw traceback in the log.
+        await websocket.send_text(json.dumps({"type": "exit", "code": None, "error": str(exc)}))
+        await websocket.close()
+        return
     loop = asyncio.get_running_loop()
     out_q: asyncio.Queue[tuple[str, object]] = asyncio.Queue()
     # Per-connection state: the terminal queries we must answer (see
