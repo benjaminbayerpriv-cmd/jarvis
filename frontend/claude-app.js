@@ -44,6 +44,10 @@
     close: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>',
     volume: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 4.702a.705.705 0 0 0-1.203-.498L6.413 7.587A1.4 1.4 0 0 1 5.416 8H3a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2.416a1.4 1.4 0 0 1 .997.413l3.383 3.384A.705.705 0 0 0 11 19.298z"/><path d="M16 9a5 5 0 0 1 0 6"/><path d="M19.364 18.364a9 9 0 0 0 0-12.728"/></svg>',
     muted: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 4.702a.7.7 0 0 0-1.203-.498L6.413 7.587A1.4 1.4 0 0 1 5.416 8H3a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2.416a1.4 1.4 0 0 1 .997.413l3.383 3.384A.7.7 0 0 0 11 19.298z"/><path d="m16.5 14.5 5-5"/><path d="m16.5 9.5 5 5"/></svg>',
+    folder: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg>',
+    search: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>',
+    sort: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 16 4 4 4-4"/><path d="M7 20V4"/><path d="m21 8-4-4-4 4"/><path d="M17 4v16"/></svg>',
+    dots: '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg>',
   };
 
   // ---------------------------------------------------------------- helfer
@@ -60,7 +64,12 @@
   //    statt stillschweigend Datenmüll in den Prompt zu kippen).
   const ATTACH_MAX_CHARS = 20000;
   let pendingImages = [];  // {name, image: Data-URL} der aktuell angehängten Bilder, siehe sendMessage
+  function canSendNow() {
+    const hasText = !!(composerInput && composerInput.innerText.trim());
+    return hasText || pendingImages.length > 0;
+  }
   function renderAttachPreviews() {
+    if (sendBtn) sendBtn.disabled = !canSendNow();
     if (!attachPreviewEl) return;
     if (!pendingImages.length) { attachPreviewEl.style.display = 'none'; attachPreviewEl.innerHTML = ''; return; }
     attachPreviewEl.style.display = 'flex';
@@ -290,17 +299,22 @@
   // UI-Anker (in buildUi() gesetzt)
   let uiEl = null, sidebarEl = null, chatListEl = null, chatRootEl = null, threadEl = null;
   let composerTray = null, composerInput = null, sendBtn = null, speechBtn = null, noteBtn = null;
-  let uploadBtn = null, settingsBtn = null, modelEl = null, modelMenuEl = null, fileInput = null;
+  let uploadBtn = null, settingsBtn = null, modelEl = null, modelBtnEl = null, modelMenuEl = null, fileInput = null;
   let attachPreviewEl = null;
   let speechBarEl = null, spMuteBtn = null, spStopBtn = null, spSendBtn = null, spChatBtn = null;
   let speechCaptionEl = null, spcStatusEl = null, spcUserEl = null, spcReplyEl = null;
-  let settingsSheetEl = null, settingsModelsEl = null;
+  let settingsSheetEl = null, settingsModelsEl = null, newProjectSheetEl = null;
 
   // Code-Tab (echte opencode-TUI in einem eingebetteten xterm.js-Terminal)
   let codeViewEl = null, codeTermEl = null, codeDirEl = null;
   let codeStatusLabelEl = null, codeDotEl = null, codeRestartBtn = null;
   let codeTerm = null, codeFit = null;
   let codeWs = null, codeWsOpen = false, codeReconnectTimer = null, codeExited = false;
+
+  // Projects-Ansicht Anker
+  let projectsViewEl = null, projectsGridEl = null, projectsSearchRowEl = null, projectsSearchInputEl = null;
+  let projectsList = [], projectsSortMode = 'newest', projectsSearchOpen = false;
+  let projectCardMenuTargetId = null, editingProjectId = null;
 
   // Sprachmodus + VAD + Diktat + Web-Speech-Erkennung
   let speechMode = false, dictating = false, micReady = false, micStream = null, muted = false;
@@ -364,6 +378,7 @@
             <button class="js-pill" data-mode="code" title="Code with opencode" style="flex:1;display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:7px 10px;border-radius:8px;border:none;background:transparent;color:${C.textSoft};font-size:13px;font-weight:500;cursor:pointer;transition:background .15s,color .15s;">${ICONS.code}<span>Code</span></button>
           </div>
           <button class="js-new" style="display:flex;align-items:center;gap:8px;padding:9px 12px;background:${C.bgHover};border:1px solid ${C.border};border-radius:11px;color:${C.text};font-size:13px;font-weight:500;cursor:pointer;transition:background .15s;">${ICONS.plus}<span>New conversation</span></button>
+          <button class="js-projects" style="display:flex;align-items:center;gap:8px;padding:9px 12px;background:${C.bgHover};border:1px solid ${C.border};border-radius:11px;color:${C.text};font-size:13px;font-weight:500;cursor:pointer;transition:background .15s;">${ICONS.folder}<span>Projekte</span></button>
           <div style="padding:2px 8px 4px;font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:${C.textDim};">Conversations</div>
         </div>
         <div class="js-chats" style="flex:1 1 auto;overflow-y:auto;padding:2px 8px 10px;"></div>
@@ -390,9 +405,33 @@
           </div>
           <div class="js-code-terminal" style="flex:1 1 auto;min-width:0;min-height:0;overflow:hidden;background:#12121c;padding:4px 2px 6px;"></div>
         </div>
+        <div class="js-projects-view" style="position:absolute;inset:0;display:none;flex-direction:column;min-width:0;min-height:0;overflow-y:auto;padding:40px 48px;">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:28px;">
+            <h1 style="font-family:${C.serif};font-size:28px;font-weight:600;color:${C.text};margin:0;">Projekte</h1>
+            <div style="display:flex;align-items:center;gap:14px;">
+              <button class="js-projects-search-btn" title="Suchen" style="background:none;border:none;color:${C.textSoft};cursor:pointer;display:inline-flex;padding:6px;">${ICONS.search}</button>
+              <button class="js-projects-sort-btn" title="Sortieren" style="background:none;border:none;color:${C.textSoft};cursor:pointer;display:inline-flex;padding:6px;">${ICONS.sort}</button>
+              <button class="js-projects-new" style="padding:9px 18px;background:${C.text};border:none;border-radius:20px;color:${C.bg};font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap;">Neues Projekt</button>
+            </div>
+          </div>
+          <div class="js-projects-search-row" style="display:none;margin-bottom:20px;">
+            <input class="js-projects-search-input" type="text" placeholder="Projekte durchsuchen…" style="width:100%;max-width:360px;padding:9px 14px;background:${C.bgHover};border:1px solid ${C.border};border-radius:10px;color:${C.text};font-size:13px;font-family:${C.font};outline:none;" />
+          </div>
+          <div class="js-projects-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:16px;"></div>
+          <div class="js-project-card-menu" style="display:none;position:absolute;width:170px;background:${C.bgSoft};border:1px solid ${C.border};border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.4);overflow:hidden;z-index:5;">
+            <button class="js-pcm-rename" style="display:block;width:100%;text-align:left;padding:9px 14px;background:none;border:none;color:${C.text};font-size:13px;cursor:pointer;font-family:${C.font};">Umbenennen</button>
+            <button class="js-pcm-delete" style="display:block;width:100%;text-align:left;padding:9px 14px;background:none;border:none;color:#e5735f;font-size:13px;cursor:pointer;font-family:${C.font};">Löschen</button>
+          </div>
+          <div class="js-projects-sort-menu" style="display:none;position:absolute;width:190px;background:${C.bgSoft};border:1px solid ${C.border};border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.4);overflow:hidden;z-index:5;">
+            <button class="js-psm-opt" data-sort="newest" style="display:block;width:100%;text-align:left;padding:9px 14px;background:none;border:none;color:${C.text};font-size:13px;cursor:pointer;font-family:${C.font};">Neueste zuerst</button>
+            <button class="js-psm-opt" data-sort="oldest" style="display:block;width:100%;text-align:left;padding:9px 14px;background:none;border:none;color:${C.text};font-size:13px;cursor:pointer;font-family:${C.font};">Älteste zuerst</button>
+            <button class="js-psm-opt" data-sort="updated" style="display:block;width:100%;text-align:left;padding:9px 14px;background:none;border:none;color:${C.text};font-size:13px;cursor:pointer;font-family:${C.font};">Zuletzt bearbeitet</button>
+            <button class="js-psm-opt" data-sort="alpha" style="display:block;width:100%;text-align:left;padding:9px 14px;background:none;border:none;color:${C.text};font-size:13px;cursor:pointer;font-family:${C.font};">Alphabetisch</button>
+          </div>
+        </div>
       </div>
       <div class="js-composer" style="position:absolute;left:308px;right:0;bottom:0;padding:0 24px 22px;background:linear-gradient(transparent,${C.bg} 55%);">
-        <div style="max-width:760px;margin:0 auto;">
+        <div style="max-width:760px;margin:0 auto;position:relative;">
           <div style="background:${C.bgSoft};border:1px solid ${C.border};border-radius:18px;box-shadow:0 10px 34px rgba(0,0,0,.38);">
             <div class="js-attach-preview" style="display:none;gap:8px;padding:12px 16px 0;flex-wrap:wrap;"></div>
             <div class="js-editor" contenteditable="true" data-placeholder="Describe a task or ask a question" style="min-height:60px;max-height:200px;overflow-y:auto;padding:16px;color:${C.text};font-size:15px;line-height:1.5;outline:none;white-space:pre-wrap;word-break:break-word;"></div>
@@ -408,7 +447,7 @@
               <button class="js-send" title="Send" style="width:38px;height:38px;border-radius:50%;background:${C.accent};border:none;color:#fff;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;">${ICONS.send}</button>
             </div>
           </div>
-          <div class="js-modelmenu" style="display:none;margin-top:8px;background:${C.bgSoft};border:1px solid ${C.border};border-radius:12px;overflow:hidden;box-shadow:0 10px 30px rgba(0,0,0,.4);"></div>
+          <div class="js-modelmenu" style="display:none;position:absolute;width:220px;bottom:calc(100% + 8px);max-height:280px;overflow-y:auto;background:${C.bgSoft};border:1px solid ${C.border};border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.4);"></div>
         </div>
       </div>
     `;
@@ -473,6 +512,34 @@
     `;
     document.body.appendChild(settingsSheetEl);
 
+    // Neues-Projekt-Dialog (zentriert, wie ein einfacher Modal-Dialog).
+    newProjectSheetEl = document.createElement('div');
+    newProjectSheetEl.id = 'jsNewProjectSheet';
+    newProjectSheetEl.style.cssText = `position:fixed;inset:0;z-index:60;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.5);`;
+    newProjectSheetEl.innerHTML = `
+      <div style="width:420px;max-width:90vw;background:${C.bgSoft};border:1px solid ${C.border};border-radius:16px;box-shadow:0 20px 60px rgba(0,0,0,.5);overflow:hidden;">
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 18px;border-bottom:1px solid ${C.border};">
+          <span class="js-newproject-title" style="font-size:16px;font-weight:600;color:${C.text};">Neues Projekt</span>
+          <button class="js-newproject-close" title="Schließen" style="width:28px;height:28px;border-radius:8px;background:none;border:none;color:${C.textSoft};cursor:pointer;font-size:16px;line-height:1;">×</button>
+        </div>
+        <div style="padding:18px;display:flex;flex-direction:column;gap:12px;">
+          <div style="display:flex;flex-direction:column;gap:6px;">
+            <label style="font-size:12px;color:${C.textSoft};">Name</label>
+            <input class="js-newproject-name" type="text" placeholder="z. B. Lokale Coding KI" style="width:100%;box-sizing:border-box;padding:9px 10px;background:${C.bg};border:1px solid ${C.border};border-radius:8px;color:${C.text};font-size:13px;outline:none;font-family:${C.font};" />
+          </div>
+          <div style="display:flex;flex-direction:column;gap:6px;">
+            <label style="font-size:12px;color:${C.textSoft};">Beschreibung (optional)</label>
+            <textarea class="js-newproject-desc" rows="3" placeholder="Worum geht's in diesem Projekt?" style="width:100%;box-sizing:border-box;padding:9px 10px;background:${C.bg};border:1px solid ${C.border};border-radius:8px;color:${C.text};font-size:13px;outline:none;font-family:${C.font};resize:vertical;"></textarea>
+          </div>
+          <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:4px;">
+            <button class="js-newproject-cancel" style="padding:8px 14px;border:1px solid ${C.border};border-radius:8px;background:none;color:${C.textSoft};font-size:13px;cursor:pointer;font-family:${C.font};">Abbrechen</button>
+            <button class="js-newproject-create" style="padding:8px 14px;border:none;border-radius:8px;background:${C.accent};color:#fff;font-size:13px;font-weight:600;cursor:pointer;font-family:${C.font};">Erstellen</button>
+          </div>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(newProjectSheetEl);
+
     sidebarEl = $('.js-sidebar', uiEl);
     chatListEl = $('.js-chats', uiEl);
     chatRootEl = $('.js-main', uiEl);
@@ -484,8 +551,13 @@
     noteBtn = $('.js-note', uiEl);
     uploadBtn = $('.js-upload', uiEl);
     attachPreviewEl = $('.js-attach-preview', uiEl);
+    projectsViewEl = $('.js-projects-view', uiEl);
+    projectsGridEl = $('.js-projects-grid', uiEl);
+    projectsSearchRowEl = $('.js-projects-search-row', uiEl);
+    projectsSearchInputEl = $('.js-projects-search-input', uiEl);
     settingsBtn = $('.js-settings', uiEl);
     modelEl = $('.js-model-label', uiEl);
+    modelBtnEl = $('.js-model', uiEl);
     modelMenuEl = $('.js-modelmenu', uiEl);
     spMuteBtn = $('.js-sp-mute', speechBarEl);
     spStopBtn = $('.js-sp-stop', speechBarEl);
@@ -503,18 +575,21 @@
     const s = document.createElement('style');
     s.id = 'jsAppCss';
     s.textContent = `
-      body.js-app-active > :not(#jsApp):not(#jarvisOrb):not(#jsSpeechbar):not(#jsSpeechCaption):not(#jsSettingsSheet):not(script):not(style) { display:none !important; }
+      body.js-app-active > :not(#jsApp):not(#jarvisOrb):not(#jsSpeechbar):not(#jsSpeechCaption):not(#jsSettingsSheet):not(#jsNewProjectSheet):not(script):not(style) { display:none !important; }
       body.js-app-active { overflow:hidden; }
       .js-sidebar button:focus-visible, .js-main button:focus-visible { outline:2px solid ${C.accent}; outline-offset:2px; }
       .js-editor:empty::before, .js-editor.is-empty::before { content:attr(data-placeholder); color:${C.textDim}; pointer-events:none; }
       .js-editor:focus::before { opacity:.7; }
-      .js-side-toggle svg, .js-new svg, .js-upload svg, .js-note svg, .js-speech svg, .js-settings svg { width:16px; height:16px; display:block; }
+      .js-side-toggle svg, .js-new svg, .js-projects svg, .js-upload svg, .js-note svg, .js-speech svg, .js-settings svg { width:16px; height:16px; display:block; }
+      .js-projects-search-btn svg, .js-projects-sort-btn svg { width:18px; height:18px; display:block; }
+      .js-project-menu-btn svg { width:16px; height:16px; display:block; }
       .js-upload svg, .js-note svg, .js-settings svg { width:18px; height:18px; }
       .js-speech svg, .js-send svg { width:18px; height:18px; display:block; }
       .js-sp-mute svg, .js-sp-stop svg, .js-sp-chat svg, .js-sp-send svg { width:20px; height:20px; display:block; }
       .js-pill svg { width:16px; height:16px; display:block; }
-      .js-side-toggle:hover, .js-new:hover, .js-upload:hover, .js-note:hover, .js-model:hover, .js-settings:hover, .js-sp-mute:hover, .js-sp-stop:hover, .js-sp-chat:hover { background:${C.bgHover}; color:${C.text}; }
+      .js-side-toggle:hover, .js-new:hover, .js-projects:hover, .js-upload:hover, .js-note:hover, .js-model:hover, .js-settings:hover, .js-sp-mute:hover, .js-sp-stop:hover, .js-sp-chat:hover { background:${C.bgHover}; color:${C.text}; }
       .js-pill.active { background:${C.accent} !important; color:#fff !important; }
+      .js-code-active .js-projects, .js-code-active .js-projects-note { display:none !important; }
       .js-pill:not(.active):hover { background:${C.bgHover}; color:${C.text}; }
       .js-note.on { color:${C.accent} !important; background:rgba(217,119,87,.12) !important; }
       .js-note.on svg { animation:js-note-pulse 1.4s ease-in-out infinite; }
@@ -542,6 +617,14 @@
       .js-code-editor:focus::before { opacity:.7; }
       #jsApp.js-code-active .js-thread, #jsApp.js-code-active .js-welcome, #jsApp.js-code-active .js-composer { display:none !important; }
       #jsApp.js-code-active .js-codeview { display:flex !important; }
+      #jsApp.js-projects-active .js-thread, #jsApp.js-projects-active .js-welcome, #jsApp.js-projects-active .js-composer { display:none !important; }
+      #jsApp.js-projects-active .js-projects-view { display:flex !important; }
+      .js-project-card:hover { border-color:${C.textDim}; }
+      .js-project-card { position:relative; }
+      .js-project-menu-btn { opacity:0; transition:opacity .1s; }
+      .js-project-card:hover .js-project-menu-btn, .js-project-menu-btn.is-open { opacity:1; }
+      .js-pcm-rename:hover, .js-pcm-delete:hover, .js-psm-opt:hover { background:${C.bgHover}; }
+      .js-psm-opt.active { color:${C.accent} !important; }
     `;
     document.head.appendChild(s);
   }
@@ -549,6 +632,7 @@
   // ------------------------------------------------------------- wire UI
   function setMode(mode) {
     if (mode !== 'chat' && mode !== 'code') return;
+    closeProjectsView();
     const isCode = mode === 'code';
     const pills = uiEl ? uiEl.querySelectorAll('.js-pill') : [];
     pills.forEach((p) => p.classList.toggle('active', p.dataset.mode === mode));
@@ -647,6 +731,7 @@
   }
 
   async function openConversation(id) {
+    closeProjectsView();
     if (id === currentConversationId) return;
     currentConversationId = id;
     localStorage.setItem(modeKey(activeMode), id);
@@ -662,8 +747,210 @@
     loadConversationList();
   }
 
+  // ------------------------------------------------------------ Projekte
+  const _PROJECT_MONTHS = ['Jan.', 'Feb.', 'März', 'Apr.', 'Mai', 'Juni', 'Juli', 'Aug.', 'Sep.', 'Okt.', 'Nov.', 'Dez.'];
+  function formatProjectDate(iso) {
+    const d = new Date(iso);
+    if (isNaN(d)) return '';
+    const now = new Date();
+    const dayMs = 86400000;
+    const startOfDay = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+    const diffDays = Math.round((startOfDay(now) - startOfDay(d)) / dayMs);
+    if (diffDays === 0) return 'heute';
+    if (diffDays === 1) return 'gestern';
+    if (diffDays === 2) return 'vorgestern';
+    return `${d.getDate()}. ${_PROJECT_MONTHS[d.getMonth()]}`;
+  }
+  function openProjectsView() {
+    if (uiEl) uiEl.classList.add('js-projects-active');
+    loadProjects();
+  }
+  function closeProjectsView() {
+    if (uiEl) uiEl.classList.remove('js-projects-active');
+  }
+  async function loadProjects() {
+    try {
+      const r = await fetch('/projects');
+      const j = await r.json();
+      projectsList = j.projects || [];
+    } catch (e) { projectsList = []; }
+    renderProjectsGrid();
+  }
+  function sortedProjects(list) {
+    list = list.slice();
+    if (projectsSortMode === 'oldest') list.sort((a, b) => (a.created_at || '').localeCompare(b.created_at || ''));
+    else if (projectsSortMode === 'updated') list.sort((a, b) => (b.updated_at || b.created_at || '').localeCompare(a.updated_at || a.created_at || ''));
+    else if (projectsSortMode === 'alpha') list.sort((a, b) => a.name.localeCompare(b.name, 'de', { sensitivity: 'base' }));
+    else list.sort((a, b) => (b.created_at || '').localeCompare(a.created_at || '')); // 'newest' (Standard)
+    return list;
+  }
+  function renderProjectsGrid() {
+    if (!projectsGridEl) return;
+    let list = projectsList.slice();
+    const q = (projectsSearchInputEl ? projectsSearchInputEl.value : '').trim().toLowerCase();
+    if (q) list = list.filter((p) => p.name.toLowerCase().includes(q) || (p.description || '').toLowerCase().includes(q));
+    list = sortedProjects(list);
+    if (!list.length) {
+      projectsGridEl.innerHTML = `<div style="grid-column:1/-1;color:${C.textDim};font-size:13px;padding:8px 2px;">${q ? 'Keine Projekte gefunden.' : 'Noch keine Projekte — leg oben eins an.'}</div>`;
+      return;
+    }
+    projectsGridEl.innerHTML = list.map((p) => `
+      <div class="js-project-card" data-id="${p.id}" style="border:1px solid ${C.border};border-radius:14px;padding:16px 18px;background:${C.bgSoft};transition:border-color .15s;display:flex;flex-direction:column;min-height:110px;">
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px;padding-right:20px;">
+          <span style="font-size:14px;font-weight:600;color:${C.text};">${escapeHtml(p.name)}</span>
+          ${p.tag ? `<span style="font-size:11px;padding:2px 8px;border-radius:10px;background:${C.bgHover};color:${C.textSoft};">${escapeHtml(p.tag)}</span>` : ''}
+        </div>
+        <button class="js-project-menu-btn" data-id="${p.id}" title="Optionen" style="position:absolute;top:12px;right:10px;background:none;border:none;color:${C.textSoft};cursor:pointer;padding:4px;display:inline-flex;">${ICONS.dots}</button>
+        ${p.description ? `<div style="font-size:13px;color:${C.textSoft};line-height:1.45;flex:1;">${escapeHtml(p.description)}</div>` : '<div style="flex:1;"></div>'}
+        <div style="font-size:12px;color:${C.textDim};margin-top:10px;">${formatProjectDate(p.created_at)}</div>
+      </div>
+    `).join('');
+  }
+  function escapeHtml(s) {
+    const d = document.createElement('div');
+    d.textContent = s;
+    return d.innerHTML;
+  }
+  function openNewProjectModal() {
+    if (!newProjectSheetEl) return;
+    editingProjectId = null;
+    $('.js-newproject-title', newProjectSheetEl).textContent = 'Neues Projekt';
+    $('.js-newproject-create', newProjectSheetEl).textContent = 'Erstellen';
+    $('.js-newproject-name', newProjectSheetEl).value = '';
+    $('.js-newproject-desc', newProjectSheetEl).value = '';
+    newProjectSheetEl.style.display = 'flex';
+    $('.js-newproject-name', newProjectSheetEl).focus();
+  }
+  function openEditProjectModal(project) {
+    if (!newProjectSheetEl) return;
+    editingProjectId = project.id;
+    $('.js-newproject-title', newProjectSheetEl).textContent = 'Projekt umbenennen';
+    $('.js-newproject-create', newProjectSheetEl).textContent = 'Speichern';
+    $('.js-newproject-name', newProjectSheetEl).value = project.name || '';
+    $('.js-newproject-desc', newProjectSheetEl).value = project.description || '';
+    newProjectSheetEl.style.display = 'flex';
+    $('.js-newproject-name', newProjectSheetEl).focus();
+  }
+  function closeNewProjectModal() {
+    if (newProjectSheetEl) newProjectSheetEl.style.display = 'none';
+    editingProjectId = null;
+  }
+  async function createProjectFromModal() {
+    const name = $('.js-newproject-name', newProjectSheetEl).value.trim();
+    if (!name) return;
+    const description = $('.js-newproject-desc', newProjectSheetEl).value.trim();
+    try {
+      if (editingProjectId) {
+        await fetch(`/projects/${encodeURIComponent(editingProjectId)}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, description }),
+        });
+      } else {
+        await fetch('/projects', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, description }),
+        });
+      }
+    } catch (e) {}
+    closeNewProjectModal();
+    loadProjects();
+  }
+  async function deleteProject(id) {
+    try { await fetch(`/projects/${encodeURIComponent(id)}`, { method: 'DELETE' }); } catch (e) {}
+    loadProjects();
+  }
+  function positionFloatingMenu(anchorBtn, menuEl) {
+    const container = menuEl.parentElement;
+    const containerRect = container.getBoundingClientRect();
+    const btnRect = anchorBtn.getBoundingClientRect();
+    const menuWidth = menuEl.offsetWidth || 180;
+    let left = btnRect.right - containerRect.left - menuWidth + container.scrollLeft;
+    left = Math.max(0, left);
+    let top = btnRect.bottom - containerRect.top + 6 + container.scrollTop;
+    menuEl.style.left = left + 'px';
+    menuEl.style.top = top + 'px';
+  }
+  function closeProjectCardMenu() {
+    const menu = $('.js-project-card-menu', uiEl);
+    if (menu) menu.style.display = 'none';
+    uiEl.querySelectorAll('.js-project-menu-btn.is-open').forEach((b) => b.classList.remove('is-open'));
+    projectCardMenuTargetId = null;
+  }
+  function closeProjectsSortMenu() {
+    const menu = $('.js-projects-sort-menu', uiEl);
+    if (menu) menu.style.display = 'none';
+  }
+
   function wireUi() {
-    $('.js-new', uiEl).addEventListener('click', startNewConversation);
+    $('.js-new', uiEl).addEventListener('click', () => { closeProjectsView(); startNewConversation(); });
+    $('.js-projects', uiEl).addEventListener('click', (e) => { e.preventDefault(); openProjectsView(); });
+    $('.js-projects-new', uiEl).addEventListener('click', (e) => { e.preventDefault(); openNewProjectModal(); });
+    $('.js-projects-search-btn', uiEl).addEventListener('click', (e) => {
+      e.preventDefault();
+      projectsSearchOpen = !projectsSearchOpen;
+      if (projectsSearchRowEl) projectsSearchRowEl.style.display = projectsSearchOpen ? 'block' : 'none';
+      if (projectsSearchOpen && projectsSearchInputEl) projectsSearchInputEl.focus();
+      else if (projectsSearchInputEl) { projectsSearchInputEl.value = ''; renderProjectsGrid(); }
+    });
+    if (projectsSearchInputEl) projectsSearchInputEl.addEventListener('input', renderProjectsGrid);
+    $('.js-projects-sort-btn', uiEl).addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      closeProjectCardMenu();
+      const menu = $('.js-projects-sort-menu', uiEl);
+      const open = menu.style.display !== 'none';
+      if (open) { closeProjectsSortMenu(); return; }
+      menu.querySelectorAll('.js-psm-opt').forEach((b) => b.classList.toggle('active', b.dataset.sort === projectsSortMode));
+      menu.style.display = 'block';
+      positionFloatingMenu(e.currentTarget, menu);
+    });
+    $('.js-projects-sort-menu', uiEl).querySelectorAll('.js-psm-opt').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        projectsSortMode = btn.dataset.sort;
+        renderProjectsGrid();
+        closeProjectsSortMenu();
+      });
+    });
+    // Drei-Punkte-Menü pro Karte — Delegation, weil renderProjectsGrid() das
+    // Grid bei jedem Render komplett neu aufbaut (frische Buttons, keine
+    // pro-Karte-Listener nötig).
+    projectsGridEl.addEventListener('click', (e) => {
+      const btn = e.target.closest('.js-project-menu-btn');
+      if (!btn) return;
+      e.preventDefault();
+      e.stopPropagation();
+      closeProjectsSortMenu();
+      const menu = $('.js-project-card-menu', uiEl);
+      const alreadyOpenForThis = projectCardMenuTargetId === btn.dataset.id && menu.style.display !== 'none';
+      closeProjectCardMenu();
+      if (alreadyOpenForThis) return;
+      projectCardMenuTargetId = btn.dataset.id;
+      btn.classList.add('is-open');
+      menu.style.display = 'block';
+      positionFloatingMenu(btn, menu);
+    });
+    $('.js-pcm-rename', uiEl).addEventListener('click', (e) => {
+      e.preventDefault();
+      const project = projectsList.find((p) => p.id === projectCardMenuTargetId);
+      closeProjectCardMenu();
+      if (project) openEditProjectModal(project);
+    });
+    $('.js-pcm-delete', uiEl).addEventListener('click', (e) => {
+      e.preventDefault();
+      const id = projectCardMenuTargetId;
+      const project = projectsList.find((p) => p.id === id);
+      closeProjectCardMenu();
+      if (id && confirm(`"${project ? project.name : 'Dieses Projekt'}" wirklich löschen?`)) deleteProject(id);
+    });
+    window.addEventListener('click', () => { closeProjectCardMenu(); closeProjectsSortMenu(); });
+    $('.js-newproject-close', newProjectSheetEl).addEventListener('click', (e) => { e.preventDefault(); closeNewProjectModal(); });
+    $('.js-newproject-cancel', newProjectSheetEl).addEventListener('click', (e) => { e.preventDefault(); closeNewProjectModal(); });
+    $('.js-newproject-create', newProjectSheetEl).addEventListener('click', (e) => { e.preventDefault(); createProjectFromModal(); });
+    newProjectSheetEl.addEventListener('click', (e) => { if (e.target === newProjectSheetEl) closeNewProjectModal(); });
 
     // Chat/Code-Toggle
     uiEl.querySelectorAll('.js-pill').forEach((p) => {
@@ -680,7 +967,7 @@
       });
       composerInput.addEventListener('input', () => {
         composerInput.classList.toggle('is-empty', composerInput.innerText.trim().length === 0);
-        if (sendBtn) sendBtn.disabled = composerInput.innerText.trim().length === 0;
+        if (sendBtn) sendBtn.disabled = !canSendNow();
       });
     }
     if (speechBtn) speechBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); speechMode ? exitSpeech() : enterSpeech(); });
@@ -705,7 +992,7 @@
       });
     }
 
-    if (modelEl) modelEl.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); toggleModelMenu(); });
+    if (modelBtnEl) modelBtnEl.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); toggleModelMenu(); });
     window.addEventListener('click', () => { if (modelMenuEl) modelMenuEl.style.display = 'none'; });
 
     // Sprachmodus-Bottom-Leiste
@@ -724,10 +1011,18 @@
       if (!files.length) return;
       const results = await Promise.all(files.map(readAttachedFile));
       results.forEach((r, i) => { if (r.image) pendingImages.push({ name: files[i].name, image: r.image }); });
+      // Bilder bekommen nur die Vorschau-Kachel, keinen Text ins Eingabefeld
+      // — die Kachel zeigt ja schon, was angehängt ist. Nur Text-/andere
+      // Dateien (kein `.image`) landen weiterhin als Text im Eingabefeld,
+      // weil die gar keine visuelle Vorschau haben.
+      const textResults = results.filter((r) => !r.image);
+      if (textResults.length && composerInput) {
+        const base = composerInput.innerText.trim();
+        const attach = textResults.map((r) => r.text).join('\n\n');
+        composerInput.innerText = base ? base + '\n\n' + attach : attach;
+        composerInput.classList.remove('is-empty');
+      }
       renderAttachPreviews();
-      const base = (composerInput ? composerInput.innerText : '').trim();
-      const attach = results.map((r) => r.text).join('\n\n');
-      if (composerInput) { composerInput.innerText = base ? base + '\n\n' + attach : attach; composerInput.classList.remove('is-empty'); if (sendBtn) sendBtn.disabled = false; }
     });
     document.body.appendChild(fileInput);
 
@@ -757,11 +1052,17 @@
   }
   function showThread() {}
 
-  function addThreadTurn(role, text) {
+  function addThreadTurn(role, text, images) {
     const el = ensureThread();
     if (!el) return { classList: { add(){}, remove(){}, toggle(){} }, textContent: '' };
     const row = document.createElement('div');
     row.className = 'js-turn ' + (role === 'you' ? 'js-you' : 'js-jarvis');
+    if (images && images.length) {
+      const imgRow = document.createElement('div');
+      imgRow.style.cssText = `display:flex;gap:6px;flex-wrap:wrap;${text ? 'margin-bottom:8px;' : ''}`;
+      imgRow.innerHTML = images.map((src) => `<img src="${src}" style="width:64px;height:64px;object-fit:cover;border-radius:8px;" />`).join('');
+      row.appendChild(imgRow);
+    }
     const inner = document.createElement('div');
     inner.className = 'js-text';
     inner.textContent = text;
@@ -785,7 +1086,7 @@
 
   async function sendMessage(text) {
     text = (text || '').trim();
-    if (!text || busy) return;
+    if ((!text && !pendingImages.length) || busy) return;
     // Sofort abgreifen und leeren: ein Bild, das während dieses laufenden
     // Requests noch angehängt wird, gehört zum NÄCHSTEN Turn, nicht zu
     // diesem hier.
@@ -795,7 +1096,7 @@
     if (composerInput) { composerInput.innerText = ''; composerInput.classList.remove('is-empty'); }
     showThread();
     progressHostEl = null; // neue Runde eigener Fortschrittsblöcke
-    addThreadTurn('you', text);
+    addThreadTurn('you', text, imagesForThisTurn);
     const said = addThreadTurn('jarvis', '');
     said.classList.add('thinking');
     said.textContent = '';
@@ -881,7 +1182,7 @@
 
   function sendFromComposer() {
     const text = composerInput ? composerInput.innerText.trim() : '';
-    if (text) sendMessage(text);
+    if (text || pendingImages.length) sendMessage(text);
   }
 
   // ------------------------------------------------------ panel / Fortschritt
@@ -1043,42 +1344,68 @@
     currentModelSupportsVision = (modelCapsMap[id] || []).includes('vision');
   }
 
-  async function toggleModelMenu() {
-    if (!modelMenuEl) return;
-    const open = modelMenuEl.style.display !== 'none';
-    if (open) { modelMenuEl.style.display = 'none'; return; }
-    let models = [];
-    try {
-      const r = await fetch('/models');
-      const j = await r.json();
-      models = (j.models || []).map((m) => ({ id: m }));
-      applyModelCaps(j);
-      if (j.current) setModelLabel(j.current);
-    } catch (e) { models = []; }
+  let lastModelsList = null;  // Cache: sofort anzeigen statt bei jedem Klick auf den Netzwerk-Roundtrip zu warten
+  function positionModelMenu() {
+    if (!modelMenuEl || !modelBtnEl) return;
+    const wrap = modelMenuEl.parentElement;
+    if (!wrap) return;
+    const wrapRect = wrap.getBoundingClientRect();
+    const btnRect = modelBtnEl.getBoundingClientRect();
+    const menuWidth = 220;
+    // Am linken Rand des Buttons ausgerichtet (nicht am rechten) — sitzt
+    // dadurch direkt über dem ausgewählten Modellnamen statt weiter links.
+    let left = btnRect.left - wrapRect.left;
+    left = Math.max(0, Math.min(left, wrapRect.width - menuWidth));
+    modelMenuEl.style.left = left + 'px';
+  }
+  function renderModelMenu(models) {
     modelMenuEl.innerHTML = '';
     if (!models.length) {
       const d = document.createElement('div');
       d.textContent = 'No models — LM Studio running?';
       d.style.cssText = `padding:10px 14px;font-size:13px;color:${C.textDim};`;
       modelMenuEl.appendChild(d);
-    } else {
-      for (const m of models) {
-        const b = document.createElement('button');
-        b.textContent = m.id;
-        b.style.cssText = `display:block;width:100%;text-align:left;padding:9px 14px;background:none;border:none;color:${C.textSoft};font-size:13px;cursor:pointer;`;
-        b.onmouseenter = () => { b.style.background = C.bgHover; };
-        b.onmouseleave = () => { b.style.background = 'none'; };
-        b.addEventListener('click', async (e) => {
-          e.stopPropagation();
-          modelMenuEl.style.display = 'none';
-          setModelLabel(m.id);
-          selectModelCaps(m.id);
-          try { await fetch('/models/select', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: m.id }) }); } catch (e2) {}
-        });
-        modelMenuEl.appendChild(b);
-      }
+      return;
     }
+    for (const m of models) {
+      const b = document.createElement('button');
+      b.textContent = m.id;
+      b.style.cssText = `display:block;width:100%;text-align:left;padding:9px 14px;background:none;border:none;color:${C.textSoft};font-size:13px;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;`;
+      b.onmouseenter = () => { b.style.background = C.bgHover; };
+      b.onmouseleave = () => { b.style.background = 'none'; };
+      b.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        modelMenuEl.style.display = 'none';
+        setModelLabel(m.id);
+        selectModelCaps(m.id);
+        try { await fetch('/models/select', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: m.id }) }); } catch (e2) {}
+      });
+      modelMenuEl.appendChild(b);
+    }
+  }
+  async function toggleModelMenu() {
+    if (!modelMenuEl) return;
+    const open = modelMenuEl.style.display !== 'none';
+    if (open) { modelMenuEl.style.display = 'none'; return; }
+    // Sofort öffnen — mit dem letzten bekannten Stand, falls vorhanden —
+    // statt erst auf den fetch zu warten. Vorher fühlte sich ein Klick
+    // wirkungslos an, solange /models noch unterwegs war, und ein zweiter
+    // Klick währenddessen stieß einen weiteren parallelen fetch an.
+    if (lastModelsList) renderModelMenu(lastModelsList);
+    else { modelMenuEl.innerHTML = `<div style="padding:10px 14px;font-size:13px;color:${C.textDim};">Lädt…</div>`; }
+    positionModelMenu();
     modelMenuEl.style.display = 'block';
+    try {
+      const r = await fetch('/models');
+      const j = await r.json();
+      const models = (j.models || []).map((m) => ({ id: m }));
+      applyModelCaps(j);
+      if (j.current) setModelLabel(j.current);
+      lastModelsList = models;
+      if (modelMenuEl.style.display !== 'none') { renderModelMenu(models); positionModelMenu(); }
+    } catch (e) {
+      if (!lastModelsList) renderModelMenu([]);
+    }
   }
 
   function setModelLabel(id) {

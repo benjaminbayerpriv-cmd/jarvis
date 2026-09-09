@@ -10,13 +10,13 @@ import time
 from pathlib import Path
 
 import requests
-from fastapi import FastAPI, File, Response, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, File, HTTPException, Response, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import browser_agent, config, conversations, fillers, llm_client, memory, opencode_agent, panel, stt, transcript_log, tts, vector_memory
+from . import browser_agent, config, conversations, fillers, llm_client, memory, opencode_agent, panel, projects, stt, transcript_log, tts, vector_memory
 
 app = FastAPI(title="Jarvis")
 app.add_middleware(
@@ -135,6 +135,17 @@ class CancelRequest(BaseModel):
 
 class SelectModelRequest(BaseModel):
     model: str
+
+
+class CreateProjectRequest(BaseModel):
+    name: str
+    description: str = ""
+    tag: str = ""
+
+
+class UpdateProjectRequest(BaseModel):
+    name: str | None = None
+    description: str | None = None
 
 
 class ChatResponse(BaseModel):
@@ -427,6 +438,34 @@ def get_conversation(conv_id: str):
     return {"turns": conversations.load_turns(conv_id)}
 
 
+@app.get("/projects")
+def get_projects():
+    return {"projects": projects.list_projects()}
+
+
+@app.post("/projects")
+def create_project(req: CreateProjectRequest):
+    if not req.name.strip():
+        raise HTTPException(status_code=422, detail="name darf nicht leer sein")
+    return projects.create(req.name, req.description, req.tag)
+
+
+@app.patch("/projects/{project_id}")
+def update_project(project_id: str, req: UpdateProjectRequest):
+    if req.name is not None and not req.name.strip():
+        raise HTTPException(status_code=422, detail="name darf nicht leer sein")
+    updated = projects.update(project_id, req.name, req.description)
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Projekt nicht gefunden")
+    return updated
+
+
+@app.delete("/projects/{project_id}")
+def delete_project(project_id: str):
+    projects.delete(project_id)
+    return {"ok": True}
+
+
 @app.get("/models")
 def list_models():
     try:
@@ -556,7 +595,14 @@ async def code_tty_ws(websocket: WebSocket):
     """
     await websocket.accept()
     wdir = opencode_agent.get_code_dir()
-    master, proc = opencode_agent.start_tty(wdir)
+    try:
+        master, proc = opencode_agent.start_tty(wdir)
+    except RuntimeError as exc:
+        # e.g. no PTY on this OS (Windows) — tell the client plainly instead
+        # of letting the exception surface as a raw traceback in the log.
+        await websocket.send_text(json.dumps({"type": "exit", "code": None, "error": str(exc)}))
+        await websocket.close()
+        return
     loop = asyncio.get_running_loop()
     out_q: asyncio.Queue[tuple[str, object]] = asyncio.Queue()
     # Per-connection state: the terminal queries we must answer (see

@@ -8,6 +8,7 @@ Jarvis/
 launcher/*.log
 backend/transcript.log
 backend/conversations/
+backend/projects/
 backend/vector_index/
 .DS_Store
 
