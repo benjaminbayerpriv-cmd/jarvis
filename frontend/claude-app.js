@@ -392,7 +392,7 @@
         </div>
       </div>
       <div class="js-composer" style="position:absolute;left:308px;right:0;bottom:0;padding:0 24px 22px;background:linear-gradient(transparent,${C.bg} 55%);">
-        <div style="max-width:760px;margin:0 auto;">
+        <div style="max-width:760px;margin:0 auto;position:relative;">
           <div style="background:${C.bgSoft};border:1px solid ${C.border};border-radius:18px;box-shadow:0 10px 34px rgba(0,0,0,.38);">
             <div class="js-attach-preview" style="display:none;gap:8px;padding:12px 16px 0;flex-wrap:wrap;"></div>
             <div class="js-editor" contenteditable="true" data-placeholder="Describe a task or ask a question" style="min-height:60px;max-height:200px;overflow-y:auto;padding:16px;color:${C.text};font-size:15px;line-height:1.5;outline:none;white-space:pre-wrap;word-break:break-word;"></div>
@@ -408,7 +408,7 @@
               <button class="js-send" title="Send" style="width:38px;height:38px;border-radius:50%;background:${C.accent};border:none;color:#fff;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;">${ICONS.send}</button>
             </div>
           </div>
-          <div class="js-modelmenu" style="display:none;margin-top:8px;background:${C.bgSoft};border:1px solid ${C.border};border-radius:12px;overflow:hidden;box-shadow:0 10px 30px rgba(0,0,0,.4);"></div>
+          <div class="js-modelmenu" style="display:none;position:absolute;left:0;right:0;bottom:calc(100% + 8px);max-height:320px;overflow-y:auto;background:${C.bgSoft};border:1px solid ${C.border};border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.4);"></div>
         </div>
       </div>
     `;
