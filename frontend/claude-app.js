@@ -408,7 +408,7 @@
               <button class="js-send" title="Send" style="width:38px;height:38px;border-radius:50%;background:${C.accent};border:none;color:#fff;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;">${ICONS.send}</button>
             </div>
           </div>
-          <div class="js-modelmenu" style="display:none;position:absolute;left:0;right:0;bottom:calc(100% + 8px);max-height:320px;overflow-y:auto;background:${C.bgSoft};border:1px solid ${C.border};border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.4);"></div>
+          <div class="js-modelmenu" style="display:none;position:absolute;width:220px;bottom:calc(100% + 8px);max-height:280px;overflow-y:auto;background:${C.bgSoft};border:1px solid ${C.border};border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.4);"></div>
         </div>
       </div>
     `;
@@ -1043,42 +1043,66 @@
     currentModelSupportsVision = (modelCapsMap[id] || []).includes('vision');
   }
 
-  async function toggleModelMenu() {
-    if (!modelMenuEl) return;
-    const open = modelMenuEl.style.display !== 'none';
-    if (open) { modelMenuEl.style.display = 'none'; return; }
-    let models = [];
-    try {
-      const r = await fetch('/models');
-      const j = await r.json();
-      models = (j.models || []).map((m) => ({ id: m }));
-      applyModelCaps(j);
-      if (j.current) setModelLabel(j.current);
-    } catch (e) { models = []; }
+  let lastModelsList = null;  // Cache: sofort anzeigen statt bei jedem Klick auf den Netzwerk-Roundtrip zu warten
+  function positionModelMenu() {
+    if (!modelMenuEl || !modelEl) return;
+    const wrap = modelMenuEl.parentElement;
+    if (!wrap) return;
+    const wrapRect = wrap.getBoundingClientRect();
+    const btnRect = modelEl.getBoundingClientRect();
+    const menuWidth = 220;
+    let left = btnRect.right - wrapRect.left - menuWidth;
+    left = Math.max(0, Math.min(left, wrapRect.width - menuWidth));
+    modelMenuEl.style.left = left + 'px';
+  }
+  function renderModelMenu(models) {
     modelMenuEl.innerHTML = '';
     if (!models.length) {
       const d = document.createElement('div');
       d.textContent = 'No models — LM Studio running?';
       d.style.cssText = `padding:10px 14px;font-size:13px;color:${C.textDim};`;
       modelMenuEl.appendChild(d);
-    } else {
-      for (const m of models) {
-        const b = document.createElement('button');
-        b.textContent = m.id;
-        b.style.cssText = `display:block;width:100%;text-align:left;padding:9px 14px;background:none;border:none;color:${C.textSoft};font-size:13px;cursor:pointer;`;
-        b.onmouseenter = () => { b.style.background = C.bgHover; };
-        b.onmouseleave = () => { b.style.background = 'none'; };
-        b.addEventListener('click', async (e) => {
-          e.stopPropagation();
-          modelMenuEl.style.display = 'none';
-          setModelLabel(m.id);
-          selectModelCaps(m.id);
-          try { await fetch('/models/select', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: m.id }) }); } catch (e2) {}
-        });
-        modelMenuEl.appendChild(b);
-      }
+      return;
     }
+    for (const m of models) {
+      const b = document.createElement('button');
+      b.textContent = m.id;
+      b.style.cssText = `display:block;width:100%;text-align:left;padding:9px 14px;background:none;border:none;color:${C.textSoft};font-size:13px;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;`;
+      b.onmouseenter = () => { b.style.background = C.bgHover; };
+      b.onmouseleave = () => { b.style.background = 'none'; };
+      b.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        modelMenuEl.style.display = 'none';
+        setModelLabel(m.id);
+        selectModelCaps(m.id);
+        try { await fetch('/models/select', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: m.id }) }); } catch (e2) {}
+      });
+      modelMenuEl.appendChild(b);
+    }
+  }
+  async function toggleModelMenu() {
+    if (!modelMenuEl) return;
+    const open = modelMenuEl.style.display !== 'none';
+    if (open) { modelMenuEl.style.display = 'none'; return; }
+    // Sofort öffnen — mit dem letzten bekannten Stand, falls vorhanden —
+    // statt erst auf den fetch zu warten. Vorher fühlte sich ein Klick
+    // wirkungslos an, solange /models noch unterwegs war, und ein zweiter
+    // Klick währenddessen stieß einen weiteren parallelen fetch an.
+    if (lastModelsList) renderModelMenu(lastModelsList);
+    else { modelMenuEl.innerHTML = `<div style="padding:10px 14px;font-size:13px;color:${C.textDim};">Lädt…</div>`; }
+    positionModelMenu();
     modelMenuEl.style.display = 'block';
+    try {
+      const r = await fetch('/models');
+      const j = await r.json();
+      const models = (j.models || []).map((m) => ({ id: m }));
+      applyModelCaps(j);
+      if (j.current) setModelLabel(j.current);
+      lastModelsList = models;
+      if (modelMenuEl.style.display !== 'none') { renderModelMenu(models); positionModelMenu(); }
+    } catch (e) {
+      if (!lastModelsList) renderModelMenu([]);
+    }
   }
 
   function setModelLabel(id) {
