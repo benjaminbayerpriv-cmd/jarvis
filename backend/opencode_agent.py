@@ -24,13 +24,26 @@ from __future__ import annotations
 import json
 import os
 import pathlib
-import pty
 import re
 import signal
 import struct
 import subprocess
-import termios
-import fcntl
+
+try:
+    # POSIX-only — the real OpenCode TUI needs an actual PTY (openpty,
+    # TIOCSWINSZ, process-group signalling); Windows has no equivalent in the
+    # stdlib. Falling back to None here instead of letting the import crash
+    # keeps the rest of the app (voice, chat, vision, everything not
+    # Code-Tab) working on Windows — start_tty() below raises the real
+    # limitation only when someone actually opens the Code-Tab, instead of
+    # every startup dying at import time.
+    import fcntl
+    import pty
+    import termios
+except ImportError:
+    fcntl = None
+    pty = None
+    termios = None
 
 from . import config
 
@@ -190,6 +203,9 @@ def start_tty(workdir: str) -> tuple[int, subprocess.Popen]:
     Returns the open master fd plus the Popen handle; the caller must hand the
     slot back to the child (close the slave) and reap the process on teardown.
     """
+    if pty is None:
+        raise RuntimeError("Code-Tab wird auf Windows noch nicht unterstützt (braucht ein PTY, das gibt es dort nicht).")
+
     models = list_models()
     if models:
         ensure_provider_config(models, default_model())
