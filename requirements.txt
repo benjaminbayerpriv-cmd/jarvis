@@ -2,6 +2,11 @@ fastapi==0.115.6
 uvicorn[standard]==0.32.1
 python-dotenv==1.0.1
 requests==2.32.3
+
+# Der Code-Tab nutzt unter Windows einen ConPTY-Pseudo-Terminal (pywinpty);
+# unter macOS/Linux kommt das stdlib-PTY ohne Zusatzabhängigkeit aus.
+pywinpty>=2.0.11; platform_system == "Windows"
+
 python-multipart==0.0.32
 
 # Global hotkey listener (launcher/hotkey_listener.py).
