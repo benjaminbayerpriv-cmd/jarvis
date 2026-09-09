@@ -290,7 +290,7 @@
   // UI-Anker (in buildUi() gesetzt)
   let uiEl = null, sidebarEl = null, chatListEl = null, chatRootEl = null, threadEl = null;
   let composerTray = null, composerInput = null, sendBtn = null, speechBtn = null, noteBtn = null;
-  let uploadBtn = null, settingsBtn = null, modelEl = null, modelMenuEl = null, fileInput = null;
+  let uploadBtn = null, settingsBtn = null, modelEl = null, modelBtnEl = null, modelMenuEl = null, fileInput = null;
   let attachPreviewEl = null;
   let speechBarEl = null, spMuteBtn = null, spStopBtn = null, spSendBtn = null, spChatBtn = null;
   let speechCaptionEl = null, spcStatusEl = null, spcUserEl = null, spcReplyEl = null;
@@ -486,6 +486,7 @@
     attachPreviewEl = $('.js-attach-preview', uiEl);
     settingsBtn = $('.js-settings', uiEl);
     modelEl = $('.js-model-label', uiEl);
+    modelBtnEl = $('.js-model', uiEl);
     modelMenuEl = $('.js-modelmenu', uiEl);
     spMuteBtn = $('.js-sp-mute', speechBarEl);
     spStopBtn = $('.js-sp-stop', speechBarEl);
@@ -705,7 +706,7 @@
       });
     }
 
-    if (modelEl) modelEl.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); toggleModelMenu(); });
+    if (modelBtnEl) modelBtnEl.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); toggleModelMenu(); });
     window.addEventListener('click', () => { if (modelMenuEl) modelMenuEl.style.display = 'none'; });
 
     // Sprachmodus-Bottom-Leiste
@@ -1045,13 +1046,15 @@
 
   let lastModelsList = null;  // Cache: sofort anzeigen statt bei jedem Klick auf den Netzwerk-Roundtrip zu warten
   function positionModelMenu() {
-    if (!modelMenuEl || !modelEl) return;
+    if (!modelMenuEl || !modelBtnEl) return;
     const wrap = modelMenuEl.parentElement;
     if (!wrap) return;
     const wrapRect = wrap.getBoundingClientRect();
-    const btnRect = modelEl.getBoundingClientRect();
+    const btnRect = modelBtnEl.getBoundingClientRect();
     const menuWidth = 220;
-    let left = btnRect.right - wrapRect.left - menuWidth;
+    // Am linken Rand des Buttons ausgerichtet (nicht am rechten) — sitzt
+    // dadurch direkt über dem ausgewählten Modellnamen statt weiter links.
+    let left = btnRect.left - wrapRect.left;
     left = Math.max(0, Math.min(left, wrapRect.width - menuWidth));
     modelMenuEl.style.left = left + 'px';
   }
