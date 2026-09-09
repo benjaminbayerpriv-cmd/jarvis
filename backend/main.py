@@ -10,13 +10,13 @@ import time
 from pathlib import Path
 
 import requests
-from fastapi import FastAPI, File, Response, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, File, HTTPException, Response, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import browser_agent, config, conversations, fillers, llm_client, memory, opencode_agent, panel, stt, transcript_log, tts, vector_memory
+from . import browser_agent, config, conversations, fillers, llm_client, memory, opencode_agent, panel, projects, stt, transcript_log, tts, vector_memory
 
 app = FastAPI(title="Jarvis")
 app.add_middleware(
@@ -135,6 +135,12 @@ class CancelRequest(BaseModel):
 
 class SelectModelRequest(BaseModel):
     model: str
+
+
+class CreateProjectRequest(BaseModel):
+    name: str
+    description: str = ""
+    tag: str = ""
 
 
 class ChatResponse(BaseModel):
@@ -425,6 +431,24 @@ def get_conversation(conv_id: str):
     """Full turn list for one conversation, fetched when the sidebar list
     entry is clicked so it can be loaded back into the chat panel."""
     return {"turns": conversations.load_turns(conv_id)}
+
+
+@app.get("/projects")
+def get_projects():
+    return {"projects": projects.list_projects()}
+
+
+@app.post("/projects")
+def create_project(req: CreateProjectRequest):
+    if not req.name.strip():
+        raise HTTPException(status_code=422, detail="name darf nicht leer sein")
+    return projects.create(req.name, req.description, req.tag)
+
+
+@app.delete("/projects/{project_id}")
+def delete_project(project_id: str):
+    projects.delete(project_id)
+    return {"ok": True}
 
 
 @app.get("/models")
