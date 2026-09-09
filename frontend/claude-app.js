@@ -58,7 +58,25 @@
   //    eingefügt (PDFs/Audio landen ehrlich als "kann ich nicht lesen"
   //    statt stillschweigend Datenmüll in den Prompt zu kippen).
   const ATTACH_MAX_CHARS = 20000;
-  let pendingImages = [];  // Data-URLs der aktuell angehängten Bilder, siehe sendMessage
+  let pendingImages = [];  // {name, image: Data-URL} der aktuell angehängten Bilder, siehe sendMessage
+  function renderAttachPreviews() {
+    if (!attachPreviewEl) return;
+    if (!pendingImages.length) { attachPreviewEl.style.display = 'none'; attachPreviewEl.innerHTML = ''; return; }
+    attachPreviewEl.style.display = 'flex';
+    attachPreviewEl.innerHTML = pendingImages.map((att, i) => `
+      <div style="position:relative;width:56px;height:56px;flex:0 0 auto;">
+        <img src="${att.image}" title="${att.name.replace(/"/g, '&quot;')}" style="width:100%;height:100%;object-fit:cover;border-radius:10px;border:1px solid ${C.border};" />
+        <button class="js-attach-remove" data-idx="${i}" title="Entfernen" style="position:absolute;top:-6px;right:-6px;width:18px;height:18px;border-radius:50%;background:${C.bgSoft};border:1px solid ${C.border};color:${C.textSoft};cursor:pointer;font-size:11px;line-height:1;display:flex;align-items:center;justify-content:center;padding:0;">×</button>
+      </div>
+    `).join('');
+    attachPreviewEl.querySelectorAll('.js-attach-remove').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.preventDefault(); e.stopPropagation();
+        pendingImages.splice(Number(btn.dataset.idx), 1);
+        renderAttachPreviews();
+      });
+    });
+  }
   function looksBinary(text) {
     // NUL-Bytes oder ein hoher Anteil des Unicode-Replacement-Zeichens
     // deuten auf eine Datei hin, die keine echte Textdatei ist (PDF,
@@ -272,6 +290,7 @@
   let uiEl = null, sidebarEl = null, chatListEl = null, chatRootEl = null, threadEl = null;
   let composerTray = null, composerInput = null, sendBtn = null, speechBtn = null, noteBtn = null;
   let uploadBtn = null, settingsBtn = null, modelEl = null, modelMenuEl = null, fileInput = null;
+  let attachPreviewEl = null;
   let speechBarEl = null, spMuteBtn = null, spStopBtn = null, spSendBtn = null, spChatBtn = null;
   let speechCaptionEl = null, spcStatusEl = null, spcUserEl = null, spcReplyEl = null;
   let settingsSheetEl = null, settingsModelsEl = null;
@@ -356,6 +375,7 @@
       <div class="js-composer" style="position:absolute;left:308px;right:0;bottom:0;padding:0 24px 22px;background:linear-gradient(transparent,${C.bg} 55%);">
         <div style="max-width:760px;margin:0 auto;">
           <div style="background:${C.bgSoft};border:1px solid ${C.border};border-radius:18px;box-shadow:0 10px 34px rgba(0,0,0,.38);">
+            <div class="js-attach-preview" style="display:none;gap:8px;padding:12px 16px 0;flex-wrap:wrap;"></div>
             <div class="js-editor" contenteditable="true" data-placeholder="Describe a task or ask a question" style="min-height:60px;max-height:200px;overflow-y:auto;padding:16px;color:${C.text};font-size:15px;line-height:1.5;outline:none;white-space:pre-wrap;word-break:break-word;"></div>
             <div style="display:flex;align-items:center;gap:8px;padding:6px 10px 10px;">
               <button class="js-upload" title="Attach files" style="width:34px;height:34px;border-radius:9px;background:none;border:none;color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;transition:background .15s;">${ICONS.paperclip}</button>
@@ -437,6 +457,7 @@
     speechBtn = $('.js-speech', uiEl);
     noteBtn = $('.js-note', uiEl);
     uploadBtn = $('.js-upload', uiEl);
+    attachPreviewEl = $('.js-attach-preview', uiEl);
     settingsBtn = $('.js-settings', uiEl);
     modelEl = $('.js-model-label', uiEl);
     modelMenuEl = $('.js-modelmenu', uiEl);
@@ -639,7 +660,8 @@
       fileInput.value = '';
       if (!files.length) return;
       const results = await Promise.all(files.map(readAttachedFile));
-      for (const r of results) if (r.image) pendingImages.push(r.image);
+      results.forEach((r, i) => { if (r.image) pendingImages.push({ name: files[i].name, image: r.image }); });
+      renderAttachPreviews();
       const base = (composerInput ? composerInput.innerText : '').trim();
       const attach = results.map((r) => r.text).join('\n\n');
       if (composerInput) { composerInput.innerText = base ? base + '\n\n' + attach : attach; composerInput.classList.remove('is-empty'); if (sendBtn) sendBtn.disabled = false; }
@@ -704,8 +726,9 @@
     // Sofort abgreifen und leeren: ein Bild, das während dieses laufenden
     // Requests noch angehängt wird, gehört zum NÄCHSTEN Turn, nicht zu
     // diesem hier.
-    const imagesForThisTurn = pendingImages;
+    const imagesForThisTurn = pendingImages.map((att) => att.image);
     pendingImages = [];
+    renderAttachPreviews();
     if (composerInput) { composerInput.innerText = ''; composerInput.classList.remove('is-empty'); }
     showThread();
     progressHostEl = null; // neue Runde eigener Fortschrittsblöcke
