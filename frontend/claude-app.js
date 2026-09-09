@@ -2056,6 +2056,11 @@
     const delta = cx - window.innerWidth / 2;
     const inner = speechBarEl.firstElementChild;
     if (inner) inner.style.transform = 'translateX(' + delta + 'px)';
+    // Gleicher Versatz für die Untertitel-Box darüber — sonst bleibt sie auf
+    // dem vollen Fenster zentriert, während die Bedienleiste (oben) schon
+    // korrekt über dem Chat-Bereich sitzt, und beide laufen auseinander.
+    const capInner = speechCaptionEl ? speechCaptionEl.firstElementChild : null;
+    if (capInner) capInner.style.transform = 'translateX(' + delta + 'px)';
   }
 
   function enterSpeech() {
@@ -2313,7 +2318,13 @@
       aside.style.display = open ? 'none' : 'flex';
       const comp = $('.js-composer', uiEl);
       if (comp) comp.style.left = open ? '0' : '308px';
-      if (orbCanvas) orbCanvas.style.left = open ? '0' : '308px';
+      // orbCanvas selbst bleibt IMMER auf voller Bildschirmbreite (left:0,
+      // inset:0 aus buildUi) — drawOrb() zentriert die Kugel schon selbst
+      // über chatRootEl.getBoundingClientRect() (Viewport-Koordinaten).
+      // Das Canvas hier zusätzlich zu verschieben (frühere Version) machte
+      // die eigene Box schmaler als 100vw + links versetzt, wodurch die auf
+      // Viewport-Koordinaten gezeichnete Kugel bei geöffneter Sidebar 308px
+      // zu weit rechts landete, sobald einmal umgeschaltet wurde.
       layoutSpeechBar();
     });
     window.addEventListener('resize', layoutSpeechBar);
