@@ -285,6 +285,10 @@ def _user_content(user_message: str, images: list[str] | None):
     LM Studio's own request handling."""
     if not images:
         return user_message
+    for img in images:
+        header = img[:32] if isinstance(img, str) else "<non-string>"
+        size = len(img) if isinstance(img, str) else 0
+        print(f"[vision] Bild angehängt: {size} Zeichen, Header: {header!r}")
     content = [{"type": "text", "text": user_message}]
     content.extend({"type": "image_url", "image_url": {"url": img}} for img in images)
     return content
