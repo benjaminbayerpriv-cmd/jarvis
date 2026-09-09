@@ -40,11 +40,133 @@
     settings: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915"/><circle cx="12" cy="12" r="3"/></svg>',
     paperclip: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m16 6-8.414 8.586a2 2 0 0 0 2.829 2.829l8.414-8.586a4 4 0 1 0-5.657-5.657l-8.379 8.551a6 6 0 1 0 8.485 8.485l8.379-8.551"/></svg>',
     stop: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect width="18" height="18" x="3" y="3" rx="4" fill="currentColor"/></svg>',
+    close: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>',
     volume: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 4.702a.705.705 0 0 0-1.203-.498L6.413 7.587A1.4 1.4 0 0 1 5.416 8H3a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2.416a1.4 1.4 0 0 1 .997.413l3.383 3.384A.705.705 0 0 0 11 19.298z"/><path d="M16 9a5 5 0 0 1 0 6"/><path d="M19.364 18.364a9 9 0 0 0 0-12.728"/></svg>',
     muted: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 4.702a.7.7 0 0 0-1.203-.498L6.413 7.587A1.4 1.4 0 0 1 5.416 8H3a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2.416a1.4 1.4 0 0 1 .997.413l3.383 3.384A.7.7 0 0 0 11 19.298z"/><path d="m16.5 14.5 5-5"/><path d="m16.5 9.5 5 5"/></svg>',
   };
 
   // ---------------------------------------------------------------- helfer
+  // Datei-Anhang: liest den Inhalt der Datei clientseitig, statt nur
+  // "📎 dateiname.txt" als reinen Text in den Composer zu schreiben und die
+  // Datei selbst zu verwerfen (der alte Zustand — es gibt auch keinen
+  // generischen Upload-Endpoint im Backend). Zwei Fälle:
+  //  - Bilder gehen, wenn das AKTUELLE Modell laut LM Studio ein "vlm" ist
+  //    (siehe llm_client.list_model_capabilities), als Data-URL direkt mit
+  //    ins Chat-Request (images[], siehe sendMessage) — das Modell sieht
+  //    das Bild wirklich, nicht nur einen Dateinamen.
+  //  - Alles andere wird als Text gelesen und inline in die Nachricht
+  //    eingefügt (PDFs/Audio landen ehrlich als "kann ich nicht lesen"
+  //    statt stillschweigend Datenmüll in den Prompt zu kippen).
+  const ATTACH_MAX_CHARS = 20000;
+  let pendingImages = [];  // {name, image: Data-URL} der aktuell angehängten Bilder, siehe sendMessage
+  function renderAttachPreviews() {
+    if (!attachPreviewEl) return;
+    if (!pendingImages.length) { attachPreviewEl.style.display = 'none'; attachPreviewEl.innerHTML = ''; return; }
+    attachPreviewEl.style.display = 'flex';
+    attachPreviewEl.innerHTML = pendingImages.map((att, i) => `
+      <div style="position:relative;width:56px;height:56px;flex:0 0 auto;">
+        <img src="${att.image}" title="${att.name.replace(/"/g, '&quot;')}" style="width:100%;height:100%;object-fit:cover;border-radius:10px;border:1px solid ${C.border};" />
+        <button class="js-attach-remove" data-idx="${i}" title="Entfernen" style="position:absolute;top:-6px;right:-6px;width:18px;height:18px;border-radius:50%;background:${C.bgSoft};border:1px solid ${C.border};color:${C.textSoft};cursor:pointer;font-size:11px;line-height:1;display:flex;align-items:center;justify-content:center;padding:0;">×</button>
+      </div>
+    `).join('');
+    attachPreviewEl.querySelectorAll('.js-attach-remove').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.preventDefault(); e.stopPropagation();
+        pendingImages.splice(Number(btn.dataset.idx), 1);
+        renderAttachPreviews();
+      });
+    });
+  }
+  function looksBinary(text) {
+    // NUL-Bytes oder ein hoher Anteil des Unicode-Replacement-Zeichens
+    // deuten auf eine Datei hin, die keine echte Textdatei ist (PDF,
+    // Audio, …) — FileReader.readAsText() wirft dafür keinen Fehler,
+    // sondern liefert einfach unlesbaren Müll zurück.
+    if (text.indexOf('\x00') !== -1) return true;
+    let bad = 0;
+    for (let i = 0; i < text.length && i < 2000; i++) if (text[i] === '�') bad++;
+    return bad > 20;
+  }
+  function readFileAsText(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ''));
+      reader.onerror = () => reject(reader.error);
+      reader.readAsText(file);
+    });
+  }
+  function readFileAsDataURL(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ''));
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(file);
+    });
+  }
+  const IMAGE_MAX_DIM = 1568;  // matches the encoder's own downscale point — no benefit past this
+  // Real phone photos (progressive/CMYK JPEGs, odd chroma subsampling, EXIF
+  // orientation) can silently fail to decode in LM Studio's image pipeline —
+  // the model then answers as if no image was ever attached at all, with no
+  // error anywhere. A synthetic canvas-drawn PNG never hit this because
+  // toBlob() only ever emits a plain baseline image. Routing every real
+  // photo through the same canvas re-encode (which also applies EXIF
+  // rotation automatically via createImageBitmap) normalizes it the same
+  // way and fixed real-world photos that were failing.
+  async function normalizeImageFile(file) {
+    const bitmap = await createImageBitmap(file, { imageOrientation: 'from-image' });
+    let { width, height } = bitmap;
+    if (width > IMAGE_MAX_DIM || height > IMAGE_MAX_DIM) {
+      const scale = IMAGE_MAX_DIM / Math.max(width, height);
+      width = Math.round(width * scale);
+      height = Math.round(height * scale);
+    }
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    canvas.getContext('2d').drawImage(bitmap, 0, 0, width, height);
+    bitmap.close();
+    return new Promise((resolve, reject) => {
+      canvas.toBlob(blob => {
+        if (!blob) { reject(new Error('toBlob failed')); return; }
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result || ''));
+        reader.onerror = () => reject(reader.error);
+        reader.readAsDataURL(blob);
+      }, 'image/jpeg', 0.9);
+    });
+  }
+  async function readAttachedFile(file) {
+    if (file.type && file.type.startsWith('image/')) {
+      if (!currentModelSupportsVision) {
+        return { text: `📎 ${file.name}: das aktuelle Modell kann keine Bilder lesen — wechsle oben im Modell-Menü zu einem vision-fähigen Modell (z. B. gemma-4-e4b, qwen3.5-9b/3.8-27b, devstral).`, image: null };
+      }
+      try {
+        let image;
+        try {
+          image = await normalizeImageFile(file);
+        } catch (e) {
+          image = await readFileAsDataURL(file);
+        }
+        return { text: `📎 ${file.name} (Bild angehängt)`, image };
+      } catch (e) {
+        return { text: `📎 ${file.name}: konnte nicht gelesen werden.`, image: null };
+      }
+    }
+    let text;
+    try {
+      text = await readFileAsText(file);
+    } catch (e) {
+      return { text: `📎 ${file.name}: konnte nicht gelesen werden.`, image: null };
+    }
+    if (looksBinary(text)) {
+      return { text: `📎 ${file.name}: Inhalt kann nicht als Text gelesen werden (PDF/Binärdatei) — nur Text- und Bilddateien werden derzeit unterstützt.`, image: null };
+    }
+    let truncated = false;
+    if (text.length > ATTACH_MAX_CHARS) { text = text.slice(0, ATTACH_MAX_CHARS); truncated = true; }
+    const note = truncated ? ` (gekürzt auf ${ATTACH_MAX_CHARS} Zeichen)` : '';
+    return { text: `📎 ${file.name}${note}:\n\`\`\`\n${text}\n\`\`\``, image: null };
+  }
+
   function base64ToBlob(base64, mime) {
     const bytes = atob(base64);
     const arr = new Uint8Array(bytes.length);
@@ -135,6 +257,9 @@
     audioDraining = false;
     // nach der Ausgabe wieder in den Bereit-Zustand, wenn noch im Sprachmodus
     if (speechMode && !busy) setSpeechStatus('Bereit');
+    // Erst jetzt ist die Antwort wirklich zu Ende — wieder hinhören, sonst
+    // würde die Erkennung Jarvis' eigene Stimme aufgreifen (Echo).
+    resumeListening();
   }
 
   // Stop-Button: unterbricht die laufende Antwort UND die Sprachausgabe.
@@ -152,21 +277,7 @@
     if (busy) setBusy(false);
     if (currentTurnId) { fetch('/chat/cancel', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ turn_id: currentTurnId }) }).catch(() => {}); }
     if (speechMode && !busy) setSpeechStatus('Bereit');
-  }
-
-  function encodeWav(samples, sampleRate) {
-    sampleRate = sampleRate || 16000;
-    const buffer = new ArrayBuffer(44 + samples.length * 2);
-    const view = new DataView(buffer);
-    const ws = (off, str) => { for (let i = 0; i < str.length; i++) view.setUint8(off + i, str.charCodeAt(i)); };
-    ws(0, 'RIFF'); view.setUint32(4, 36 + samples.length * 2, true); ws(8, 'WAVE'); ws(12, 'fmt ');
-    view.setUint32(16, 16, true); view.setUint16(20, 1, true); view.setUint16(22, 1, true);
-    view.setUint32(24, sampleRate, true); view.setUint32(28, sampleRate * 2, true);
-    view.setUint16(32, 2, true); view.setUint16(34, 16, true); ws(36, 'data');
-    view.setUint32(40, samples.length * 2, true);
-    let off = 44;
-    for (let i = 0; i < samples.length; i++, off += 2) view.setInt16(off, Math.max(-1, Math.min(1, samples[i])) * 0x7fff, true);
-    return new Blob([buffer], { type: 'audio/wav' });
+    resumeListening();
   }
 
   // ------------------------------------------------------------------ zustand
@@ -179,6 +290,7 @@
   let uiEl = null, sidebarEl = null, chatListEl = null, chatRootEl = null, threadEl = null;
   let composerTray = null, composerInput = null, sendBtn = null, speechBtn = null, noteBtn = null;
   let uploadBtn = null, settingsBtn = null, modelEl = null, modelMenuEl = null, fileInput = null;
+  let attachPreviewEl = null;
   let speechBarEl = null, spMuteBtn = null, spStopBtn = null, spSendBtn = null, spChatBtn = null;
   let speechCaptionEl = null, spcStatusEl = null, spcUserEl = null, spcReplyEl = null;
   let settingsSheetEl = null, settingsModelsEl = null;
@@ -191,12 +303,11 @@
   let codeModel = '', codeDefault = '', codeModels = [], codeMinContext = 24000, codeSessionActive = false;
   let codeActiveBubble = null, codeBubbleMd = '';
 
-  // Sprachmodus + VAD + Diktat
+  // Sprachmodus + VAD + Diktat + Web-Speech-Erkennung
   let speechMode = false, dictating = false, micReady = false, micStream = null, muted = false;
-  let pcmNode = null, pcmSampleRate = 0, pcmRing = [], utterancePCM = null, utteranceStartedAt = 0;
-  let utterancePeak = 0;   // Spitzenpegel der laufenden Äußerung — nur echte Stimme zählt
-  let silenceStreak = 0, vadAnalyser = null, vadData = null;
-  let vadNoiseFloor = 0.01;
+  let vadAnalyser = null, vadData = null, vadNoiseFloor = 0.01, vadAbove = 0;
+  const SpeechRecognitionImpl = window.SpeechRecognition || window.webkitSpeechRecognition;
+  let recognition = null;
 
   // Graues Punktnetz (Sprachmodus)
   let orbCtx = null, orbCanvas = null, orbLevel = 0, orbRaf = 0, orbVisible = false;
@@ -291,6 +402,7 @@
       <div class="js-composer" style="position:absolute;left:308px;right:0;bottom:0;padding:0 24px 22px;background:linear-gradient(transparent,${C.bg} 55%);">
         <div style="max-width:760px;margin:0 auto;">
           <div style="background:${C.bgSoft};border:1px solid ${C.border};border-radius:18px;box-shadow:0 10px 34px rgba(0,0,0,.38);">
+            <div class="js-attach-preview" style="display:none;gap:8px;padding:12px 16px 0;flex-wrap:wrap;"></div>
             <div class="js-editor" contenteditable="true" data-placeholder="Describe a task or ask a question" style="min-height:60px;max-height:200px;overflow-y:auto;padding:16px;color:${C.text};font-size:15px;line-height:1.5;outline:none;white-space:pre-wrap;word-break:break-word;"></div>
             <div style="display:flex;align-items:center;gap:8px;padding:6px 10px 10px;">
               <button class="js-upload" title="Attach files" style="width:34px;height:34px;border-radius:9px;background:none;border:none;color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;transition:background .15s;">${ICONS.paperclip}</button>
@@ -320,7 +432,7 @@
         <button class="js-sp-mute" title="Mikrofon aus" style="width:44px;height:44px;border-radius:14px;background:${C.bgHover};border:1px solid ${C.border};color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;">${ICONS.mic}</button>
         <button class="js-sp-stop" title="Stopp" style="width:44px;height:44px;border-radius:14px;background:${C.bgHover};border:1px solid ${C.border};color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;">${ICONS.stop}</button>
         <button class="js-sp-send" title="Senden" style="width:44px;height:44px;border-radius:14px;background:${C.bgHover};border:1px solid ${C.border};color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;">${ICONS.send}</button>
-        <button class="js-sp-chat" title="Chat-Modus" style="width:44px;height:44px;border-radius:14px;background:${C.bgHover};border:1px solid ${C.border};color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;">${ICONS.chat}</button>
+        <button class="js-sp-chat" title="Chat-Modus" style="width:44px;height:44px;border-radius:14px;background:${C.bgHover};border:1px solid ${C.border};color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;">${ICONS.close}</button>
       </div>
     `;
     document.body.appendChild(speechBarEl);
@@ -379,6 +491,7 @@
     speechBtn = $('.js-speech', uiEl);
     noteBtn = $('.js-note', uiEl);
     uploadBtn = $('.js-upload', uiEl);
+    attachPreviewEl = $('.js-attach-preview', uiEl);
     settingsBtn = $('.js-settings', uiEl);
     modelEl = $('.js-model-label', uiEl);
     modelMenuEl = $('.js-modelmenu', uiEl);
@@ -594,22 +707,25 @@
     window.addEventListener('click', () => { if (modelMenuEl) modelMenuEl.style.display = 'none'; });
 
     // Sprachmodus-Bottom-Leiste
-    if (spMuteBtn) spMuteBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); muted = !muted; updateMuteIcon(); });
-    if (spStopBtn) spStopBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); cancelRecording(); silenceStreak = 0; stopSpeech(); });
-    if (spSendBtn) spSendBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); stopRecording(); });
+    if (spMuteBtn) spMuteBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); muted = !muted; updateMuteIcon(); if (muted) stopListening(); else startListening(); });
+    if (spStopBtn) spStopBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); stopSpeech(); });
+    if (spSendBtn) spSendBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); const t = composerInput ? composerInput.innerText.trim() : ''; if (t) sendMessage(t); });
     if (spChatBtn) spChatBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); exitSpeech(); });
 
     fileInput = document.createElement('input');
     fileInput.type = 'file';
     fileInput.multiple = true;
     fileInput.style.display = 'none';
-    fileInput.addEventListener('change', () => {
-      const names = fileInput.files ? [...fileInput.files].map((f) => f.name) : [];
+    fileInput.addEventListener('change', async () => {
+      const files = fileInput.files ? [...fileInput.files] : [];
       fileInput.value = '';
-      if (!names.length) return;
+      if (!files.length) return;
+      const results = await Promise.all(files.map(readAttachedFile));
+      results.forEach((r, i) => { if (r.image) pendingImages.push({ name: files[i].name, image: r.image }); });
+      renderAttachPreviews();
       const base = (composerInput ? composerInput.innerText : '').trim();
-      const attach = '📎 ' + names.join(', ');
-      if (composerInput) { composerInput.innerText = base ? base + '\n' + attach : attach; composerInput.classList.remove('is-empty'); if (sendBtn) sendBtn.disabled = false; }
+      const attach = results.map((r) => r.text).join('\n\n');
+      if (composerInput) { composerInput.innerText = base ? base + '\n\n' + attach : attach; composerInput.classList.remove('is-empty'); if (sendBtn) sendBtn.disabled = false; }
     });
     document.body.appendChild(fileInput);
 
@@ -668,6 +784,12 @@
   async function sendMessage(text) {
     text = (text || '').trim();
     if (!text || busy) return;
+    // Sofort abgreifen und leeren: ein Bild, das während dieses laufenden
+    // Requests noch angehängt wird, gehört zum NÄCHSTEN Turn, nicht zu
+    // diesem hier.
+    const imagesForThisTurn = pendingImages.map((att) => att.image);
+    pendingImages = [];
+    renderAttachPreviews();
     if (composerInput) { composerInput.innerText = ''; composerInput.classList.remove('is-empty'); }
     showThread();
     progressHostEl = null; // neue Runde eigener Fortschrittsblöcke
@@ -676,6 +798,7 @@
     said.classList.add('thinking');
     said.textContent = '';
     setBusy(true);
+    stopListening();   // während Jarvis antwortet nicht mithören (Echo-Schutz)
     noteSpeechReply('');
     setSpeechStatus('Denke');
 
@@ -690,7 +813,7 @@
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         signal: abortController.signal,
-        body: JSON.stringify({ message: text, history, turn_id: currentTurnId, mode: activeMode, conversation_id: ensureConversationId() }),
+        body: JSON.stringify({ message: text, history, turn_id: currentTurnId, mode: activeMode, conversation_id: ensureConversationId(), images: imagesForThisTurn }),
       });
       if (!resp.ok) throw new Error('HTTP ' + resp.status);
       const reader = resp.body.getReader();
@@ -737,6 +860,7 @@
       // abgebrochen: keine Historie, Status zurück in den Bereit-Zustand
       turnAborted = false;
       setBusy(false);
+      resumeListening();
       if (speechMode) setSpeechStatus('Bereit');
       return;
     }
@@ -746,6 +870,9 @@
       if (history.length > 40) history = history.slice(-40);
     }
     setBusy(false);
+    // Ohne Sprachausgabe (Text-/Diktatmodus) sofort wieder zuhören; im
+    // Sprachmodus übernimmt drainAudioQueue das nach dem letzten Clip.
+    if (!audioDraining && !audioQueue.length) resumeListening();
     loadConversationList();
     setTimeout(loadConversationList, 2500);
   }
@@ -900,6 +1027,20 @@
   }
 
   // ---------------------------------------------------------------- modelle
+  // Bild-Anhänge (siehe readAttachedFile) brauchen ein vision-fähiges Modell
+  // ("vlm" laut LM Studios eigener Klassifikation, siehe
+  // llm_client.list_model_capabilities) — modelCapsMap merkt sich das pro
+  // Modell-Id, currentModelSupportsVision spiegelt das gerade aktive.
+  let modelCapsMap = {};
+  let currentModelSupportsVision = false;
+  function applyModelCaps(j) {
+    modelCapsMap = j.model_caps || {};
+    currentModelSupportsVision = (j.current_caps || []).includes('vision');
+  }
+  function selectModelCaps(id) {
+    currentModelSupportsVision = (modelCapsMap[id] || []).includes('vision');
+  }
+
   async function toggleModelMenu() {
     if (!modelMenuEl) return;
     const open = modelMenuEl.style.display !== 'none';
@@ -909,6 +1050,7 @@
       const r = await fetch('/models');
       const j = await r.json();
       models = (j.models || []).map((m) => ({ id: m }));
+      applyModelCaps(j);
       if (j.current) setModelLabel(j.current);
     } catch (e) { models = []; }
     modelMenuEl.innerHTML = '';
@@ -928,6 +1070,7 @@
           e.stopPropagation();
           modelMenuEl.style.display = 'none';
           setModelLabel(m.id);
+          selectModelCaps(m.id);
           try { await fetch('/models/select', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: m.id }) }); } catch (e2) {}
         });
         modelMenuEl.appendChild(b);
@@ -1252,6 +1395,7 @@
           const r = await fetch('/models');
           const j = await r.json();
           models = j.models || [];
+          applyModelCaps(j);
           if (j.current) setModelLabel(j.current);
         } catch (e) { models = []; }
         if (!models.length) {
@@ -1269,6 +1413,7 @@
           b.onmouseleave = () => { b.style.background = 'none'; };
           b.addEventListener('click', () => {
             setModelLabel(m);
+            selectModelCaps(m);
             try { fetch('/models/select', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: m }) }); } catch (e2) {}
           });
           settingsModelsEl.appendChild(b);
@@ -1292,12 +1437,15 @@
     return 0;
   }
 
+  // Der Mikrofon-Stream versorgt nur noch den VAD (Orb-Pulsation + Barge-in).
+  // Echo-Unterdrückung ist hier Pflicht: Die Web-Speech-Erkennung läuft im
+  // Sprachmodus kontinuierlich und würde Jarvis' eigene Antwort mitschreiben,
+  // wenn der Stream nicht gegengekoppelt wäre.
   async function ensureMic() {
     if (micReady) return micStream;
-    micStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: !/Mac/i.test(navigator.platform), noiseSuppression: true, autoGainControl: true } });
+    micStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
     micReady = true;
     setupVad(micStream);
-    startContinuousRecording();
     return micStream;
   }
   function setupVad(stream) {
@@ -1309,63 +1457,6 @@
     vadData = new Uint8Array(vadAnalyser.frequencyBinCount);
     setInterval(vadTick, 80);
   }
-  function startContinuousRecording() {
-    if (pcmNode || !micStream) return;
-    const ctx = ensureCtx();
-    pcmNode = ctx.createScriptProcessor(4096, 1, 1);
-    pcmSampleRate = ctx.sampleRate;
-    const gain = ctx.createGain();
-    gain.gain.value = 0;
-    pcmNode.connect(gain);
-    gain.connect(ctx.destination);
-    const src = ctx.createMediaStreamSource(micStream);
-    src.connect(pcmNode);
-    pcmNode.onaudioprocess = (e) => {
-      const data = new Float32Array(e.inputBuffer.getChannelData(0));
-      if (utterancePCM) utterancePCM.push(data);
-      else { pcmRing.push(data); if (pcmRing.length > 9) pcmRing.shift(); }
-    };
-  }
-  function beginUtterance() {
-    utterancePCM = pcmRing.slice();
-    utteranceStartedAt = Date.now();
-    utterancePeak = 0;
-    lastLiveStt = '';
-    lastSttLen = 0;   // Live-STT-Mindestpuffer neu starten
-    dictBase = composerInput ? composerInput.innerText.trim() : '';
-    noteSpeechWords('…');
-    setSpeechStatus('Hören');
-  }
-  function stopRecording() {
-    const chunks = utterancePCM || [];
-    utterancePCM = null;
-    if (chunks.length) sendUtterance(concatFloat32(chunks), utteranceStartedAt);
-  }
-  function cancelRecording() { utterancePCM = null; pcmRing.length = 0; }
-  function concatFloat32(arrs) {
-    let len = 0; for (const a of arrs) len += a.length;
-    const out = new Float32Array(len); let o = 0;
-    for (const a of arrs) { out.set(a, o); o += a.length; }
-    return out;
-  }
-  async function sendUtterance(samples, startedAt) {
-    const blob = encodeWav(samples, pcmSampleRate);
-    const fd = new FormData(); fd.append('audio', blob, 'speech.wav');
-    let text = '';
-    try { const r = await fetch('/stt', { method: 'POST', body: fd }); const j = await r.json(); text = j.text || ''; }
-    catch (e) { text = ''; }
-    text = text.trim();
-    if (!text) return;
-    if (speechMode) { sendMessage(text); return; }
-    if (dictating && composerInput) {
-      // überschreibt den Live-Stand mit dem finalen Erkennungsergebnis —
-      // gleiche Basis, kein doppeltes Anhängen.
-      composerInput.innerText = dictBase ? dictBase + ' ' + text : text;
-      composerInput.classList.remove('is-empty');
-      if (sendBtn) sendBtn.disabled = false;
-    }
-  }
-
   // ------------------------------------------- Sprachmodus-Beschriftung
   function showSpeechCaption() {
     if (speechCaptionEl) speechCaptionEl.style.display = 'flex';
@@ -1383,82 +1474,92 @@
     if (spcReplyEl) { spcReplyEl.textContent = t || ''; spcReplyEl.style.minHeight = t ? '' : '0'; }
   }
 
-  // Live-Transkription: solange eine Sprachaufnahme läuft, wird der wachsende
-  // Puffer regelmäßig an /stt geschickt und die erkannten Wörter als Live-
-  // Beschriftung gezeigt. Weil die Erkennung auf der CPU läuft und das Backend
-  // /stt über einen einzigen Lock serialisiert, wird nur gesendet, wenn der
-  // vorherige Aufruf fertig ist (sttBusy) UND seit dem letzten Mal ~0,5 s
-  // neues Audio dazukam — so verstopfen Live-Partials den Lock nicht mehr.
-  let liveSttTimer = null, lastLiveStt = '', sttBusy = false, lastSttLen = 0;
-  function startLiveStt() {
-    if (liveSttTimer) return;
-    liveSttTimer = setInterval(async () => {
-      if (sttBusy) return;                                   // noch ein /stt offen
-      if ((!speechMode && !dictating) || !utterancePCM || !utterancePCM.length) return;
-      if (lastSttLen && utterancePCM.length - lastSttLen < pcmSampleRate * 0.5) return; // genug Neues
-      sttBusy = true;
-      lastSttLen = utterancePCM.length;
-      try {
-        const blob = encodeWav(concatFloat32(utterancePCM), pcmSampleRate);
-        const fd = new FormData(); fd.append('audio', blob, 'speech.wav');
-        const r = await fetch('/stt', { method: 'POST', body: fd });
-        const j = await r.json();
-        const t = (j.text || '').trim();
-        if (t && t !== lastLiveStt) {
-          lastLiveStt = t;
-          // Sprachmodus: Live-Wörter in der Beschriftung anzeigen.
-          noteSpeechWords(t);
-          // Diktat: Live-Wörter DIREKT ins Eingabefeld schreiben. Idempotent:
-          // immer dieselbe Basis + der jeweils erkannte Stand, damit nichts
-          // doppelt landet (kein Anhängen an den eigenen vorherigen Stand).
-          if (dictating && composerInput) {
-            composerInput.innerText = dictBase ? dictBase + ' ' + t : t;
-            composerInput.classList.remove('is-empty');
-            if (sendBtn) sendBtn.disabled = false;
-          }
-        }
-      } catch (e) { /* STT darf nie laufen stören */ }
-      finally { sttBusy = false; }
-    }, 1600);
+  // ------------------------------------------- Web-Speech-Erkennung
+  // Zurück zur alten, eingebauten Browser-Erkennung statt lokalem Whisper:
+  // Chrome transkribiert selbst (de-DE, kontinuierlich, Zwischenergebnisse),
+  // das Backend /stt wird nicht mehr angerufen. Chrome stoppt die Erkennung
+  // nach Stille von selbst — onend startet sie neu, solange wir noch zuhören
+  // sollen (Sprachmodus/Diktat aktiv, nicht stumm, nicht mitten in einer
+  // Antwort).
+  function initRecognition() {
+    if (!SpeechRecognitionImpl) {
+      if (speechBtn) speechBtn.title = 'Spracherkennung braucht Chrome';
+      return null;
+    }
+    const rec = new SpeechRecognitionImpl();
+    rec.lang = 'de-DE';
+    rec.continuous = true;
+    rec.interimResults = true;
+
+    rec.onstart = () => { if (speechMode && !busy) setSpeechStatus('Hören'); };
+
+    rec.onresult = (event) => {
+      let text = '';
+      for (let i = event.resultIndex; i < event.results.length; i++) text += event.results[i][0].transcript;
+      text = text.trim();
+      if (!text) return;
+      const final = event.results[event.results.length - 1].isFinal;
+
+      if (speechMode) {
+        noteSpeechWords(text);
+        if (final) { setSpeechStatus('Denke'); sendMessage(text); }
+      } else if (dictating && composerInput) {
+        // Diktat: Zwischenergebnisse live ins Eingabefeld, aufbauend auf dem
+        // gesicherten Stand (dictBase); abgeschlossene Segmente rücken auf.
+        if (dictBase === null) dictBase = composerInput ? composerInput.innerText.trim() : '';
+        const composed = dictBase ? dictBase + ' ' + text : text;
+        composerInput.innerText = composed;
+        composerInput.classList.remove('is-empty');
+        if (sendBtn) sendBtn.disabled = false;
+        if (final) dictBase = composed;
+      }
+    };
+
+    rec.onerror = (event) => {
+      if (event.error === 'no-speech' || event.error === 'aborted') return;
+      if (event.error === 'not-allowed') micReady = false;
+    };
+
+    // Chrome beendet die Erkennung nach Stille auch bei continuous=true —
+    // wiederholen, außer es ist gerade nicht gewünscht.
+    rec.onend = () => {
+      if (!muted && !busy && (speechMode || dictating) && micReady) setTimeout(startListening, 250);
+    };
+
+    return rec;
   }
-  function stopLiveStt() {
-    if (liveSttTimer) { clearInterval(liveSttTimer); liveSttTimer = null; }
-    lastLiveStt = '';
-    noteSpeechWords('…');
+
+  function startListening() {
+    if (!recognition || muted || busy || !(speechMode || dictating)) return;
+    try { recognition.start(); } catch (_) {}
+  }
+  function stopListening() {
+    if (recognition) { try { recognition.stop(); } catch (_) {} }
+  }
+  function resumeListening() {
+    if (!muted && micReady && (speechMode || dictating)) startListening();
   }
 
   function vadTick() {
-    if (!vadAnalyser || !vadData) return;
-    vadAnalyser.getByteTimeDomainData(vadData);
-    let sum = 0;
-    for (let i = 0; i < vadData.length; i++) { const v = (vadData[i] - 128) / 128; sum += v * v; }
-    const rms = Math.sqrt(sum / vadData.length);
-    const listening = (speechMode || dictating) && !muted && !busy;
-    vadNoiseFloor = vadNoiseFloor * 0.98 + rms * 0.02;
-    // Schwelle deutlich über dem Grundrauschen: reine Umgebungsgeräusche
-    // (Lüfter, Raum, Tastatur) dürfen keine "Äußerung" starten.
-    const thresh = Math.max(vadNoiseFloor * 3.2, 0.04);
-    const above = rms > thresh;
-    if (above && !utterancePCM) { if (listening) beginUtterance(); }
-    if (utterancePCM) {
-      // Spitzenpegel über die ganze Aufnahme — nur echte Stimme (deutlich über
-      // dem Bodenrauschen) zählt als hörbare Antwort.
-      utterancePeak = Math.max(utterancePeak, rms);
-      if (above) { silenceStreak = 0; }
-      else {
-        // Auto-Send: nach ~640 ms Stille (8 Ticks à 80 ms) automatisch
-        // absenden, statt auf den Senden-Button zu warten. Notbremse: eine
-        // länger als 12 s laufende "Äußerung" wird ebenfalls abgeschickt,
-        // falls die Stille-Erkennung wegen Umgebungsgeräuschen nie greift.
-        silenceStreak++;
-        const voiceFloor = Math.max(vadNoiseFloor * 4, 0.05);
-        const hasVoice = utterancePeak > voiceFloor;
-        if (silenceStreak >= 8 || Date.now() - utteranceStartedAt > 12000) {
-          silenceStreak = 0;
-          // Nur echtes Gesprochenes absenden; reines Rauschen verwerfen.
-          if (hasVoice) stopRecording(); else cancelRecording();
-        }
-      }
+    if (!vadAnalyser || !vadData || muted) return;
+    const rms = rmsFrom(vadAnalyser, vadData);
+
+    if (!busy) {
+      vadNoiseFloor = vadNoiseFloor * 0.98 + rms * 0.02;
+      vadAbove = 0;
+      return;
+    }
+
+    // Barge-in: solange Jarvis antwortet, unterbricht eine anhaltende Stimme
+    // den Turn. Der Stream ist echo-kompensiert, also ist ein Pegel dort echte
+    // Person — Jarvis' eigene Ausgabe ist bereits abgezogen.
+    const threshold = Math.max(vadNoiseFloor * 2.4, 0.025);
+    vadAbove = rms > threshold ? vadAbove + 1 : 0;
+
+    if (vadAbove >= 3) {   // ~240 ms anhaltend
+      vadAbove = 0;
+      stopSpeech();
+      resumeListening();
     }
   }
 
@@ -1485,7 +1586,7 @@
       showOrb();
       showSpeechCaption();
       setSpeechStatus('Bereit');
-      startLiveStt();
+      startListening();
       if (composerTray) composerTray.style.display = 'none';
       if (chatRootEl) chatRootEl.classList.add('js-speech-active');
       if (speechBarEl) speechBarEl.style.display = 'flex';
@@ -1497,25 +1598,28 @@
   }
   function exitSpeech() {
     speechMode = false;
+    stopListening();
     hideOrb();
     hideSpeechCaption();
-    stopLiveStt();
-    cancelRecording();
+    noteSpeechWords('…');
     if (composerTray) composerTray.style.display = '';
     if (chatRootEl) chatRootEl.classList.remove('js-speech-active');
     if (speechBarEl) speechBarEl.style.display = 'none';
     if (speechBtn) speechBtn.classList.remove('on');
   }
 
-  // Diktat-Modus: transkribiert ins Eingabefeld. Live-Transkription läuft
-  // mit, damit die erkannten Wörter schon während des Sprechens erscheinen.
+  // Diktat-Modus: transkribiert ins Eingabefeld. Die Zwischenergebnisse der
+  // Web-Speech-Erkennung erscheinen live; fertige Segmente werden zur Basis
+  // für das nächste (dictBase).
   function setDictating(should) {
+    dictating = should;
     if (should && !micReady) {
       ensureMic().then(() => {
-        dictating = true;
+        if (!dictating) return;
         if (noteBtn) noteBtn.classList.add('on');
         if (noteBtn) noteBtn.title = 'Dictation off';
-        startLiveStt();
+        dictBase = null;
+        startListening();
       }).catch(() => {
         if (noteBtn) noteBtn.title = 'Microphone denied';
         dictating = false;
@@ -1525,7 +1629,7 @@
     dictating = should;
     if (noteBtn) noteBtn.classList.toggle('on', should);
     if (noteBtn) noteBtn.title = should ? 'Dictation off' : 'Dictate';
-    if (should) startLiveStt(); else stopLiveStt();
+    if (should) { dictBase = null; startListening(); } else stopListening();
   }
 
     // ------------------------------------------- 3D-Punktkugel (Sprachmodus)
@@ -1547,7 +1651,11 @@
 
   // Eine konstante Farbe für alle Zustände — die Status werden nur über die
   // BEWEGUNG erzählt (wie in der alten JARVIS-Kugel), nicht über Farbwechsel.
+  // Ausnahme: stummgeschaltet wird ausdrücklich grau eingefärbt, als klares
+  // visuelles Signal, dass das Mikrofon gerade nichts aufnimmt.
   const ORB_COLOR = C.accent;
+  const ORB_MUTED_COLOR = '#8c877c';
+  function currentOrbColor() { return muted ? ORB_MUTED_COLOR : ORB_COLOR; }
 
   // aktueller Orb-Zustand: jeder bekommt eine eigene Animation
   function orbStatus() {
@@ -1593,17 +1701,19 @@
     const cosY = Math.cos(orbRotY), sinY = Math.sin(orbRotY);
     const cosX = Math.cos(orbRotX), sinX = Math.sin(orbRotX);
 
-    // weicher Glow hinter der Kugel (eine Farbe, keine Status-Änderung)
+    // weicher Glow hinter der Kugel (eine Farbe, keine Status-Änderung —
+    // außer stummgeschaltet, siehe currentOrbColor())
+    const orbColor = currentOrbColor();
     const glow = orbCtx.createRadialGradient(cx, cy, 0, cx, cy, R * 1.5);
-    glow.addColorStop(0, ORB_COLOR + '22');
-    glow.addColorStop(1, ORB_COLOR + '00');
+    glow.addColorStop(0, orbColor + '22');
+    glow.addColorStop(1, orbColor + '00');
     orbCtx.globalAlpha = 0.5;
     orbCtx.fillStyle = glow;
     orbCtx.beginPath();
     orbCtx.arc(cx, cy, R * 1.5, 0, Math.PI * 2);
     orbCtx.fill();
 
-    orbCtx.fillStyle = ORB_COLOR;
+    orbCtx.fillStyle = orbColor;
     for (let i = 0; i < orbPoints.length; i++) {
       const p = orbPoints[i];
       const bx = p.x, by = p.y, bz = p.z;
@@ -1688,6 +1798,15 @@
   }
   function hideOrb() {
     orbVisible = false;
+    // orbRaf zurücksetzen, nicht nur orbVisible: orbLoop() bricht bei
+    // orbVisible=false einfach mit `return` ab, OHNE einen neuen Frame
+    // anzufordern — orbRaf behält dabei die alte (jetzt tote) Frame-ID.
+    // Ohne den Reset hier sieht showOrb()'s `if (!orbRaf)`-Check die ID
+    // fälschlich als "läuft noch" an und startet nie wieder einen neuen
+    // requestAnimationFrame-Loop — die Kugel bleibt dann beim nächsten
+    // Öffnen des Sprachmodus als eingefrorenes Standbild stehen (genau der
+    // gemeldete "Animation hängt sich beim Unterbrechen auf"-Fall).
+    if (orbRaf) { cancelAnimationFrame(orbRaf); orbRaf = 0; }
     // nicht nur die Animationsschleife stoppen, sondern den Canvas wirklich
     // ausblenden — sonst bleibt der letzte Frame als "Geister-Kugel" stehen.
     if (orbCanvas) { orbCanvas.style.display = 'none'; }
@@ -1698,6 +1817,7 @@
   function boot() {
     buildUi();
     setMode(activeMode); // Sidebar befüllen + aktive Konversation des Modus laden
+    recognition = initRecognition();
     document.title = 'Jarvis';
     orbCanvas = document.createElement('canvas');
     orbCanvas.id = 'jarvisOrb';
@@ -1715,7 +1835,7 @@
       layoutSpeechBar();
     });
     window.addEventListener('resize', layoutSpeechBar);
-    fetch('/models').then((r) => r.json()).then((j) => { if (j.current) setModelLabel(j.current); }).catch(() => {});
+    fetch('/models').then((r) => r.json()).then((j) => { applyModelCaps(j); if (j.current) setModelLabel(j.current); }).catch(() => {});
     openPanelSocket();
   }
 
