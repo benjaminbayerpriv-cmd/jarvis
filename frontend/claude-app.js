@@ -50,6 +50,8 @@
     dots: '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg>',
     chevronDown: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>',
     bullet: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="8" x2="21" y1="6" y2="6"/><line x1="8" x2="21" y1="12" y2="12"/><line x1="8" x2="21" y1="18" y2="18"/><line x1="3" x2="3.01" y1="6" y2="6"/><line x1="3" x2="3.01" y1="12" y2="12"/><line x1="3" x2="3.01" y1="18" y2="18"/></svg>',
+    arrowLeft: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></svg>',
+    arrowRight: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>',
   };
 
   // ---------------------------------------------------------------- helfer
@@ -323,6 +325,9 @@
   let pdEditorEl = null, pdUploadBtn = null, pdModelBtn = null, pdModelLabelEl = null;
   let pdNoteBtn = null, pdSpeechBtn = null, pdSendBtn = null, pdRecentEl = null;
   let viewingProjectId = null;
+  // Browser-artige Zurück/Vorwärts-Navigation über die "Seiten" der App
+  // (Chat-Konversation, Projekte-Grid, Projekt-Detail) — siehe navRecord/navGo.
+  let navStack = [], navPos = -1, navRestoring = false;
 
   // Sprachmodus + VAD + Diktat + Web-Speech-Erkennung
   let speechMode = false, dictating = false, micReady = false, micStream = null, muted = false;
@@ -378,10 +383,14 @@
     uiEl.id = 'jsApp';
     uiEl.style.cssText = `position:fixed;inset:0;z-index:30;display:flex;background:${C.bg};color:${C.text};font-family:${C.font};`;
     uiEl.innerHTML = `
-      <button class="js-side-toggle" title="Sidebar umschalten" style="position:absolute;top:18px;left:16px;z-index:31;background:none;border:none;color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;border-radius:8px;">${ICONS.menu}</button>
+      <div class="js-nav-row" style="position:absolute;top:14px;left:12px;z-index:31;display:flex;align-items:center;gap:2px;">
+        <button class="js-side-toggle" title="Sidebar umschalten" style="background:none;border:none;color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;border-radius:8px;">${ICONS.menu}</button>
+        <button class="js-nav-back" title="Zurück" disabled style="background:none;border:none;color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;border-radius:8px;">${ICONS.arrowLeft}</button>
+        <button class="js-nav-forward" title="Vorwärts" disabled style="background:none;border:none;color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;border-radius:8px;">${ICONS.arrowRight}</button>
+      </div>
       <aside class="js-sidebar" style="width:308px;flex:0 0 308px;height:100%;display:flex;flex-direction:column;background:${C.bgSoft};border-right:1px solid ${C.border};">
-        <div class="js-sidebar-top" style="padding:16px 12px 6px;display:flex;flex-direction:column;gap:12px;">
-          <div class="js-mode" style="display:flex;padding:3px;gap:3px;background:${C.bgHover};border:1px solid ${C.border};border-radius:11px;margin-left:44px;">
+        <div class="js-sidebar-top" style="padding:52px 12px 6px;display:flex;flex-direction:column;gap:12px;">
+          <div class="js-mode" style="display:flex;padding:3px;gap:3px;background:${C.bgHover};border:1px solid ${C.border};border-radius:11px;">
             <button class="js-pill active" data-mode="chat" style="flex:1;display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:7px 10px;border-radius:8px;border:none;background:transparent;color:${C.textSoft};font-size:13px;font-weight:500;cursor:pointer;transition:background .15s,color .15s;">${ICONS.chat}<span>Chat</span></button>
             <button class="js-pill" data-mode="code" title="Code mit JARVIS Code" style="flex:1;display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:7px 10px;border-radius:8px;border:none;background:transparent;color:${C.textSoft};font-size:13px;font-weight:500;cursor:pointer;transition:background .15s,color .15s;">${ICONS.code}<span>Code</span></button>
           </div>
@@ -642,6 +651,9 @@
       .js-editor:empty::before, .js-editor.is-empty::before { content:attr(data-placeholder); color:${C.textDim}; pointer-events:none; }
       .js-editor:focus::before { opacity:.7; }
       .js-side-toggle svg, .js-new svg, .js-projects svg, .js-upload svg, .js-note svg, .js-speech svg, .js-settings svg { width:16px; height:16px; display:block; }
+      .js-nav-back svg, .js-nav-forward svg { width:17px; height:17px; display:block; }
+      .js-nav-back:hover:not(:disabled), .js-nav-forward:hover:not(:disabled) { background:${C.bgHover}; color:${C.text}; }
+      .js-nav-back:disabled, .js-nav-forward:disabled { opacity:.35; cursor:default; }
       .js-projects-search-btn svg, .js-projects-sort-btn svg { width:18px; height:18px; display:block; }
       .js-project-menu-btn svg { width:16px; height:16px; display:block; }
       .js-upload svg, .js-note svg, .js-settings svg { width:18px; height:18px; }
@@ -708,6 +720,62 @@
   }
 
   // ------------------------------------------------------------- wire UI
+  function navSnapshot() {
+    if (uiEl && uiEl.classList.contains('js-project-detail-active')) return { v: 'projectDetail', id: viewingProjectId };
+    if (uiEl && uiEl.classList.contains('js-projects-active')) return { v: 'projects' };
+    return { v: 'chat', mode: activeMode, id: currentConversationId, projectId: currentProjectId };
+  }
+  function navEqual(a, b) {
+    if (!a || !b || a.v !== b.v) return false;
+    if (a.v === 'chat') return a.mode === b.mode && a.id === b.id;
+    if (a.v === 'projectDetail') return a.id === b.id;
+    return true;  // 'projects' — nur eine Ausprägung
+  }
+  function updateNavButtons() {
+    if (!uiEl) return;
+    const back = $('.js-nav-back', uiEl);
+    const fwd = $('.js-nav-forward', uiEl);
+    if (back) back.disabled = navPos <= 0;
+    if (fwd) fwd.disabled = navPos >= navStack.length - 1;
+  }
+  // Aufgerufen am Ende jeder echten Navigationsaktion (Konversation öffnen,
+  // neuer Chat, Projekte-Grid, Projekt-Detail, Chat/Code-Wechsel) — nie
+  // während navGo() eine alte Seite wiederherstellt (navRestoring), sonst
+  // würde jeder Schritt zurück sofort wieder einen Schritt vorwärts anhängen.
+  function navRecord() {
+    if (navRestoring) return;
+    const snap = navSnapshot();
+    if (navPos >= 0 && navEqual(navStack[navPos], snap)) { updateNavButtons(); return; }
+    navStack = navStack.slice(0, navPos + 1);
+    navStack.push(snap);
+    navPos = navStack.length - 1;
+    updateNavButtons();
+  }
+  function navApply(snap) {
+    if (snap.v === 'projects') { openProjectsView(); return; }
+    if (snap.v === 'projectDetail') {
+      const p = projectsList.find((pp) => pp.id === snap.id);
+      if (p) openProjectDetail(p); else openProjectsView();
+      return;
+    }
+    if (activeMode !== snap.mode) setMode(snap.mode);
+    if (snap.id) {
+      currentConversationId = null;  // erzwingt echtes Neu-Rendern in openConversation
+      openConversation(snap.id, snap.projectId);
+    } else {
+      startNewConversation();
+    }
+  }
+  function navGo(delta) {
+    const newPos = navPos + delta;
+    if (newPos < 0 || newPos >= navStack.length) return;
+    navPos = newPos;
+    navRestoring = true;
+    navApply(navStack[navPos]);
+    navRestoring = false;
+    updateNavButtons();
+  }
+
   function setMode(mode) {
     if (mode !== 'chat' && mode !== 'code') return;
     closeProjectsView();
@@ -721,6 +789,7 @@
       buildCodeView();
       loadCodeStatus();
       ensureCodeSocket();
+      navRecord();
       return;
     }
     // Code-Tab verlassen: den Terminal-Socket schließen (der Server beendet die
@@ -737,10 +806,11 @@
     activeMode = mode;
     const saved = localStorage.getItem(modeKey(mode));
     const nextId = saved && isModeConv(mode, saved) ? saved : null;
-    if (nextId === currentConversationId) { loadConversationList(); return; }
+    if (nextId === currentConversationId) { loadConversationList(); navRecord(); return; }
     currentConversationId = nextId;
     renderConversation(nextId);
     loadConversationList();
+    navRecord();
   }
 
   // Lädt die Turns einer Konversation in den Thread (oder leert ihn, wenn
@@ -813,11 +883,12 @@
   async function openConversation(id, projectId) {
     closeProjectsView();
     currentProjectId = projectId || null;
-    if (id === currentConversationId) return;
+    if (id === currentConversationId) { navRecord(); return; }
     currentConversationId = id;
     localStorage.setItem(modeKey(activeMode), id);
     await renderConversation(id, projectId);
     loadConversationList();
+    navRecord();
   }
 
   function startNewConversation() {
@@ -827,6 +898,7 @@
     history = [];
     clearThreadUI();
     loadConversationList();
+    navRecord();
   }
 
   // ------------------------------------------------------------ Projekte
@@ -847,6 +919,7 @@
     closeProjectDetail();
     if (uiEl) uiEl.classList.add('js-projects-active');
     loadProjects();
+    navRecord();
   }
   function closeProjectsView() {
     if (uiEl) uiEl.classList.remove('js-projects-active');
@@ -859,6 +932,7 @@
     if (pdTitleEl) pdTitleEl.textContent = project.name;
     if (pdEditorEl) { pdEditorEl.innerText = ''; }
     loadProjectRecent();
+    navRecord();
   }
   function closeProjectDetail() {
     if (uiEl) uiEl.classList.remove('js-project-detail-active');
@@ -2228,6 +2302,10 @@
     orbCanvas.style.cssText = 'position:fixed;inset:0;width:100vw;height:100vh;z-index:40;pointer-events:none;background:transparent;';
     document.body.appendChild(orbCanvas);
     orbCtx = orbCanvas.getContext('2d');
+    const navBackBtn = $('.js-nav-back', uiEl);
+    const navForwardBtn = $('.js-nav-forward', uiEl);
+    if (navBackBtn) navBackBtn.addEventListener('click', () => navGo(-1));
+    if (navForwardBtn) navForwardBtn.addEventListener('click', () => navGo(1));
     const t = $('.js-side-toggle', uiEl);
     if (t) t.addEventListener('click', () => {
       const aside = $('.js-sidebar', uiEl);
