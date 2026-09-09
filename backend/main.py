@@ -16,7 +16,7 @@ from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import browser_agent, config, conversations, fillers, llm_client, memory, panel, stt, transcript_log, tts, vector_memory
+from . import browser_agent, config, conversations, fillers, llm_client, memory, opencode_agent, panel, stt, transcript_log, tts, vector_memory
 
 app = FastAPI(title="Jarvis")
 app.add_middleware(
@@ -495,6 +495,120 @@ async def trigger():
     """Called by the global hotkey listener to wake up connected frontends."""
     await broadcast({"type": "wake"})
     return {"notified": len(active_sockets)}
+
+
+# ---------------------------------------------------------------------------
+# Code-Tab: headless OpenCode driven over a dedicated WebSocket. The browser
+# opens /code/ws, sends {"type":"prompt",...}, and the server streams parsed
+# `opencode run --format json` events back as {"type":"event","event":...}.
+# See backend/opencode_agent.py for the transport (PTY for line-buffered
+# stdout) and the context-size constraint.
+# ---------------------------------------------------------------------------
+
+
+@app.get("/code/status")
+def code_status():
+    """Everything the frontend needs to render the Code-Tab: the LM Studio
+    model list (with loaded context), the current/default model and the
+    working directory. Also refreshes the opencode provider config so the
+    models opencode knows about stay in sync with what LM Studio reports."""
+    models = opencode_agent.list_models()
+    default = opencode_agent.default_model()
+    if models:
+        opencode_agent.ensure_provider_config(models, default)
+    return {
+        "model": config.LM_STUDIO_MODEL,
+        "default": default,
+        "dir": opencode_agent.get_code_dir(),
+        "models": models,
+        "min_context": opencode_agent.CODE_MIN_CONTEXT,
+    }
+
+
+@app.post("/code/config")
+def code_set_config(body: dict):
+    """Persist the Code-Tab working directory."""
+    new_dir = str(body.get("dir", "")).strip()
+    if new_dir:
+        opencode_agent.set_code_dir(new_dir)
+    return {"dir": opencode_agent.get_code_dir()}
+
+
+@app.websocket("/code/ws")
+async def code_ws(websocket: WebSocket):
+    """Bidirectional chat channel for the Code-Tab agent.
+
+    The client sends {"type":"prompt", "text", "model", "dir"} to start a turn,
+    {"type":"cancel"} to abort the running one. The server streams
+    {"type":"event","event":{...}} per opencode event, then {"type":"done"}.
+
+    A single background "sender" task drains an asyncio queue so all writes to
+    the websocket happen from one coroutine (Starlette's WebSocket is not safe
+    for concurrent sends), while the receive loop and the per-turn runner stay
+    independent.
+    """
+    await websocket.accept()
+    send_q: asyncio.Queue = asyncio.Queue()
+    session_id: str | None = None
+    cancel: asyncio.Event | None = None
+    run_task: asyncio.Task | None = None
+
+    async def _sender() -> None:
+        while True:
+            item = await send_q.get()
+            if item is None:
+                break
+            await websocket.send_text(item if isinstance(item, str) else json.dumps(item))
+
+    sender_task = asyncio.create_task(_sender())
+
+    async def _stream_turn(text: str, model: str, wdir: str) -> None:
+        nonlocal session_id, cancel
+        cancel = asyncio.Event()
+        try:
+            # Refresh the provider config once so opencode knows this model.
+            models = opencode_agent.list_models()
+            if models:
+                opencode_agent.ensure_provider_config(models, model)
+            async for ev in opencode_agent.run(text, model, wdir, session_id=session_id, cancel=cancel):
+                sid = ev.get("sessionID")
+                if sid:
+                    session_id = sid
+                await send_q.put({"type": "event", "event": ev})
+            await send_q.put({"type": "done"})
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - map any failure to a UI message
+            await send_q.put({"type": "error", "message": str(exc)})
+
+    try:
+        while True:
+            msg = await websocket.receive_json()
+            mtype = msg.get("type")
+            if mtype == "prompt":
+                if run_task and not run_task.done():
+                    await send_q.put({"type": "error", "message": "Ein Lauf läuft bereits."})
+                    continue
+                text = (msg.get("text") or "").strip()
+                if not text:
+                    continue
+                model = msg.get("model") or opencode_agent.default_model()
+                wdir = msg.get("dir") or opencode_agent.get_code_dir()
+                run_task = asyncio.create_task(_stream_turn(text, model, wdir))
+            elif mtype == "cancel":
+                if cancel:
+                    cancel.set()
+            elif mtype == "new_session":
+                session_id = None
+    except WebSocketDisconnect:
+        pass
+    finally:
+        if cancel:
+            cancel.set()
+        if run_task:
+            run_task.cancel()
+        await send_q.put(None)
+        sender_task.cancel()
 
 
 @app.websocket("/ws")

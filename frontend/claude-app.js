@@ -295,6 +295,14 @@
   let speechCaptionEl = null, spcStatusEl = null, spcUserEl = null, spcReplyEl = null;
   let settingsSheetEl = null, settingsModelsEl = null;
 
+  // Code-Tab (headless OpenCode) Anker
+  let codeViewEl = null, codeThreadEl = null, codeEditorEl = null, codeDirEl = null;
+  let codeModelEl = null, codeModelMenuEl = null, codeSendBtn = null, codeCancelBtn = null;
+  let codeWs = null, codeWsOpen = false, codeReconnectTimer = null;
+  let codeRunning = false, codeCancelled = false;
+  let codeModel = '', codeDefault = '', codeModels = [], codeMinContext = 24000, codeSessionActive = false;
+  let codeActiveBubble = null, codeBubbleMd = '';
+
   // Sprachmodus + VAD + Diktat + Web-Speech-Erkennung
   let speechMode = false, dictating = false, micReady = false, micStream = null, muted = false;
   let vadAnalyser = null, vadData = null, vadNoiseFloor = 0.01, vadAbove = 0;
@@ -354,7 +362,7 @@
         <div class="js-sidebar-top" style="padding:16px 12px 6px;display:flex;flex-direction:column;gap:12px;">
           <div class="js-mode" style="display:flex;padding:3px;gap:3px;background:${C.bgHover};border:1px solid ${C.border};border-radius:11px;margin-left:44px;">
             <button class="js-pill active" data-mode="chat" style="flex:1;display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:7px 10px;border-radius:8px;border:none;background:transparent;color:${C.textSoft};font-size:13px;font-weight:500;cursor:pointer;transition:background .15s,color .15s;">${ICONS.chat}<span>Chat</span></button>
-            <button class="js-pill" data-mode="code" title="Coming soon" style="flex:1;display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:7px 10px;border-radius:8px;border:none;background:transparent;color:${C.textSoft};font-size:13px;font-weight:500;cursor:pointer;transition:background .15s,color .15s;">${ICONS.code}<span>Code</span></button>
+            <button class="js-pill" data-mode="code" title="Code with opencode" style="flex:1;display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:7px 10px;border-radius:8px;border:none;background:transparent;color:${C.textSoft};font-size:13px;font-weight:500;cursor:pointer;transition:background .15s,color .15s;">${ICONS.code}<span>Code</span></button>
           </div>
           <button class="js-new" style="display:flex;align-items:center;gap:8px;padding:9px 12px;background:${C.bgHover};border:1px solid ${C.border};border-radius:11px;color:${C.text};font-size:13px;font-weight:500;cursor:pointer;transition:background .15s;">${ICONS.plus}<span>New conversation</span></button>
           <div style="padding:2px 8px 4px;font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:${C.textDim};">Conversations</div>
@@ -371,6 +379,25 @@
           <p class="js-welcome-sub" style="font-size:14px;color:${C.textSoft};margin:0;max-width:440px;line-height:1.55;">How can I help you today? Speak, dictate, or just type.</p>
         </div>
         <div class="js-thread" style="flex:1;overflow-y:auto;scrollbar-width:thin;position:relative;"></div>
+        <div class="js-codeview" style="position:absolute;inset:0;display:none;flex-direction:column;min-width:0;min-height:0;">
+          <div class="js-code-header" style="display:flex;align-items:center;gap:10px;padding:12px 18px;border-bottom:1px solid ${C.border};flex:0 0 auto;">
+            <span class="js-code-title" style="font-size:14px;font-weight:600;color:${C.text};">Code</span>
+            <button class="js-code-model" title="Change opencode model" style="display:inline-flex;align-items:center;gap:6px;padding:5px 10px;background:none;border:1px solid ${C.border};border-radius:9px;color:${C.textSoft};font-size:12px;cursor:pointer;font-family:${C.font};">
+              <span class="js-code-model-label">Model…</span>
+            </button>
+            <span class="js-code-dir" style="flex:1;font-size:12px;color:${C.textDim};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:right;" title="Working directory"></span>
+            <button class="js-code-cancel" title="Stop" style="display:none;align-items:center;gap:6px;padding:5px 10px;background:none;border:1px solid ${C.border};border-radius:9px;color:${C.accent};font-size:12px;cursor:pointer;font-family:${C.font};">Stop</button>
+          </div>
+          <div class="js-code-thread" style="flex:1 1 auto;overflow-y:auto;scrollbar-width:thin;padding:24px 22px 96px;"></div>
+          <div class="js-code-composer" style="position:absolute;left:0;right:0;bottom:0;padding:0 22px 20px;background:linear-gradient(transparent,${C.bg} 55%);">
+            <div style="max-width:820px;margin:0 auto;background:${C.bgSoft};border:1px solid ${C.border};border-radius:16px;box-shadow:0 10px 34px rgba(0,0,0,.38);">
+              <div class="js-code-editor" contenteditable="true" data-placeholder="Describe a coding task…" style="min-height:58px;max-height:200px;overflow-y:auto;padding:14px 16px;color:${C.text};font-size:15px;line-height:1.5;outline:none;white-space:pre-wrap;word-break:break-word;"></div>
+              <div style="display:flex;align-items:center;gap:8px;padding:6px 10px 10px;">
+                <button class="js-code-send" title="Send to opencode" style="width:38px;height:38px;border-radius:50%;background:${C.accent};border:none;color:#fff;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;">${ICONS.send}</button>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
       <div class="js-composer" style="position:absolute;left:308px;right:0;bottom:0;padding:0 24px 22px;background:linear-gradient(transparent,${C.bg} 55%);">
         <div style="max-width:760px;margin:0 auto;">
@@ -442,7 +469,14 @@
           <div style="padding:6px 10px;font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:${C.textDim};">Model</div>
           <div class="js-settings-models"></div>
         </div>
-        <div style="padding:12px 16px 16px;border-top:1px solid ${C.border};font-size:12px;color:${C.textDim};">More settings coming soon.</div>
+        <div style="padding:12px 6px 16px;border-top:1px solid ${C.border};">
+          <div style="padding:6px 10px;font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:${C.textDim};">Code</div>
+          <div style="padding:4px 10px;display:flex;flex-direction:column;gap:8px;">
+            <span style="font-size:12px;color:${C.textSoft};">Working directory for opencode</span>
+            <input class="js-code-dir-input" type="text" placeholder="~/Developer" spellcheck="false" style="width:100%;box-sizing:border-box;padding:9px 10px;background:${C.bg};border:1px solid ${C.border};border-radius:8px;color:${C.text};font-size:13px;outline:none;font-family:${C.font};" />
+            <button class="js-code-dir-save" style="align-self:flex-start;padding:7px 12px;border:none;border-radius:8px;background:${C.accent};color:#fff;font-size:12px;cursor:pointer;font-family:${C.font};">Save</button>
+          </div>
+        </div>
       </div>
     `;
     document.body.appendChild(settingsSheetEl);
@@ -512,6 +546,10 @@
       .js-main .js-welcome { opacity:1; transition:opacity .25s ease; }
       .js-main.has-content .js-welcome { opacity:0; pointer-events:none; }
       .js-main.js-speech-active .js-thread, .js-main.js-speech-active .js-welcome { display:none !important; }
+      .js-code-editor:empty::before, .js-code-editor.is-empty::before { content:attr(data-placeholder); color:${C.textDim}; pointer-events:none; }
+      .js-code-editor:focus::before { opacity:.7; }
+      #jsApp.js-code-active .js-thread, #jsApp.js-code-active .js-welcome, #jsApp.js-code-active .js-composer { display:none !important; }
+      #jsApp.js-code-active .js-codeview { display:flex !important; }
     `;
     document.head.appendChild(s);
   }
@@ -519,10 +557,19 @@
   // ------------------------------------------------------------- wire UI
   function setMode(mode) {
     if (mode !== 'chat' && mode !== 'code') return;
-    if (currentConversationId) localStorage.setItem(modeKey(activeMode), currentConversationId);
-    activeMode = mode;
+    const isCode = mode === 'code';
     const pills = uiEl ? uiEl.querySelectorAll('.js-pill') : [];
     pills.forEach((p) => p.classList.toggle('active', p.dataset.mode === mode));
+    if (uiEl) uiEl.classList.toggle('js-code-active', isCode);
+    if (isCode) {
+      // Code-Tab führt keine Chat-Konversationen; eigener Zustand + Socket.
+      buildCodeView();
+      loadCodeStatus();
+      ensureCodeSocket();
+      return;
+    }
+    if (currentConversationId) localStorage.setItem(modeKey(activeMode), currentConversationId);
+    activeMode = mode;
     const saved = localStorage.getItem(modeKey(mode));
     const nextId = saved && isModeConv(mode, saved) ? saved : null;
     if (nextId === currentConversationId) { loadConversationList(); return; }
@@ -641,6 +688,20 @@
     const closeSettingsBtn = $('.js-settings-close', settingsSheetEl);
     if (closeSettingsBtn) closeSettingsBtn.addEventListener('click', closeSettings);
     if (settingsSheetEl) settingsSheetEl.addEventListener('click', (e) => { if (e.target === settingsSheetEl) closeSettings(); });
+
+    // Code-Verzeichnis speichern
+    const codeDirInput = $('.js-code-dir-input', settingsSheetEl);
+    const codeDirSave = $('.js-code-dir-save', settingsSheetEl);
+    if (codeDirSave && codeDirInput) {
+      codeDirSave.addEventListener('click', async () => {
+        const v = codeDirInput.value.trim();
+        if (!v) return;
+        try {
+          await fetch('/code/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dir: v }) });
+          if (codeDirEl) { codeDirEl.textContent = v; codeDirEl.title = v; }
+        } catch (e) {}
+      });
+    }
 
     if (modelEl) modelEl.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); toggleModelMenu(); });
     window.addEventListener('click', () => { if (modelMenuEl) modelMenuEl.style.display = 'none'; });
@@ -1023,11 +1084,309 @@
     if (modelEl) modelEl.textContent = short;
   }
 
+  // ------------------------------------------------------------- code-tab
+  /* Der Code-Tab treibt headless OpenCode (opencode run --format json) über
+     einen WebSocket; die Events werden als eigene Chat-Antwort gerendert —
+     kein Terminal, keine Raw-TUI. opencode braucht ~20k Context-Token, daher
+     zeigt das Modell-Dropdown die geladene Context-Größe und warnt zu kleine
+     Modelle (Exceed-context-Fehler würde LM Studio sonst still schlucken). */
+
+  function buildCodeView() {
+    if (codeViewEl) return;
+    if (!uiEl) return;
+    codeViewEl = $('.js-codeview', uiEl);
+    codeThreadEl = $('.js-code-thread', uiEl);
+    codeEditorEl = $('.js-code-editor', uiEl);
+    codeDirEl = $('.js-code-dir', uiEl);
+    codeModelEl = $('.js-code-model', uiEl);
+    codeModelMenuEl = $('.js-code-modelmenu', uiEl);
+    codeSendBtn = $('.js-code-send', uiEl);
+    codeCancelBtn = $('.js-code-cancel', uiEl);
+
+    // Modell-Dropdown (schwebt unter dem Header, wird bei Bedarf gefüllt).
+    codeModelMenuEl = document.createElement('div');
+    codeModelMenuEl.className = 'js-code-modelmenu';
+    codeModelMenuEl.style.cssText = `position:absolute;top:52px;left:16px;z-index:25;min-width:230px;background:${C.bgSoft};border:1px solid ${C.border};border-radius:12px;overflow:hidden;box-shadow:0 12px 30px rgba(0,0,0,.4);display:none;`;
+    codeViewEl.appendChild(codeModelMenuEl);
+
+    if (codeSendBtn) codeSendBtn.addEventListener('click', (e) => { e.preventDefault(); sendCodePrompt(); });
+    if (codeEditorEl) {
+      codeEditorEl.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendCodePrompt(); }
+      });
+      codeEditorEl.addEventListener('input', () => {
+        codeEditorEl.classList.toggle('is-empty', codeEditorEl.innerText.trim().length === 0);
+      });
+      codeEditorEl.classList.add('is-empty');
+    }
+    if (codeCancelBtn) codeCancelBtn.addEventListener('click', (e) => { e.preventDefault(); cancelCodeRun(); });
+    if (codeModelEl) codeModelEl.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); toggleCodeModelMenu(); });
+    window.addEventListener('click', () => { if (codeModelMenuEl) codeModelMenuEl.style.display = 'none'; });
+  }
+
+  async function loadCodeStatus() {
+    try {
+      const r = await fetch('/code/status');
+      const j = await r.json();
+      if (j.dir && codeDirEl) { codeDirEl.textContent = j.dir; codeDirEl.title = j.dir; }
+      if (j.models) { codeModels = j.models || []; codeMinContext = j.min_context || 24000; }
+      if (j.default) codeDefault = j.default;
+      // Start immer mit dem opencode-tauglichen Default (genug Kontext), nicht
+      // mit dem Chat-Modell — das kann zu wenig Kontext haben (siehe Backend).
+      codeModel = codeDefault || j.model || '';
+      setCodeModelLabel(codeModel);
+    } catch (e) {}
+  }
+
+  function setCodeModelLabel(id) {
+    const short = String(id || '').split('/').pop();
+    const label = codeModelEl ? codeModelEl.querySelector('.js-code-model-label') : null;
+    if (label) label.textContent = short || 'Model…';
+  }
+
+  function toggleCodeModelMenu() {
+    if (!codeModelMenuEl) return;
+    const open = codeModelMenuEl.style.display === 'block';
+    codeModelMenuEl.style.display = open ? 'none' : 'block';
+    if (!open) renderCodeModelList();
+  }
+
+  function renderCodeModelList() {
+    if (!codeModelMenuEl) return;
+    codeModelMenuEl.innerHTML = '';
+    const list = (codeModels && codeModels.length) ? codeModels : [];
+    if (!list.length) {
+      const d = document.createElement('div');
+      d.textContent = 'Keine LM-Studio-Modelle geladen.';
+      d.style.cssText = `padding:12px 14px;font-size:13px;color:${C.textDim};`;
+      codeModelMenuEl.appendChild(d);
+      return;
+    }
+    // Aufsteigend pro Modell eine Zeile: ID + großer Punkt für genug Context.
+    for (const m of list) {
+      const b = document.createElement('button');
+      const enough = (m.loaded_context || 0) >= codeMinContext;
+      const state = m.state === 'loaded' ? (enough ? 'ready' : 'too-small') : 'not-loaded';
+      const badge = state === 'ready' ? 'bereit'
+        : state === 'too-small' ? `Context zu klein (${fmtK(m.loaded_context)})`
+        : 'nicht geladen';
+      b.style.cssText = `display:block;width:100%;text-align:left;padding:9px 14px;background:none;border:none;color:${C.textSoft};font-size:13px;cursor:pointer;`;
+      b.onmouseenter = () => { b.style.background = C.bgHover; };
+      b.onmouseleave = () => { b.style.background = 'none'; };
+      b.innerHTML = `<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;">
+          <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(m.id)}</span>
+          <span style="color:${state === 'ready' ? '#3dbd7d' : state === 'not-loaded' ? C.textDim : '#e5a50a'};font-size:11px;flex:0 0 auto;">${escapeHtml(badge)}</span>
+        </div>`;
+      b.addEventListener('click', () => {
+        codeModel = m.id;
+        setCodeModelLabel(codeModel);
+        codeModelMenuEl.style.display = 'none';
+      });
+      codeModelMenuEl.appendChild(b);
+    }
+  }
+
+  function fmtK(n) {
+    n = Number(n) || 0;
+    if (n >= 1000) return Math.round(n / 1000) + 'k';
+    return String(n);
+  }
+
+  function ensureCodeSocket() {
+    if (codeWsOpen || codeWs) return;
+    if (codeReconnectTimer) { clearTimeout(codeReconnectTimer); codeReconnectTimer = null; }
+    openCodeSocket();
+  }
+
+  function openCodeSocket() {
+    if (codeWsOpen || codeWs) return;
+    try {
+      codeWs = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/code/ws');
+    } catch (e) { codeWs = null; scheduleCodeReconnect(); return; }
+    codeWs.onopen = () => { codeWsOpen = true; };
+    codeWs.onmessage = (ev) => { handleCodeMessage(ev); };
+    codeWs.onclose = () => { codeWsOpen = false; codeWs = null; scheduleCodeReconnect(); };
+    codeWs.onerror = () => { try { codeWs.close(); } catch (e) {} };
+  }
+
+  function scheduleCodeReconnect() {
+    if (codeReconnectTimer || activeMode !== 'code') return;
+    codeReconnectTimer = setTimeout(() => { codeReconnectTimer = null; openCodeSocket(); }, 2000);
+  }
+
+  function handleCodeMessage(ev) {
+    let msg; try { msg = JSON.parse(ev.data); } catch (e) { return; }
+    if (msg.type === 'event') { renderCodeEvent(msg.event); return; }
+    if (msg.type === 'done') {
+      codeRunning = false; codeCancelled = false; updateCodeControls();
+      if (codeActiveBubble) { codeActiveBubble.innerHTML = renderMarkdown(codeBubbleMd); codeActiveBubble = null; }
+      codeBubbleMd = '';
+      return;
+    }
+    if (msg.type === 'error') {
+      renderCodeError(msg.message || 'Fehler');
+      codeRunning = false; codeCancelled = false; updateCodeControls();
+      codeActiveBubble = null; codeBubbleMd = '';
+      return;
+    }
+  }
+
+  function sendCodePrompt() {
+    const text = codeEditorEl ? codeEditorEl.innerText.trim() : '';
+    if (!text || !codeWsOpen || codeRunning) return;
+    const model = codeModel || codeDefault;
+    codeRunning = true; codeCancelled = false;
+    codeBubbleMd = ''; codeActiveBubble = null;
+    addCodeUserTurn(text);
+    if (codeEditorEl) { codeEditorEl.innerText = ''; codeEditorEl.classList.add('is-empty'); }
+    updateCodeControls();
+    codeWs.send(JSON.stringify({ type: 'prompt', text: text, model: model }));
+  }
+
+  function cancelCodeRun() {
+    if (!codeWsOpen || !codeRunning) return;
+    codeCancelled = true;
+    codeWs.send(JSON.stringify({ type: 'cancel' }));
+  }
+
+  function updateCodeControls() {
+    if (codeCancelBtn) codeCancelBtn.style.display = codeRunning ? 'inline-flex' : 'none';
+  }
+
+  function ensureCodeThread() {
+    if (!codeThreadEl && uiEl) codeThreadEl = $('.js-code-thread', uiEl);
+    return codeThreadEl;
+  }
+
+  function addCodeUserTurn(text) {
+    const el = ensureCodeThread();
+    if (!el) return;
+    const row = document.createElement('div');
+    row.style.cssText = `display:flex;justify-content:flex-end;margin:0 auto 22px;max-width:820px;`;
+    const b = document.createElement('div');
+    b.style.cssText = `background:${C.accent};color:#fff;border-radius:20px;padding:10px 16px;max-width:72%;white-space:pre-wrap;word-break:break-word;font-size:14px;line-height:1.55;`;
+    b.textContent = text;
+    row.appendChild(b); el.appendChild(row);
+    el.scrollTop = el.scrollHeight;
+  }
+
+  function renderCodeEvent(ev) {
+    const el = ensureCodeThread();
+    if (!el || !ev) return;
+    const t = ev.type;
+    const part = ev.part || {};
+
+    if (t === 'step_start') {
+      codeActiveBubble = newCodeBubble(el);
+      return;
+    }
+    if (t === 'text' || part.type === 'text') {
+      if (!codeActiveBubble) codeActiveBubble = newCodeBubble(el);
+      codeBubbleMd += part.text || '';
+      codeActiveBubble.appendChild(document.createTextNode(part.text || ''));
+      el.scrollTop = el.scrollHeight;
+      return;
+    }
+    if (t === 'reasoning' || part.type === 'reasoning') {
+      if (!codeActiveBubble) codeActiveBubble = newCodeBubble(el);
+      const line = document.createElement('div');
+      line.style.cssText = `color:${C.textDim};font-style:italic;`;
+      line.textContent = part.text || '';
+      codeActiveBubble.appendChild(line);
+      return;
+    }
+    if (t === 'step_finish') {
+      if (codeActiveBubble) { codeActiveBubble.innerHTML = renderMarkdown(codeBubbleMd); codeActiveBubble = null; }
+      return;
+    }
+    if (t === 'tool' || part.type === 'tool') {
+      addCodeTool(el, part);
+      return;
+    }
+    if (t === 'error') {
+      renderCodeError(part.message || part.text || 'Fehler');
+      return;
+    }
+  }
+
+  function newCodeBubble(el) {
+    const row = document.createElement('div');
+    row.style.cssText = `display:flex;justify-content:flex-start;margin:0 auto 24px;max-width:820px;`;
+    const b = document.createElement('div');
+    b.style.cssText = `color:${C.text};font-size:14px;line-height:1.65;white-space:pre-wrap;word-break:break-word;max-width:100%;`;
+    row.appendChild(b); el.appendChild(row);
+    el.scrollTop = el.scrollHeight;
+    return b;
+  }
+
+  function addCodeTool(el, part) {
+    const name = part.tool || part.name || 'tool';
+    const sub = String(part.title || part.subtitle || '').trim();
+    const state = String(part.state || '').toLowerCase();
+    const col = state === 'done' ? '#3dbd7d' : (state === 'error' || state === 'failed') ? '#e5534b' : C.accent;
+    const b = document.createElement('div');
+    b.style.cssText = `display:flex;align-items:center;gap:8px;max-width:820px;margin:0 auto 10px;padding:8px 12px;border:1px solid ${C.border};border-radius:10px;background:${C.bgSoft};font-size:13px;color:${C.text};`;
+    b.innerHTML = `<span style="width:8px;height:8px;border-radius:50%;background:${col};flex:0 0 auto;"></span><span style="color:${C.text};">${escapeHtml(name)}</span>${sub ? ` <span style="color:${C.textDim};">${escapeHtml(sub)}</span>` : ''}${state && state !== 'running' ? ` <span style="color:${col};flex:0 0 auto;margin-left:auto;">${escapeHtml(state)}</span>` : ''}`;
+    el.appendChild(b);
+    el.scrollTop = el.scrollHeight;
+  }
+
+  function renderCodeError(message) {
+    const el = ensureCodeThread();
+    if (!el) return;
+    const b = document.createElement('div');
+    b.style.cssText = `max-width:820px;margin:0 auto 24px;padding:10px 14px;border:1px solid ${C.border};border-left:3px solid #e5534b;border-radius:10px;background:${C.bgSoft};font-size:13px;color:#e5534b;white-space:pre-wrap;word-break:break-word;`;
+    b.textContent = message || 'Fehler';
+    el.appendChild(b);
+    el.scrollTop = el.scrollHeight;
+  }
+
+  // Minimaler, sicherer Markdown-Renderer (kein CDN). Escapen, dann eine
+  // kleine Teilmenge: Fenced-Code-Blöcke, Inline-Code, Bold, Headlines,
+  // Zeilenumbrüche. In try/catch gekapselt — schlägt es fehl, bleibt der
+  // bereits gerenderte Rohtext als Fallback stehen.
+  function renderMarkdown(src) {
+    // Fenced-Code-Blöcke zuerst aus dem ROHEN Text ziehen (Inhalt genau einmal
+    // escapen), dann den Rest escapen und eine kleine Markdown-Teilmenge
+    // anwenden, zum Schluss die Code-Blöcke wieder einsetzen.
+    try {
+      let text = String(src || '');
+      const codeBlocks = [];
+      text = text.replace(/```([^\n]*)\n([\s\S]*?)```/g, (m, lang, body) => {
+        codeBlocks.push({ lang: String(lang || ''), body: escapeHtml(body) });
+        return '@@CB' + (codeBlocks.length - 1) + '@@';
+      });
+      text = escapeHtml(text);
+      text = text.replace(/`([^`\n]+)`/g, '<code>$1</code>');
+      text = text.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
+      text = text.replace(/\*([^*\n]+)\*/g, '<em>$1</em>');
+      text = text.replace(/^### (.*)$/gm, '<h6>$1</h6>');
+      text = text.replace(/^## (.*)$/gm, '<h5>$1</h5>');
+      text = text.replace(/^# (.*)$/gm, '<h4>$1</h4>');
+      text = text.replace(/\n/g, '<br>');
+      text = text.replace(/@@CB(\d+)@@/g, (m, i) => {
+        const cb = codeBlocks[+i];
+        const lang = cb.lang ? ' · ' + String(cb.lang).trim() : '';
+        return '<details class="js-code" style="border:1px solid ' + C.border + ';border-radius:10px;overflow:hidden;background:#0e1220;margin:10px 0;"><summary style="padding:8px 12px;font-size:12px;color:' + C.textDim + ';cursor:pointer;background:' + C.bgSoft + ';">Code' + lang + '</summary><pre style="margin:0;padding:12px;overflow:auto;font-size:12px;line-height:1.5;color:#d8dee9;white-space:pre-wrap;word-break:break-word;font-family:monospace;">' + cb.body + '</pre></details>';
+      });
+      return text;
+    } catch (e) {
+      return escapeHtml(String(src || ''));
+    }
+  }
+
   // ---------------------------------------------------------------- settings
   /* Echte Einstellungen statt Fake-Profil: ein Sheet mit der Modell-Auswahl. */
   async function openSettings() {
     if (!settingsSheetEl) return;
     settingsSheetEl.style.display = 'flex';
+    // Code-Verzeichnis aus /code/status vorbelegen.
+    try {
+      const r = await fetch('/code/status');
+      const j = await r.json();
+      const din = $('.js-code-dir-input', settingsSheetEl);
+      if (din && j.dir) din.value = j.dir;
+    } catch (e) {}
     if (settingsModelsEl) {
       settingsModelsEl.innerHTML = '';
       const load = async () => {
