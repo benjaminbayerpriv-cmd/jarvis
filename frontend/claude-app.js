@@ -85,13 +85,51 @@
       reader.readAsDataURL(file);
     });
   }
+  const IMAGE_MAX_DIM = 1568;  // matches the encoder's own downscale point — no benefit past this
+  // Real phone photos (progressive/CMYK JPEGs, odd chroma subsampling, EXIF
+  // orientation) can silently fail to decode in LM Studio's image pipeline —
+  // the model then answers as if no image was ever attached at all, with no
+  // error anywhere. A synthetic canvas-drawn PNG never hit this because
+  // toBlob() only ever emits a plain baseline image. Routing every real
+  // photo through the same canvas re-encode (which also applies EXIF
+  // rotation automatically via createImageBitmap) normalizes it the same
+  // way and fixed real-world photos that were failing.
+  async function normalizeImageFile(file) {
+    const bitmap = await createImageBitmap(file, { imageOrientation: 'from-image' });
+    let { width, height } = bitmap;
+    if (width > IMAGE_MAX_DIM || height > IMAGE_MAX_DIM) {
+      const scale = IMAGE_MAX_DIM / Math.max(width, height);
+      width = Math.round(width * scale);
+      height = Math.round(height * scale);
+    }
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    canvas.getContext('2d').drawImage(bitmap, 0, 0, width, height);
+    bitmap.close();
+    return new Promise((resolve, reject) => {
+      canvas.toBlob(blob => {
+        if (!blob) { reject(new Error('toBlob failed')); return; }
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result || ''));
+        reader.onerror = () => reject(reader.error);
+        reader.readAsDataURL(blob);
+      }, 'image/jpeg', 0.9);
+    });
+  }
   async function readAttachedFile(file) {
     if (file.type && file.type.startsWith('image/')) {
       if (!currentModelSupportsVision) {
         return { text: `📎 ${file.name}: das aktuelle Modell kann keine Bilder lesen — wechsle oben im Modell-Menü zu einem vision-fähigen Modell (z. B. gemma-4-e4b, qwen3.5-9b/3.8-27b, devstral).`, image: null };
       }
       try {
-        return { text: `📎 ${file.name} (Bild angehängt)`, image: await readFileAsDataURL(file) };
+        let image;
+        try {
+          image = await normalizeImageFile(file);
+        } catch (e) {
+          image = await readFileAsDataURL(file);
+        }
+        return { text: `📎 ${file.name} (Bild angehängt)`, image };
       } catch (e) {
         return { text: `📎 ${file.name}: konnte nicht gelesen werden.`, image: null };
       }

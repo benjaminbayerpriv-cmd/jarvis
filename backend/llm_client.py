@@ -599,7 +599,12 @@ def _detect_capabilities(model_id: str, meta: dict) -> list[str]:
     # "arch", "model_type" were ever added to `hay` above, never "type".
     # Observed live: google/gemma-4-e4b, qwen3.5-9b, qwen3.8-27b and
     # devstral-small-2-24b-instruct-2512 are all real "vlm" models that
-    # this endpoint reported as having zero capabilities.
+    # this endpoint reported as having zero capabilities. Note: this
+    # endpoint's "capabilities" list only ever contains things like
+    # "tool_use" in this LM Studio version — it never lists "vision" even
+    # for models that demonstrably do vision inference correctly (confirmed
+    # live: gemma-4-e4b correctly described a synthetic test image) — so
+    # "type":"vlm" is the only usable vision signal here, not "capabilities".
     if meta.get("type") == "vlm":
         caps.append("vision")
     if isinstance(meta.get("vision"), bool) and meta["vision"]:
