@@ -127,6 +127,10 @@ class ChatRequest(BaseModel):
     # Data-URLs ("data:image/jpeg;base64,...") vom Datei-Anhang im Frontend —
     # nur an vision-fähige Modelle weitergereicht, siehe llm_client._build_messages.
     images: list[str] | None = None
+    # Nur relevant, wenn diese Nachricht die Konversation neu anlegt (siehe
+    # conversations.append_turn) — verknüpft sie dauerhaft mit dem Projekt,
+    # aus dessen Detailansicht heraus gesendet wurde.
+    project_id: str | None = None
 
 
 class CancelRequest(BaseModel):
@@ -138,7 +142,8 @@ class SelectModelRequest(BaseModel):
 
 
 class CreateProjectRequest(BaseModel):
-    name: str
+    dir: str
+    name: str = ""
     description: str = ""
     tag: str = ""
 
@@ -306,6 +311,18 @@ async def transcribe(audio: UploadFile = File(...)):
     return {"text": text}
 
 
+def _project_chats_dir(project_id: str | None):
+    """Resolves a project id to its chats folder (inside the project's own
+    directory on disk — see projects.chats_dir), or None for the default
+    central conversations store. Returns None (not an error) for an unknown
+    project id, e.g. a stale project_id from before it was deleted; the
+    caller falls back to the default store rather than losing the turn."""
+    if not project_id:
+        return None
+    project = projects.get(project_id)
+    return projects.chats_dir(project) if project else None
+
+
 @app.post("/chat/stream")
 def chat_stream(req: ChatRequest):
     """Streams the reply as newline-delimited JSON, one line per sentence,
@@ -314,6 +331,11 @@ def chat_stream(req: ChatRequest):
     reply plus a single big TTS call."""
 
     conv_id = req.conversation_id or conversations.new_id()
+    # Resolved once per request from req.project_id — every turn of a
+    # project-backed conversation re-resolves the same folder this way
+    # (never trusts a client-cached path), so it stays correct even if the
+    # project's record changes between turns.
+    chats_base_dir = _project_chats_dir(req.project_id)
 
     def _generate_title_in_background(user_text: str, assistant_text: str) -> None:
         # Fire-and-forget: an extra LLM round-trip for the title must never
@@ -326,7 +348,7 @@ def chat_stream(req: ChatRequest):
             except (requests.RequestException, llm_client.ModelError):
                 title = ""
             if title:
-                conversations.set_title(conv_id, title)
+                conversations.set_title(conv_id, title, chats_base_dir)
 
         threading.Thread(target=_job, daemon=True).start()
 
@@ -367,7 +389,7 @@ def chat_stream(req: ChatRequest):
                     ) + "\n"
             if full_text:
                 transcript_log.log_turn(req.message, full_text, req.mode)
-                conv = conversations.append_turn(conv_id, req.message, full_text)
+                conv = conversations.append_turn(conv_id, req.message, full_text, req.project_id, chats_base_dir)
                 if conv.get("title") is None and len(conv.get("turns", [])) == 2:
                     _generate_title_in_background(req.message, full_text)
         except (requests.RequestException, llm_client.ModelError, KeyError, IndexError) as exc:
@@ -425,16 +447,31 @@ def transcript():
 
 
 @app.get("/conversations")
-def get_conversations():
+def get_conversations(project_id: str | None = None):
     """Metadata for the sidebar's conversation list — newest first, each
-    with its auto-generated title (see llm_client.generate_title)."""
+    with its auto-generated title (see llm_client.generate_title). Pass
+    project_id to list that project's conversations instead (from its own
+    folder on disk — see projects.chats_dir) for the project detail page's
+    "Zuletzt verwendet" list. Unlike chat_stream's use of
+    _project_chats_dir, an unresolvable project here must NOT fall back to
+    the global store — that would leak every unrelated conversation into
+    this project's page instead of showing it has none."""
+    if project_id:
+        base_dir = _project_chats_dir(project_id)
+        return {"conversations": conversations.list_conversations(base_dir) if base_dir else []}
     return {"conversations": conversations.list_conversations()}
 
 
 @app.get("/conversations/{conv_id}")
-def get_conversation(conv_id: str):
-    """Full turn list for one conversation, fetched when the sidebar list
-    entry is clicked so it can be loaded back into the chat panel."""
+def get_conversation(conv_id: str, project_id: str | None = None):
+    """Full turn list for one conversation, fetched when a sidebar or
+    project "Zuletzt verwendet" entry is clicked. project_id must be passed
+    for a project-backed conversation — that's the only way this endpoint
+    knows which folder on disk to look in. See get_conversations for why an
+    unresolvable project_id returns empty rather than falling back."""
+    if project_id:
+        base_dir = _project_chats_dir(project_id)
+        return {"turns": conversations.load_turns(conv_id, base_dir) if base_dir else []}
     return {"turns": conversations.load_turns(conv_id)}
 
 
@@ -445,9 +482,12 @@ def get_projects():
 
 @app.post("/projects")
 def create_project(req: CreateProjectRequest):
-    if not req.name.strip():
-        raise HTTPException(status_code=422, detail="name darf nicht leer sein")
-    return projects.create(req.name, req.description, req.tag)
+    if not req.dir.strip():
+        raise HTTPException(status_code=422, detail="Ordner darf nicht leer sein")
+    try:
+        return projects.create(req.dir, req.name, req.description, req.tag)
+    except OSError as exc:
+        raise HTTPException(status_code=422, detail=f"Ordner konnte nicht angelegt/geöffnet werden: {exc}")
 
 
 @app.patch("/projects/{project_id}")

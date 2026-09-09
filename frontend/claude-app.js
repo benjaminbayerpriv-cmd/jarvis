@@ -48,6 +48,8 @@
     search: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>',
     sort: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 16 4 4 4-4"/><path d="M7 20V4"/><path d="m21 8-4-4-4 4"/><path d="M17 4v16"/></svg>',
     dots: '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg>',
+    chevronDown: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>',
+    bullet: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="8" x2="21" y1="6" y2="6"/><line x1="8" x2="21" y1="12" y2="12"/><line x1="8" x2="21" y1="18" y2="18"/><line x1="3" x2="3.01" y1="6" y2="6"/><line x1="3" x2="3.01" y1="12" y2="12"/><line x1="3" x2="3.01" y1="18" y2="18"/></svg>',
   };
 
   // ---------------------------------------------------------------- helfer
@@ -315,6 +317,12 @@
   let projectsViewEl = null, projectsGridEl = null, projectsSearchRowEl = null, projectsSearchInputEl = null;
   let projectsList = [], projectsSortMode = 'newest', projectsSearchOpen = false;
   let projectCardMenuTargetId = null, editingProjectId = null;
+  let currentProjectId = null;  // getaggt an die NÄCHSTE neu angelegte Konversation, siehe sendMessage
+  // Projekt-Detailseite Anker
+  let projectDetailViewEl = null, pdBackEl = null, pdNameEl = null, pdTitleEl = null;
+  let pdEditorEl = null, pdUploadBtn = null, pdModelBtn = null, pdModelLabelEl = null;
+  let pdNoteBtn = null, pdSpeechBtn = null, pdSendBtn = null, pdRecentEl = null;
+  let viewingProjectId = null;
 
   // Sprachmodus + VAD + Diktat + Web-Speech-Erkennung
   let speechMode = false, dictating = false, micReady = false, micStream = null, muted = false;
@@ -379,7 +387,10 @@
           </div>
           <button class="js-new" style="display:flex;align-items:center;gap:8px;padding:9px 12px;background:${C.bgHover};border:1px solid ${C.border};border-radius:11px;color:${C.text};font-size:13px;font-weight:500;cursor:pointer;transition:background .15s;">${ICONS.plus}<span>New conversation</span></button>
           <button class="js-projects" style="display:flex;align-items:center;gap:8px;padding:9px 12px;background:${C.bgHover};border:1px solid ${C.border};border-radius:11px;color:${C.text};font-size:13px;font-weight:500;cursor:pointer;transition:background .15s;">${ICONS.folder}<span>Projekte</span></button>
-          <div style="padding:2px 8px 4px;font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:${C.textDim};">Conversations</div>
+          <button class="js-chats-toggle" style="display:flex;align-items:center;gap:4px;padding:2px 8px 4px;background:none;border:none;font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:${C.textDim};cursor:pointer;font-family:${C.font};">
+            <span class="js-chats-chevron" style="display:inline-flex;transition:transform .15s;">${ICONS.chevronDown}</span>
+            <span>Conversations</span>
+          </button>
         </div>
         <div class="js-chats" style="flex:1 1 auto;overflow-y:auto;padding:2px 8px 10px;"></div>
         <div class="js-settings-row" style="padding:10px 12px;border-top:1px solid ${C.border};display:flex;align-items:center;gap:8px;">
@@ -429,6 +440,33 @@
             <button class="js-psm-opt" data-sort="alpha" style="display:block;width:100%;text-align:left;padding:9px 14px;background:none;border:none;color:${C.text};font-size:13px;cursor:pointer;font-family:${C.font};">Alphabetisch</button>
           </div>
         </div>
+        <div class="js-project-detail-view" style="position:absolute;inset:0;display:none;flex-direction:column;min-width:0;min-height:0;overflow-y:auto;padding:40px 48px;">
+          <div style="font-size:13px;color:${C.textSoft};margin-bottom:18px;">
+            <span class="js-pd-back" style="cursor:pointer;">Projekte</span>
+            <span style="margin:0 4px;">/</span>
+            <span class="js-pd-name" style="color:${C.text};font-weight:600;"></span>
+          </div>
+          <h1 class="js-pd-title" style="font-family:${C.serif};font-size:30px;font-weight:600;color:${C.text};margin:0 0 24px;"></h1>
+          <div style="max-width:640px;position:relative;">
+            <div style="background:${C.bgSoft};border:1px solid ${C.border};border-radius:18px;box-shadow:0 10px 34px rgba(0,0,0,.25);">
+              <div class="js-pd-editor" contenteditable="true" data-placeholder="Wie kann ich dir heute helfen?" style="min-height:52px;max-height:160px;overflow-y:auto;padding:16px 16px 8px;color:${C.text};font-size:15px;line-height:1.5;outline:none;white-space:pre-wrap;word-break:break-word;"></div>
+              <div style="display:flex;align-items:center;gap:8px;padding:6px 10px 10px;">
+                <button class="js-pd-upload" title="Datei anhängen" style="width:34px;height:34px;border-radius:9px;background:none;border:none;color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;">${ICONS.paperclip}</button>
+                <div style="padding:5px 10px;background:${C.bgHover};border-radius:8px;font-size:12px;color:${C.text};font-weight:500;">Chat</div>
+                <div style="flex:1;"></div>
+                <button class="js-pd-model" title="Modell wechseln" style="display:inline-flex;align-items:center;gap:6px;padding:6px 10px;background:none;border:none;color:${C.textSoft};font-size:13px;cursor:pointer;">
+                  <span class="js-pd-model-label">Modell…</span>
+                  <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+                </button>
+                <button class="js-pd-note" title="Diktieren" style="width:34px;height:34px;border-radius:9px;background:none;border:none;color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;">${ICONS.mic}</button>
+                <button class="js-pd-speech" title="Sprachmodus" style="width:38px;height:38px;border-radius:50%;background:${C.bgHover};border:1px solid ${C.border};color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;">${ICONS.audio}</button>
+                <button class="js-pd-send" title="Senden" style="width:38px;height:38px;border-radius:50%;background:${C.accent};border:none;color:#fff;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;">${ICONS.send}</button>
+              </div>
+            </div>
+          </div>
+          <div class="js-pd-recent-label" style="font-size:12px;color:${C.textDim};margin:28px 0 4px;max-width:640px;">Zuletzt verwendet</div>
+          <div class="js-pd-recent" style="display:flex;flex-direction:column;max-width:640px;"></div>
+        </div>
       </div>
       <div class="js-composer" style="position:absolute;left:308px;right:0;bottom:0;padding:0 24px 22px;background:linear-gradient(transparent,${C.bg} 55%);">
         <div style="max-width:760px;margin:0 auto;position:relative;">
@@ -447,7 +485,7 @@
               <button class="js-send" title="Send" style="width:38px;height:38px;border-radius:50%;background:${C.accent};border:none;color:#fff;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;">${ICONS.send}</button>
             </div>
           </div>
-          <div class="js-modelmenu" style="display:none;position:absolute;width:220px;bottom:calc(100% + 8px);max-height:280px;overflow-y:auto;background:${C.bgSoft};border:1px solid ${C.border};border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.4);"></div>
+          <div class="js-modelmenu" style="display:none;position:absolute;width:220px;max-height:280px;overflow-y:auto;background:${C.bgSoft};border:1px solid ${C.border};border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.4);z-index:10;"></div>
         </div>
       </div>
     `;
@@ -523,8 +561,15 @@
           <button class="js-newproject-close" title="Schließen" style="width:28px;height:28px;border-radius:8px;background:none;border:none;color:${C.textSoft};cursor:pointer;font-size:16px;line-height:1;">×</button>
         </div>
         <div style="padding:18px;display:flex;flex-direction:column;gap:12px;">
+          <div class="js-newproject-dir-row" style="display:flex;flex-direction:column;gap:6px;">
+            <label style="font-size:12px;color:${C.textSoft};">Ordner</label>
+            <input class="js-newproject-dir" type="text" placeholder="z. B. C:\Users\du\Documents\MeinProjekt" spellcheck="false" style="width:100%;box-sizing:border-box;padding:9px 10px;background:${C.bg};border:1px solid ${C.border};border-radius:8px;color:${C.text};font-size:13px;outline:none;font-family:${C.font};" />
+            <span style="font-size:11px;color:${C.textDim};">Pfad eines bestehenden Ordners, oder ein neuer wird angelegt. Die Chats dieses Projekts landen dort drin.</span>
+          </div>
+          <div class="js-newproject-dir-display" style="display:none;font-size:12px;color:${C.textDim};font-family:monospace;word-break:break-all;"></div>
+          <div class="js-newproject-error" style="font-size:12px;color:#e5735f;min-height:0;"></div>
           <div style="display:flex;flex-direction:column;gap:6px;">
-            <label style="font-size:12px;color:${C.textSoft};">Name</label>
+            <label style="font-size:12px;color:${C.textSoft};">Name (optional, sonst der Ordnername)</label>
             <input class="js-newproject-name" type="text" placeholder="z. B. Lokale Coding KI" style="width:100%;box-sizing:border-box;padding:9px 10px;background:${C.bg};border:1px solid ${C.border};border-radius:8px;color:${C.text};font-size:13px;outline:none;font-family:${C.font};" />
           </div>
           <div style="display:flex;flex-direction:column;gap:6px;">
@@ -555,10 +600,26 @@
     projectsGridEl = $('.js-projects-grid', uiEl);
     projectsSearchRowEl = $('.js-projects-search-row', uiEl);
     projectsSearchInputEl = $('.js-projects-search-input', uiEl);
+    projectDetailViewEl = $('.js-project-detail-view', uiEl);
+    pdBackEl = $('.js-pd-back', uiEl);
+    pdNameEl = $('.js-pd-name', uiEl);
+    pdTitleEl = $('.js-pd-title', uiEl);
+    pdEditorEl = $('.js-pd-editor', uiEl);
+    pdUploadBtn = $('.js-pd-upload', uiEl);
+    pdModelBtn = $('.js-pd-model', uiEl);
+    pdModelLabelEl = $('.js-pd-model-label', uiEl);
+    pdNoteBtn = $('.js-pd-note', uiEl);
+    pdSpeechBtn = $('.js-pd-speech', uiEl);
+    pdSendBtn = $('.js-pd-send', uiEl);
+    pdRecentEl = $('.js-pd-recent', uiEl);
     settingsBtn = $('.js-settings', uiEl);
     modelEl = $('.js-model-label', uiEl);
     modelBtnEl = $('.js-model', uiEl);
     modelMenuEl = $('.js-modelmenu', uiEl);
+    // Aus dem Composer-Wrapper gelöst und direkt an #jsApp gehängt, damit es
+    // sich relativ zu JEDEM Modell-Button im ganzen Interface positionieren
+    // lässt (siehe positionModelMenu) — nicht nur dem im Haupt-Composer.
+    uiEl.appendChild(modelMenuEl);
     spMuteBtn = $('.js-sp-mute', speechBarEl);
     spStopBtn = $('.js-sp-stop', speechBarEl);
     spSendBtn = $('.js-sp-send', speechBarEl);
@@ -589,7 +650,6 @@
       .js-pill svg { width:16px; height:16px; display:block; }
       .js-side-toggle:hover, .js-new:hover, .js-projects:hover, .js-upload:hover, .js-note:hover, .js-model:hover, .js-settings:hover, .js-sp-mute:hover, .js-sp-stop:hover, .js-sp-chat:hover { background:${C.bgHover}; color:${C.text}; }
       .js-pill.active { background:${C.accent} !important; color:#fff !important; }
-      .js-code-active .js-projects, .js-code-active .js-projects-note { display:none !important; }
       .js-pill:not(.active):hover { background:${C.bgHover}; color:${C.text}; }
       .js-note.on { color:${C.accent} !important; background:rgba(217,119,87,.12) !important; }
       .js-note.on svg { animation:js-note-pulse 1.4s ease-in-out infinite; }
@@ -602,6 +662,9 @@
       .js-chat-item.selected { background:${C.bgHover}; color:${C.text}; }
       .js-chat-item .js-ico { flex:0 0 auto; display:inline-flex; width:15px; height:15px; color:${C.accent}; }
       .js-chat-item .js-ico svg { width:15px; height:15px; display:block; }
+      .js-chats-toggle .js-chats-chevron svg { width:13px; height:13px; display:block; }
+      .js-chats-toggle.is-collapsed .js-chats-chevron { transform:rotate(-90deg); }
+      .js-chats.is-collapsed { display:none !important; }
       .js-chat-item .js-txt { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
       .js-turn { max-width:760px; margin:0 auto 26px; font-family:${C.font}; line-height:1.6; display:flex; }
       .js-you { justify-content:flex-end; }
@@ -619,12 +682,27 @@
       #jsApp.js-code-active .js-codeview { display:flex !important; }
       #jsApp.js-projects-active .js-thread, #jsApp.js-projects-active .js-welcome, #jsApp.js-projects-active .js-composer { display:none !important; }
       #jsApp.js-projects-active .js-projects-view { display:flex !important; }
+      #jsApp.js-project-detail-active .js-thread, #jsApp.js-project-detail-active .js-welcome, #jsApp.js-project-detail-active .js-composer { display:none !important; }
+      #jsApp.js-project-detail-active .js-project-detail-view { display:flex !important; }
+      /* Projekte ist über Chat UND Code hinweg erreichbar (Sidebar-Button
+         bleibt in beiden Modi sichtbar) — diese beiden Regeln müssen NACH
+         den .js-code-active-Regeln oben stehen, damit sie bei gleicher
+         Spezifität + !important gewinnen, wenn jemand Projekte aus dem
+         Code-Tab heraus öffnet (sonst läge das Terminal weiterhin sichtbar
+         unter der Projekte-Ansicht). */
+      #jsApp.js-projects-active .js-codeview, #jsApp.js-project-detail-active .js-codeview { display:none !important; }
       .js-project-card:hover { border-color:${C.textDim}; }
-      .js-project-card { position:relative; }
+      .js-project-card { position:relative; cursor:pointer; }
       .js-project-menu-btn { opacity:0; transition:opacity .1s; }
       .js-project-card:hover .js-project-menu-btn, .js-project-menu-btn.is-open { opacity:1; }
       .js-pcm-rename:hover, .js-pcm-delete:hover, .js-psm-opt:hover { background:${C.bgHover}; }
       .js-psm-opt.active { color:${C.accent} !important; }
+      .js-pd-back:hover { text-decoration:underline; }
+      .js-pd-editor:empty::before { content:attr(data-placeholder); color:${C.textDim}; pointer-events:none; }
+      .js-pd-upload:hover, .js-pd-model:hover, .js-pd-note:hover, .js-pd-speech:hover { background:${C.bgHover}; }
+      .js-pd-upload svg, .js-pd-note svg { width:16px; height:16px; display:block; }
+      .js-pd-speech svg, .js-pd-send svg { width:18px; height:18px; display:block; }
+      .js-pd-recent-item:hover { background:${C.bgHover}; }
     `;
     document.head.appendChild(s);
   }
@@ -633,6 +711,7 @@
   function setMode(mode) {
     if (mode !== 'chat' && mode !== 'code') return;
     closeProjectsView();
+    closeProjectDetail();
     const isCode = mode === 'code';
     const pills = uiEl ? uiEl.querySelectorAll('.js-pill') : [];
     pills.forEach((p) => p.classList.toggle('active', p.dataset.mode === mode));
@@ -666,7 +745,7 @@
 
   // Lädt die Turns einer Konversation in den Thread (oder leert ihn, wenn
   // id=null). Wird von setMode und openConversation gemeinsam genutzt.
-  async function renderConversation(id) {
+  async function renderConversation(id, projectId) {
     const el = ensureThread();
     if (!el) return;
     el.innerHTML = '';
@@ -674,7 +753,8 @@
     let turns = [];
     if (id) {
       try {
-        const r = await fetch(`/conversations/${encodeURIComponent(id)}`);
+        const qs = projectId ? `?project_id=${encodeURIComponent(projectId)}` : '';
+        const r = await fetch(`/conversations/${encodeURIComponent(id)}${qs}`);
         const j = await r.json();
         turns = j.turns || [];
       } catch (e) { turns = []; }
@@ -718,7 +798,7 @@
       if (conv.id === currentConversationId) el.classList.add('selected');
       const ico = document.createElement('span');
       ico.className = 'js-ico';
-      ico.innerHTML = ICONS.chat;
+      ico.innerHTML = ICONS.bullet;
       const txt = document.createElement('span');
       txt.className = 'js-txt';
       txt.textContent = conv.title || 'New chat';
@@ -730,16 +810,18 @@
     }
   }
 
-  async function openConversation(id) {
+  async function openConversation(id, projectId) {
     closeProjectsView();
+    currentProjectId = projectId || null;
     if (id === currentConversationId) return;
     currentConversationId = id;
     localStorage.setItem(modeKey(activeMode), id);
-    await renderConversation(id);
+    await renderConversation(id, projectId);
     loadConversationList();
   }
 
   function startNewConversation() {
+    currentProjectId = null;
     currentConversationId = activeMode + '-' + (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2));
     localStorage.setItem(modeKey(activeMode), currentConversationId);
     history = [];
@@ -762,11 +844,65 @@
     return `${d.getDate()}. ${_PROJECT_MONTHS[d.getMonth()]}`;
   }
   function openProjectsView() {
+    closeProjectDetail();
     if (uiEl) uiEl.classList.add('js-projects-active');
     loadProjects();
   }
   function closeProjectsView() {
     if (uiEl) uiEl.classList.remove('js-projects-active');
+  }
+  function openProjectDetail(project) {
+    closeProjectsView();
+    viewingProjectId = project.id;
+    if (uiEl) uiEl.classList.add('js-project-detail-active');
+    if (pdNameEl) pdNameEl.textContent = project.name;
+    if (pdTitleEl) pdTitleEl.textContent = project.name;
+    if (pdEditorEl) { pdEditorEl.innerText = ''; }
+    loadProjectRecent();
+  }
+  function closeProjectDetail() {
+    if (uiEl) uiEl.classList.remove('js-project-detail-active');
+    viewingProjectId = null;
+  }
+  async function loadProjectRecent() {
+    if (!pdRecentEl || !viewingProjectId) return;
+    pdRecentEl.innerHTML = `<div style="font-size:13px;color:${C.textDim};">Lädt…</div>`;
+    try {
+      const r = await fetch(`/conversations?project_id=${encodeURIComponent(viewingProjectId)}`);
+      const j = await r.json();
+      const list = j.conversations || [];
+      if (!list.length) {
+        pdRecentEl.innerHTML = `<div style="font-size:13px;color:${C.textDim};">Noch keine Unterhaltungen in diesem Projekt.</div>`;
+        return;
+      }
+      pdRecentEl.innerHTML = list.map((c) => `
+        <button class="js-pd-recent-item" data-id="${c.id}" style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 4px;background:none;border:none;border-bottom:1px solid ${C.border};color:${C.text};font-size:14px;cursor:pointer;text-align:left;font-family:${C.font};">
+          <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(c.title || 'Unbenannt')}</span>
+          <span style="flex:0 0 auto;font-size:12px;color:${C.textDim};">${formatProjectDate(c.updated_at)}</span>
+        </button>
+      `).join('');
+      pdRecentEl.querySelectorAll('.js-pd-recent-item').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const pid = viewingProjectId;
+          closeProjectDetail();
+          setMode('chat');
+          openConversation(btn.dataset.id, pid);
+        });
+      });
+    } catch (e) {
+      pdRecentEl.innerHTML = '';
+    }
+  }
+  // Übergibt vom Projekt-Composer in den echten Chat: neue Konversation
+  // anlegen, mit diesem Projekt taggen, dann die eigentliche Aktion
+  // (senden/anhängen/diktieren/Sprachmodus) auf dem echten Composer
+  // auslösen — vermeidet eine zweite komplette Composer-Logik nur für
+  // diese Seite.
+  function pdEnterChat() {
+    const pid = viewingProjectId;
+    closeProjectDetail();
+    startNewConversation();
+    currentProjectId = pid;
   }
   async function loadProjects() {
     try {
@@ -801,31 +937,37 @@
           ${p.tag ? `<span style="font-size:11px;padding:2px 8px;border-radius:10px;background:${C.bgHover};color:${C.textSoft};">${escapeHtml(p.tag)}</span>` : ''}
         </div>
         <button class="js-project-menu-btn" data-id="${p.id}" title="Optionen" style="position:absolute;top:12px;right:10px;background:none;border:none;color:${C.textSoft};cursor:pointer;padding:4px;display:inline-flex;">${ICONS.dots}</button>
+        ${p.dir ? `<div style="font-size:11px;color:${C.textDim};font-family:monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-bottom:8px;" title="${escapeHtml(p.dir)}">${escapeHtml(p.dir)}</div>` : ''}
         ${p.description ? `<div style="font-size:13px;color:${C.textSoft};line-height:1.45;flex:1;">${escapeHtml(p.description)}</div>` : '<div style="flex:1;"></div>'}
         <div style="font-size:12px;color:${C.textDim};margin-top:10px;">${formatProjectDate(p.created_at)}</div>
       </div>
     `).join('');
-  }
-  function escapeHtml(s) {
-    const d = document.createElement('div');
-    d.textContent = s;
-    return d.innerHTML;
   }
   function openNewProjectModal() {
     if (!newProjectSheetEl) return;
     editingProjectId = null;
     $('.js-newproject-title', newProjectSheetEl).textContent = 'Neues Projekt';
     $('.js-newproject-create', newProjectSheetEl).textContent = 'Erstellen';
+    $('.js-newproject-dir-row', newProjectSheetEl).style.display = 'flex';
+    $('.js-newproject-dir-display', newProjectSheetEl).style.display = 'none';
+    $('.js-newproject-dir', newProjectSheetEl).value = '';
     $('.js-newproject-name', newProjectSheetEl).value = '';
     $('.js-newproject-desc', newProjectSheetEl).value = '';
     newProjectSheetEl.style.display = 'flex';
-    $('.js-newproject-name', newProjectSheetEl).focus();
+    $('.js-newproject-dir', newProjectSheetEl).focus();
   }
   function openEditProjectModal(project) {
     if (!newProjectSheetEl) return;
     editingProjectId = project.id;
     $('.js-newproject-title', newProjectSheetEl).textContent = 'Projekt umbenennen';
     $('.js-newproject-create', newProjectSheetEl).textContent = 'Speichern';
+    // Der Ordner ist die eigentliche Identität des Projekts (dort liegen
+    // seine Chats) — beim Umbenennen nur anzeigen, nicht änderbar, um nicht
+    // aus Versehen den Bezug zu den schon gespeicherten Chats zu kappen.
+    $('.js-newproject-dir-row', newProjectSheetEl).style.display = 'none';
+    const dirDisplay = $('.js-newproject-dir-display', newProjectSheetEl);
+    dirDisplay.style.display = 'block';
+    dirDisplay.textContent = project.dir || '';
     $('.js-newproject-name', newProjectSheetEl).value = project.name || '';
     $('.js-newproject-desc', newProjectSheetEl).value = project.description || '';
     newProjectSheetEl.style.display = 'flex';
@@ -837,8 +979,9 @@
   }
   async function createProjectFromModal() {
     const name = $('.js-newproject-name', newProjectSheetEl).value.trim();
-    if (!name) return;
     const description = $('.js-newproject-desc', newProjectSheetEl).value.trim();
+    const errEl = $('.js-newproject-error', newProjectSheetEl);
+    if (errEl) errEl.textContent = '';
     try {
       if (editingProjectId) {
         await fetch(`/projects/${encodeURIComponent(editingProjectId)}`, {
@@ -847,13 +990,23 @@
           body: JSON.stringify({ name, description }),
         });
       } else {
-        await fetch('/projects', {
+        const dir = $('.js-newproject-dir', newProjectSheetEl).value.trim();
+        if (!dir) return;
+        const r = await fetch('/projects', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name, description }),
+          body: JSON.stringify({ dir, name, description }),
         });
+        if (!r.ok) {
+          const j = await r.json().catch(() => ({}));
+          if (errEl) errEl.textContent = j.detail || 'Ordner konnte nicht verwendet werden.';
+          return;
+        }
       }
-    } catch (e) {}
+    } catch (e) {
+      if (errEl) errEl.textContent = 'Netzwerkfehler.';
+      return;
+    }
     closeNewProjectModal();
     loadProjects();
   }
@@ -884,7 +1037,17 @@
   }
 
   function wireUi() {
-    $('.js-new', uiEl).addEventListener('click', () => { closeProjectsView(); startNewConversation(); });
+    $('.js-new', uiEl).addEventListener('click', () => { closeProjectsView(); closeProjectDetail(); startNewConversation(); });
+    $('.js-chats-toggle', uiEl).addEventListener('click', (e) => {
+      e.preventDefault();
+      const collapsed = chatListEl.classList.toggle('is-collapsed');
+      $('.js-chats-toggle', uiEl).classList.toggle('is-collapsed', collapsed);
+      localStorage.setItem('jarvis_chats_collapsed', collapsed ? '1' : '0');
+    });
+    if (localStorage.getItem('jarvis_chats_collapsed') === '1') {
+      chatListEl.classList.add('is-collapsed');
+      $('.js-chats-toggle', uiEl).classList.add('is-collapsed');
+    }
     $('.js-projects', uiEl).addEventListener('click', (e) => { e.preventDefault(); openProjectsView(); });
     $('.js-projects-new', uiEl).addEventListener('click', (e) => { e.preventDefault(); openNewProjectModal(); });
     $('.js-projects-search-btn', uiEl).addEventListener('click', (e) => {
@@ -933,6 +1096,13 @@
       menu.style.display = 'block';
       positionFloatingMenu(btn, menu);
     });
+    projectsGridEl.addEventListener('click', (e) => {
+      if (e.target.closest('.js-project-menu-btn')) return;
+      const card = e.target.closest('.js-project-card');
+      if (!card) return;
+      const project = projectsList.find((p) => p.id === card.dataset.id);
+      if (project) openProjectDetail(project);
+    });
     $('.js-pcm-rename', uiEl).addEventListener('click', (e) => {
       e.preventDefault();
       const project = projectsList.find((p) => p.id === projectCardMenuTargetId);
@@ -973,6 +1143,39 @@
     if (speechBtn) speechBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); speechMode ? exitSpeech() : enterSpeech(); });
     if (noteBtn) noteBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); setDictating(!dictating); });
     if (uploadBtn) uploadBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); if (fileInput) fileInput.click(); });
+
+    // Projekt-Detailseite: eigener kleiner Composer, der bei jeder echten
+    // Interaktion (senden/anhängen/diktieren/Sprechen) in den normalen Chat
+    // übergibt — siehe pdEnterChat(). Nur der Modell-Button bleibt hier
+    // stehen (Modell wechseln muss die Seite nicht verlassen).
+    if (pdBackEl) pdBackEl.addEventListener('click', () => openProjectsView());
+    if (pdEditorEl) {
+      pdEditorEl.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); if (pdSendBtn) pdSendBtn.click(); }
+      });
+    }
+    if (pdSendBtn) pdSendBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      const text = pdEditorEl ? pdEditorEl.innerText.trim() : '';
+      if (!text) return;
+      pdEnterChat();
+      sendMessage(text);
+    });
+    if (pdUploadBtn) pdUploadBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      pdEnterChat();
+      if (fileInput) fileInput.click();
+    });
+    if (pdNoteBtn) pdNoteBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      pdEnterChat();
+      setDictating(true);
+    });
+    if (pdSpeechBtn) pdSpeechBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      pdEnterChat();
+      enterSpeech();
+    });
     if (settingsBtn) settingsBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); openSettings(); });
     const closeSettingsBtn = $('.js-settings-close', settingsSheetEl);
     if (closeSettingsBtn) closeSettingsBtn.addEventListener('click', closeSettings);
@@ -992,8 +1195,9 @@
       });
     }
 
-    if (modelBtnEl) modelBtnEl.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); toggleModelMenu(); });
-    window.addEventListener('click', () => { if (modelMenuEl) modelMenuEl.style.display = 'none'; });
+    if (modelBtnEl) modelBtnEl.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); toggleModelMenu(modelBtnEl); });
+    if (pdModelBtn) pdModelBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); toggleModelMenu(pdModelBtn); });
+    window.addEventListener('click', () => { if (modelMenuEl) modelMenuEl.style.display = 'none'; modelMenuAnchor = null; });
 
     // Sprachmodus-Bottom-Leiste
     if (spMuteBtn) spMuteBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); muted = !muted; updateMuteIcon(); if (muted) stopListening(); else startListening(); });
@@ -1116,7 +1320,7 @@
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         signal: abortController.signal,
-        body: JSON.stringify({ message: text, history, turn_id: currentTurnId, mode: activeMode, conversation_id: ensureConversationId(), images: imagesForThisTurn }),
+        body: JSON.stringify({ message: text, history, turn_id: currentTurnId, mode: activeMode, conversation_id: ensureConversationId(), images: imagesForThisTurn, project_id: currentProjectId }),
       });
       if (!resp.ok) throw new Error('HTTP ' + resp.status);
       const reader = resp.body.getReader();
@@ -1345,18 +1549,21 @@
   }
 
   let lastModelsList = null;  // Cache: sofort anzeigen statt bei jedem Klick auf den Netzwerk-Roundtrip zu warten
-  function positionModelMenu() {
-    if (!modelMenuEl || !modelBtnEl) return;
-    const wrap = modelMenuEl.parentElement;
-    if (!wrap) return;
-    const wrapRect = wrap.getBoundingClientRect();
-    const btnRect = modelBtnEl.getBoundingClientRect();
+  let modelMenuAnchor = null;  // welcher Button hat das Menü zuletzt geöffnet — für Repositionierung nach dem fetch
+  function positionModelMenu(anchorBtn) {
+    if (!modelMenuEl || !anchorBtn || !uiEl) return;
+    const appRect = uiEl.getBoundingClientRect();
+    const btnRect = anchorBtn.getBoundingClientRect();
     const menuWidth = 220;
     // Am linken Rand des Buttons ausgerichtet (nicht am rechten) — sitzt
-    // dadurch direkt über dem ausgewählten Modellnamen statt weiter links.
-    let left = btnRect.left - wrapRect.left;
-    left = Math.max(0, Math.min(left, wrapRect.width - menuWidth));
+    // dadurch direkt über/unter dem ausgewählten Modellnamen statt weiter links.
+    let left = btnRect.left - appRect.left;
+    left = Math.max(0, Math.min(left, appRect.width - menuWidth));
     modelMenuEl.style.left = left + 'px';
+    const menuHeight = modelMenuEl.offsetHeight || 200;
+    let top = btnRect.top - appRect.top - menuHeight - 8;
+    if (top < 0) top = btnRect.bottom - appRect.top + 8;  // kein Platz oben -> unten öffnen
+    modelMenuEl.style.top = top + 'px';
   }
   function renderModelMenu(models) {
     modelMenuEl.innerHTML = '';
@@ -1383,18 +1590,20 @@
       modelMenuEl.appendChild(b);
     }
   }
-  async function toggleModelMenu() {
+  async function toggleModelMenu(anchorBtn) {
     if (!modelMenuEl) return;
+    anchorBtn = anchorBtn || modelBtnEl;
     const open = modelMenuEl.style.display !== 'none';
-    if (open) { modelMenuEl.style.display = 'none'; return; }
+    if (open && modelMenuAnchor === anchorBtn) { modelMenuEl.style.display = 'none'; modelMenuAnchor = null; return; }
+    modelMenuAnchor = anchorBtn;
     // Sofort öffnen — mit dem letzten bekannten Stand, falls vorhanden —
     // statt erst auf den fetch zu warten. Vorher fühlte sich ein Klick
     // wirkungslos an, solange /models noch unterwegs war, und ein zweiter
     // Klick währenddessen stieß einen weiteren parallelen fetch an.
     if (lastModelsList) renderModelMenu(lastModelsList);
     else { modelMenuEl.innerHTML = `<div style="padding:10px 14px;font-size:13px;color:${C.textDim};">Lädt…</div>`; }
-    positionModelMenu();
     modelMenuEl.style.display = 'block';
+    positionModelMenu(anchorBtn);
     try {
       const r = await fetch('/models');
       const j = await r.json();
@@ -1402,7 +1611,7 @@
       applyModelCaps(j);
       if (j.current) setModelLabel(j.current);
       lastModelsList = models;
-      if (modelMenuEl.style.display !== 'none') { renderModelMenu(models); positionModelMenu(); }
+      if (modelMenuEl.style.display !== 'none') { renderModelMenu(models); positionModelMenu(modelMenuAnchor); }
     } catch (e) {
       if (!lastModelsList) renderModelMenu([]);
     }
@@ -1411,6 +1620,7 @@
   function setModelLabel(id) {
     const short = String(id).split('/').pop();
     if (modelEl) modelEl.textContent = short;
+    if (pdModelLabelEl) pdModelLabelEl.textContent = short;
   }
 
   // ------------------------------------------------------------- code-tab
