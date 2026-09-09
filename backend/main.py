@@ -127,6 +127,10 @@ class ChatRequest(BaseModel):
     # Data-URLs ("data:image/jpeg;base64,...") vom Datei-Anhang im Frontend —
     # nur an vision-fähige Modelle weitergereicht, siehe llm_client._build_messages.
     images: list[str] | None = None
+    # Nur relevant, wenn diese Nachricht die Konversation neu anlegt (siehe
+    # conversations.append_turn) — verknüpft sie dauerhaft mit dem Projekt,
+    # aus dessen Detailansicht heraus gesendet wurde.
+    project_id: str | None = None
 
 
 class CancelRequest(BaseModel):
@@ -367,7 +371,7 @@ def chat_stream(req: ChatRequest):
                     ) + "\n"
             if full_text:
                 transcript_log.log_turn(req.message, full_text, req.mode)
-                conv = conversations.append_turn(conv_id, req.message, full_text)
+                conv = conversations.append_turn(conv_id, req.message, full_text, req.project_id)
                 if conv.get("title") is None and len(conv.get("turns", [])) == 2:
                     _generate_title_in_background(req.message, full_text)
         except (requests.RequestException, llm_client.ModelError, KeyError, IndexError) as exc:
@@ -425,10 +429,12 @@ def transcript():
 
 
 @app.get("/conversations")
-def get_conversations():
+def get_conversations(project_id: str | None = None):
     """Metadata for the sidebar's conversation list — newest first, each
-    with its auto-generated title (see llm_client.generate_title)."""
-    return {"conversations": conversations.list_conversations()}
+    with its auto-generated title (see llm_client.generate_title). Pass
+    project_id to get only that project's conversations (the project
+    detail page's "Zuletzt verwendet" list)."""
+    return {"conversations": conversations.list_conversations(project_id)}
 
 
 @app.get("/conversations/{conv_id}")
