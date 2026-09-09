@@ -16,7 +16,7 @@ from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import browser_agent, config, conversations, fillers, llm_client, memory, panel, stt, transcript_log, tts, vector_memory
+from . import browser_agent, config, conversations, fillers, llm_client, memory, opencode_agent, panel, stt, transcript_log, tts, vector_memory
 
 app = FastAPI(title="Jarvis")
 app.add_middleware(
@@ -30,6 +30,36 @@ FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
 
 active_sockets: list[WebSocket] = []
 filler_urls: list[str] = []
+
+
+# Emoji-Range, die aus KI-Antworten entfernt werden. Der Nutzer will keine
+# Emojis in den Antworten — weder im Text noch in der Sprachausgabe. Der Filter
+# sitzt an EINER Stelle (hier), damit Display UND TTS denselben bereinigten
+# Text erhalten. Entfernt werden die farbigen Piktogramm-Blöcke (U+1F000–U+1FAFF),
+# die klassischen BMP-Symbole (U+2600–U+27BF, U+2B00–U+2BFF, U+2300–U+23FF für
+# Emoji-Defaults wie ⏰⌚), regionale Flags (U+1F1E6–U+1F1FF), Skin-Tones
+# (U+1F3FB–U+1F3FF), das Joiner-Zeichen (U+200D, zerlegt ZWJ-Komposita wie
+# 👨‍👩‍👧 in Einzelzeichen) und die Variationsselektoren (U+FE00–U+FE0F).
+_EMOJI_RE = re.compile(
+    "["
+    "\U0001F000-\U0001FAFF"  # Piktogramme: Smileys, 💡, 🚀, Tiere, …
+    "\U0001F1E6-\U0001F1FF"  # regionale Indikatoren (Flaggen)
+    "\U00002300-\U000023FF"  # ⌚⏰⌛⏳ (emoji-default)
+    "\U00002600-\U000027BF"  # ⭐❌✅⚠❤✨ …
+    "\U00002B00-\U00002BFF"  # wiederkehrende Symbolpfeile/Formen
+    "\U0001F3FB-\U0001F3FF"  # Hauttöne
+    "\U0000200D"  # ZWJ (Zero-Width-Joiner)
+    "\U000020E3"  # Keycap-Combiner
+    "\U0000FE00-\U0000FE0F"  # Variationsselektoren
+    "]"
+)
+
+
+def _strip_emojis(text: str) -> str:
+    """Entfernt Emojis aus einer Antwort; lässt normalen Text unangetastet."""
+    if not text:
+        return text
+    return _EMOJI_RE.sub("", text)
 
 
 async def broadcast(payload: dict) -> None:
@@ -205,8 +235,8 @@ def chat(req: ChatRequest):
         reply = llm_client.get_reply(req.message, req.history, req.mode)
     except (requests.RequestException, llm_client.ModelError):
         reply = (
-            "Ich komm gerade nicht an mein Sprachmodell ran. "
-            "Läuft LM Studio und ist der Server dort gestartet?"
+            "I can't reach my language model right now. "
+            "Is LM Studio running and has its server been started?"
         )
     return ChatResponse(reply=reply)
 
@@ -283,7 +313,12 @@ def chat_stream(req: ChatRequest):
         try:
             for event in llm_client.stream_reply(req.message, req.history, turn_id=req.turn_id, mode=req.mode):
                 if event["type"] == "sentence":
-                    text = event["text"]
+                    text = _strip_emojis(event["text"])
+                    # Leere Sätze (löst ein Reasoning-Modell manchmal am Ende aus)
+                    # ganz überspringen — weder anzeigen noch (den Mini-Botch)
+                    # vertonen.
+                    if not text.strip():
+                        continue
                     # Text wird SOFORT geschickt — TTS-Synthese dauert real
                     # Sekunden, und der Nutzer soll nicht auf die Stimme warten,
                     # nur um überhaupt etwas zu sehen. Die Worte gehen zuerst
@@ -302,11 +337,11 @@ def chat_stream(req: ChatRequest):
                 elif event["type"] == "partial":
                     # Zwischentext des noch unfertigen Satzes — sofort weiter,
                     # damit der Nutzer live mitlesen kann. Kein Audio, nur Text.
-                    yield json.dumps({"type": "partial", "text": event["text"]}) + "\n"
+                    yield json.dumps({"type": "partial", "text": _strip_emojis(event["text"])}) + "\n"
                 elif event["type"] == "done":
-                    full_text = event["full_text"]
+                    full_text = _strip_emojis(event["full_text"])
                     yield json.dumps(
-                        {"type": "done", "full_text": event["full_text"], "conversation_id": conv_id}
+                        {"type": "done", "full_text": full_text, "conversation_id": conv_id}
                     ) + "\n"
             if full_text:
                 transcript_log.log_turn(req.message, full_text, req.mode)
@@ -315,8 +350,8 @@ def chat_stream(req: ChatRequest):
                     _generate_title_in_background(req.message, full_text)
         except (requests.RequestException, llm_client.ModelError, KeyError, IndexError) as exc:
             fallback = (
-                "Ich komme gerade nicht an mein Sprachmodell ran. "
-                "Prüfe bitte, ob Gemma 4 E4B in LM Studio geladen ist."
+                "I can't reach my language model right now. "
+                "Please check whether Gemma is loaded in LM Studio."
             )
             print(f"[model] Anfrage fehlgeschlagen: {exc}")
             try:
@@ -457,6 +492,120 @@ async def trigger():
     """Called by the global hotkey listener to wake up connected frontends."""
     await broadcast({"type": "wake"})
     return {"notified": len(active_sockets)}
+
+
+# ---------------------------------------------------------------------------
+# Code-Tab: headless OpenCode driven over a dedicated WebSocket. The browser
+# opens /code/ws, sends {"type":"prompt",...}, and the server streams parsed
+# `opencode run --format json` events back as {"type":"event","event":...}.
+# See backend/opencode_agent.py for the transport (PTY for line-buffered
+# stdout) and the context-size constraint.
+# ---------------------------------------------------------------------------
+
+
+@app.get("/code/status")
+def code_status():
+    """Everything the frontend needs to render the Code-Tab: the LM Studio
+    model list (with loaded context), the current/default model and the
+    working directory. Also refreshes the opencode provider config so the
+    models opencode knows about stay in sync with what LM Studio reports."""
+    models = opencode_agent.list_models()
+    default = opencode_agent.default_model()
+    if models:
+        opencode_agent.ensure_provider_config(models, default)
+    return {
+        "model": config.LM_STUDIO_MODEL,
+        "default": default,
+        "dir": opencode_agent.get_code_dir(),
+        "models": models,
+        "min_context": opencode_agent.CODE_MIN_CONTEXT,
+    }
+
+
+@app.post("/code/config")
+def code_set_config(body: dict):
+    """Persist the Code-Tab working directory."""
+    new_dir = str(body.get("dir", "")).strip()
+    if new_dir:
+        opencode_agent.set_code_dir(new_dir)
+    return {"dir": opencode_agent.get_code_dir()}
+
+
+@app.websocket("/code/ws")
+async def code_ws(websocket: WebSocket):
+    """Bidirectional chat channel for the Code-Tab agent.
+
+    The client sends {"type":"prompt", "text", "model", "dir"} to start a turn,
+    {"type":"cancel"} to abort the running one. The server streams
+    {"type":"event","event":{...}} per opencode event, then {"type":"done"}.
+
+    A single background "sender" task drains an asyncio queue so all writes to
+    the websocket happen from one coroutine (Starlette's WebSocket is not safe
+    for concurrent sends), while the receive loop and the per-turn runner stay
+    independent.
+    """
+    await websocket.accept()
+    send_q: asyncio.Queue = asyncio.Queue()
+    session_id: str | None = None
+    cancel: asyncio.Event | None = None
+    run_task: asyncio.Task | None = None
+
+    async def _sender() -> None:
+        while True:
+            item = await send_q.get()
+            if item is None:
+                break
+            await websocket.send_text(item if isinstance(item, str) else json.dumps(item))
+
+    sender_task = asyncio.create_task(_sender())
+
+    async def _stream_turn(text: str, model: str, wdir: str) -> None:
+        nonlocal session_id, cancel
+        cancel = asyncio.Event()
+        try:
+            # Refresh the provider config once so opencode knows this model.
+            models = opencode_agent.list_models()
+            if models:
+                opencode_agent.ensure_provider_config(models, model)
+            async for ev in opencode_agent.run(text, model, wdir, session_id=session_id, cancel=cancel):
+                sid = ev.get("sessionID")
+                if sid:
+                    session_id = sid
+                await send_q.put({"type": "event", "event": ev})
+            await send_q.put({"type": "done"})
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - map any failure to a UI message
+            await send_q.put({"type": "error", "message": str(exc)})
+
+    try:
+        while True:
+            msg = await websocket.receive_json()
+            mtype = msg.get("type")
+            if mtype == "prompt":
+                if run_task and not run_task.done():
+                    await send_q.put({"type": "error", "message": "Ein Lauf läuft bereits."})
+                    continue
+                text = (msg.get("text") or "").strip()
+                if not text:
+                    continue
+                model = msg.get("model") or opencode_agent.default_model()
+                wdir = msg.get("dir") or opencode_agent.get_code_dir()
+                run_task = asyncio.create_task(_stream_turn(text, model, wdir))
+            elif mtype == "cancel":
+                if cancel:
+                    cancel.set()
+            elif mtype == "new_session":
+                session_id = None
+    except WebSocketDisconnect:
+        pass
+    finally:
+        if cancel:
+            cancel.set()
+        if run_task:
+            run_task.cancel()
+        await send_q.put(None)
+        sender_task.cancel()
 
 
 @app.websocket("/ws")

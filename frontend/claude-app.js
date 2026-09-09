@@ -1,20 +1,18 @@
-// JARVIS — funktionale Schicht, die über dem eingefrorenen claude.ai-SSR-DOM
-// liegt. Der Snapshot (frontend/claude.html) ist inert: seine Anthropic-Skripte
-// sind in serve_index() gestrippt, React läuft nie. Seine CSS-Tokens/Fonts
+// JARVIS — funktionale Schicht über dem eingefrorenen claude.ai-SSR-DOM.
+// Der Snapshot (frontend/claude.html) ist inert: seine Anthropic-Skripte sind
+// in serve_index() gestrippt, React läuft nie. Seine CSS-Tokens/Fonts
 // (--font-anthropic-sans, --text-primary/…, Terracotta #d97757) behalten wir;
-// das tote, kollabierte DOM verdecken wir mit einer EIGENEN, funktionalen
-// UI-Schicht (#jsApp): Sidebar mit echten Chats + Einstellungen, Willkommens-
-// Hero, Composer -> /chat/stream (NDJSON + TTS), Modell-Auswahl, Datei-Upload,
-// Diktat- und Sprachmodus (3D-Punktnetz-Kugel, Canvas2D, kein three.js).
-// Bewusst OHNE Claude-Logo und ohne Chat/Code-Umschalter.
+// das tote DOM verdecken wir mit einer EIGENEN, funktionalen UI-Schicht (#jsApp):
+// Sidebar mit echten Chats + Einstellungen, Uhrzeit-Begrüßung, Chat/Code-Toggle,
+// Composer -> /chat/stream (NDJSON + TTS), Modell-Auswahl, Datei-Upload,
+// Diktat (Mikrofon) und Sprachmodus (mittiges graues Punktnetz, Canvas2D).
+// Bewusst OHNE Logo/Wortbild; Oberfläche auf Englisch; Code-Modus als Stub.
 (() => {
   'use strict';
 
   const $ = (s, r = document) => r.querySelector(s);
 
   // ------------------------------------------------ claude-design-tokens
-  // Um die "Cloud-Optik" 1:1 zu treffen, greife ich auf die Claude-Tokens des
-  // Snapshots zurück; fallen sie aus, stehen hier die bekannten Werte.
   const C = {
     bg: 'var(--ground, #141311)',
     bgSoft: 'var(--bg-soft, #1b1a17)',
@@ -28,26 +26,22 @@
     serif: 'var(--font-anthropic-serif, Georgia, serif)',
   };
 
-  // ------------------------------------------------ claude-icons (offline)
-  // Die echte Claude-Ikonografie aus dem eingefrorenen Snapshot: das Wortbild
-  // ("Claude") und der terracotta-farbene Spark-Generator. Beide sind inline
-  // SVG und damit voll offline. Die Rund-Badge-SVGs unter vendor/ap/ sind nur
-  // dekorative Deckblätter; die Werkzeug-Glyphen (Mic/Pfeil/Plus/Toggle) zeichne
-  // ich im Claude-Linienstil (stroke=currentColor, runde Kappen, 24-er Box).
-  // Eigene Ikonografie im flachen Linienstil (stroke=currentColor, runde Kappen,
-  // 24er-Box) — bewusst KEIN Claude-Wortbild. Die Marke ist der kleine Terracotta-
-  // Orb (Arc-Reactor) mit umlaufendem Ring; er passt zum 3D-Sprachmodus-Orb.
+  // ------------------------------------------------ lucide-icons (24x24 stroke)
+  // Echte Lucide-Ikonen, 1:1 aus dem Internet (lucide-static), stroke=currentColor.
   const ICONS = {
-    logo: '<svg viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="16" r="5.4" fill="currentColor"/><circle cx="16" cy="16" r="10.6" fill="none" stroke="currentColor" stroke-width="1.6" opacity=".45" stroke-dasharray="3.4 3.2"/><circle cx="25.4" cy="11.4" r="1.4" fill="currentColor" opacity=".8"/></svg>',
-    spark: '<svg viewBox="0 0 100 100" fill="currentColor" aria-hidden="true"><path d="m19.6 66.5 19.7-11 .3-1-.3-.5h-1l-3.3-.2-11.2-.3L14 53l-9.5-.5-2.4-.5L0 49l.2-1.5 2-1.3 2.9.2 6.3.5 9.5.6 6.9.4L38 49.1h1.6l.2-.7-.5-.4-.4-.4L29 41l-10.6-7-5.6-4.1-3-2-1.5-2-.6-4.2 2.7-3 3.7.3.9.2 3.7 2.9 8 6.1L37 36l1.5 1.2.6-.4.1-.3-.7-1.1L33 25l-6-10.4-2.7-4.3-.7-2.6c-.3-1-.4-2-.4-3l3-4.2L28 0l4.2.6L33.8 2l2.6 6 4.1 9.3L47 29.9l2 3.8 1 3.4.3 1h.7v-.5l.5-7.2 1-8.7 1-11.2.3-3.2 1.6-3.8 3-2L61 2.6l2 2.9-.3 1.8-1.1 7.7L59 27.1l-1.5 8.2h.9l1-1.1 4.1-5.4 6.9-8.6 3-3.5L77 13l2.3-1.8h4.3l3.1 4.7-1.4 4.9-4.4 5.6-3.7 4.7-5.3 7.1-3.2 5.7.3.4h.7l12-2.6 6.4-1.1 7.6-1.3 3.5 1.6.4 1.6-1.4 3.4-8.2 2-9.6 2-14.3 3.3-.2.1.2.3 6.4.6 2.8.2h6.8l12.6 1 3.3 2 1.9 2.7-.3 2-5.1 2.6-6.8-1.6-16-3.8-5.4-1.3h-.8v.4l4.6 4.5 8.3 7.5L89 80.1l.5 2.4-1.3 2-1.4-.2-9.2-7-3.6-3-8-6.8h-.5v.7l1.8 2.7 9.8 14.7.5 4.5-.7 1.4-2.6 1-2.7-.6-5.8-8-6-9-4.7-8.2-.5.4-2.9 30.2-1.3 1.5-3 1.2-2.5-2-1.4-3 1.4-6.2 1.6-8 1.3-6.4 1.2-7.9.7-2.6v-.2H49L43 72l-9 12.3-7.2 7.6-1.7.7-3-1.5.3-2.8L24 86l10-12.8 6-7.9 4-4.6-.1-.5h-.3L17.2 77.4l-4.7.6-2-2 .2-3 1-1 8-5.5Z"></path></svg>',
-    mic: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v1a7 7 0 0 0 14 0v-1"/><line x1="12" y1="18" x2="12" y2="22"/></svg>',
-    plus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>',
-    sidebar: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3"/><line x1="9.5" y1="4" x2="9.5" y2="20"/><line x1="13.5" y1="8" x2="17.5" y2="8"/><line x1="13.5" y1="12" x2="17.5" y2="12"/><line x1="13.5" y1="16" x2="16.5" y2="16"/></svg>',
-    send: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V6"/><path d="M5.5 12.5 12 6l6.5 6.5"/></svg>',
-    upload: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.4 12.6A9 9 0 1 1 11.4 3"/><path d="M12 3v9"/><path d="m8 6 4-3 4 3"/></svg>',
-    dictation: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M12 2v12"/><path d="M9 10.5c0-.8.6-1.3 1.3-1.4l1.7-.1 1.7.1c.7.1 1.3.6 1.3 1.4"/><path d="M7 15.6l5-2.6 5 2.6"/><path d="M12 14v6"/><path d="M9 20h6"/></svg>',
-    speech: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><path d="M4 9v6"/><path d="M8 6v12"/><path d="M12 3v18"/><path d="M16 6v12"/><path d="M20 9v6"/></svg>',
-    gear: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 2v2.2M12 19.8V22M4.9 4.9l1.6 1.6M17.5 17.5l1.6 1.6M2 12h2.2M19.8 12H22M4.9 19.1l1.6-1.6M17.5 6.5l1.6-1.6"/></svg>',
+    menu: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><line x1="4" x2="20" y1="6" y2="6"/><line x1="4" x2="20" y1="12" y2="12"/><line x1="4" x2="20" y1="18" y2="18"/></svg>',
+    plus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M5 12h14"/><path d="M12 5v14"/></svg>',
+    chat: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z"/></svg>',
+    code: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m18 16 4-4-4-4"/><path d="m6 8-4 4 4 4"/><path d="m14.5 4-5 16"/></svg>',
+    mic: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/></svg>',
+    micOff: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="2" x2="22" y1="2" y2="22"/><path d="M18.89 13.23A7.12 7.12 0 0 0 19 12v-2"/><path d="M5 10v2a7 7 0 0 0 12 5"/><path d="M15 9.34V5a3 3 0 0 0-5.68-1.33"/><path d="M9 9v3a3 3 0 0 0 5.12 2.12"/><line x1="12" x2="12" y1="19" y2="22"/></svg>',
+    audio: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M2 10v3"/><path d="M6 6v11"/><path d="M10 3v18"/><path d="M14 8v7"/><path d="M18 5v13"/><path d="M22 10v3"/></svg>',
+    send: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 7-7 7 7"/><path d="M12 19V5"/></svg>',
+    settings: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915"/><circle cx="12" cy="12" r="3"/></svg>',
+    paperclip: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m16 6-8.414 8.586a2 2 0 0 0 2.829 2.829l8.414-8.586a4 4 0 1 0-5.657-5.657l-8.379 8.551a6 6 0 1 0 8.485 8.485l8.379-8.551"/></svg>',
+    stop: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect width="18" height="18" x="3" y="3" rx="4" fill="currentColor"/></svg>',
+    volume: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 4.702a.705.705 0 0 0-1.203-.498L6.413 7.587A1.4 1.4 0 0 1 5.416 8H3a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2.416a1.4 1.4 0 0 1 .997.413l3.383 3.384A.705.705 0 0 0 11 19.298z"/><path d="M16 9a5 5 0 0 1 0 6"/><path d="M19.364 18.364a9 9 0 0 0 0-12.728"/></svg>',
+    muted: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 4.702a.7.7 0 0 0-1.203-.498L6.413 7.587A1.4 1.4 0 0 1 5.416 8H3a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2.416a1.4 1.4 0 0 1 .997.413l3.383 3.384A.7.7 0 0 0 11 19.298z"/><path d="m16.5 14.5 5-5"/><path d="m16.5 9.5 5 5"/></svg>',
   };
 
   // ---------------------------------------------------------------- helfer
@@ -65,31 +59,99 @@
     return audioCtx;
   }
 
+  // Sprachausgabe als sequenzielle Warteschlange: Der streamende Text landet
+  // SOFORT im Thread, die vertonten Sätze folgen nacheinander, ohne sich zu
+  // überlappen. Für die „sprechen"-Animation wird die TTS-Ausgabe über einen
+  // EIGENEN AudioContext gemessen (getrennt vom Mikrofon-Context, damit das
+  // Routing die Stimme nicht stummschaltet); der Pegel treibt den Orb.
+  let speaking = false;
+  let audioQueue = [];
+  let audioDraining = false;
+  // Ausgabe-Pegel-Messung (gesprochene Stimme) für die Orb-Animation
+  let ttsAudioCtx = null, outputAnalyser = null, outBuf = null, speakingLevel = 0;
+  let currentAudioEl = null, currentAudioSrc = null;
+  // Abbruch-Zustand für eine laufende Antwort (Stop-Button)
+  let turnAborted = false, activeReader = null, abortController = null, currentTurnId = null;
+  // Live-Diktat: Basis-Text im Eingabefeld beim Start
+  let dictBase = '';
+
+  function rmsFrom(analyser, buf) {
+    analyser.getByteTimeDomainData(buf);
+    let sum = 0;
+    for (let i = 0; i < buf.length; i++) { const v = (buf[i] - 128) / 128; sum += v * v; }
+    return Math.sqrt(sum / buf.length);
+  }
+
   function playClip(blob) {
     const audio = new Audio(URL.createObjectURL(blob));
-    const ctx = ensureCtx();
-    const src = ctx.createMediaElementSource(audio);
-    const analyser = ctx.createAnalyser();
-    analyser.fftSize = 512;
-    src.connect(analyser);
-    analyser.connect(ctx.destination);
-    outputAnalyser = analyser;
     return new Promise((resolve) => {
       let done = false;
-      const finish = () => {
-        if (done) return;
-        done = true;
-        clearTimeout(timer);
-        if (outputAnalyser === analyser) outputAnalyser = null;
-        resolve();
-      };
+      let src = null;
+      const finish = () => { if (done) return; done = true; clearTimeout(timer); teardownMeter(audio, src); resolve(); };
       const timer = setTimeout(finish, 4000);
-      audio.onended = finish;
-      audio.onerror = finish;
-      audio.play().then(() => {
-        if (!audio.ended) { /* läuft */ }
-      }).catch(finish);
+      // Ausgabe-Pegel nur im Sprachmodus messen (dort ist die Orb sichtbar).
+      try {
+        if (speechMode) {
+          if (!ttsAudioCtx) ttsAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+          if (ttsAudioCtx.state === 'suspended') ttsAudioCtx.resume().catch(() => {});
+          src = ttsAudioCtx.createMediaElementSource(audio);
+          const analyser = ttsAudioCtx.createAnalyser();
+          analyser.fftSize = 512;
+          src.connect(analyser);
+          analyser.connect(ttsAudioCtx.destination);   // Analyser speist UND lässt die Stimme hörbar
+          outputAnalyser = analyser;
+          if (!outBuf || outBuf.length !== analyser.fftSize) outBuf = new Uint8Array(analyser.fftSize);
+          currentAudioSrc = src;
+        }
+      } catch (e) { src = null; outputAnalyser = null; }
+      currentAudioEl = audio;
+      audio.onplaying = () => { speaking = true; if (speechMode) setSpeechStatus('Antworte'); };
+      audio.onended = () => { speaking = false; finish(); };
+      audio.onerror = () => { speaking = false; finish(); };
+      audio.play().then(() => {}).catch(() => { speaking = false; finish(); });
     });
+  }
+
+  function teardownMeter(el, src) {
+    if (currentAudioSrc === src) currentAudioSrc = null;
+    if (currentAudioEl === el) currentAudioEl = null;
+    if (src) { try { src.disconnect(); } catch (e) {} }
+    outputAnalyser = null;
+    speakingLevel = 0;
+  }
+
+  function enqueueClip(blob) {
+    audioQueue.push(blob);
+    if (!audioDraining) drainAudioQueue();
+  }
+  async function drainAudioQueue() {
+    audioDraining = true;
+    speaking = false;
+    while (audioQueue.length) {
+      const blob = audioQueue.shift();
+      try { await playClip(blob); } catch (e) { /* nie den Faden abreißen */ }
+    }
+    speaking = false;
+    audioDraining = false;
+    // nach der Ausgabe wieder in den Bereit-Zustand, wenn noch im Sprachmodus
+    if (speechMode && !busy) setSpeechStatus('Bereit');
+  }
+
+  // Stop-Button: unterbricht die laufende Antwort UND die Sprachausgabe.
+  function stopSpeech() {
+    turnAborted = true;
+    try { if (abortController) abortController.abort(); } catch (e) {}
+    try { if (activeReader) activeReader.cancel(); } catch (e) {}
+    audioQueue.length = 0;
+    audioDraining = false;
+    if (currentAudioSrc) { try { currentAudioSrc.disconnect(); } catch (e) {} currentAudioSrc = null; }
+    if (currentAudioEl) { try { currentAudioEl.pause(); } catch (e) {} currentAudioEl = null; }
+    outputAnalyser = null;
+    speaking = false;
+    speakingLevel = 0;
+    if (busy) setBusy(false);
+    if (currentTurnId) { fetch('/chat/cancel', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ turn_id: currentTurnId }) }).catch(() => {}); }
+    if (speechMode && !busy) setSpeechStatus('Bereit');
   }
 
   function encodeWav(samples, sampleRate) {
@@ -115,166 +177,131 @@
 
   // UI-Anker (in buildUi() gesetzt)
   let uiEl = null, sidebarEl = null, chatListEl = null, chatRootEl = null, threadEl = null;
-  let composerInput = null, sendBtn = null, speechBtn = null, noteBtn = null, uploadBtn = null, settingsBtn = null;
-  let composerTray = null, modelEl = null, modelMenuEl = null, fileInput = null;
+  let composerTray = null, composerInput = null, sendBtn = null, speechBtn = null, noteBtn = null;
+  let uploadBtn = null, settingsBtn = null, modelEl = null, modelMenuEl = null, fileInput = null;
+  let speechBarEl = null, spMuteBtn = null, spStopBtn = null, spSendBtn = null, spChatBtn = null;
+  let speechCaptionEl = null, spcStatusEl = null, spcUserEl = null, spcReplyEl = null;
+  let settingsSheetEl = null, settingsModelsEl = null;
+
+  // Code-Tab (headless OpenCode) Anker
+  let codeViewEl = null, codeThreadEl = null, codeEditorEl = null, codeDirEl = null;
+  let codeModelEl = null, codeModelMenuEl = null, codeSendBtn = null, codeCancelBtn = null;
+  let codeWs = null, codeWsOpen = false, codeReconnectTimer = null;
+  let codeRunning = false, codeCancelled = false;
+  let codeModel = '', codeDefault = '', codeModels = [], codeMinContext = 24000, codeSessionActive = false;
+  let codeActiveBubble = null, codeBubbleMd = '';
 
   // Sprachmodus + VAD + Diktat
   let speechMode = false, dictating = false, micReady = false, micStream = null, muted = false;
   let pcmNode = null, pcmSampleRate = 0, pcmRing = [], utterancePCM = null, utteranceStartedAt = 0;
+  let utterancePeak = 0;   // Spitzenpegel der laufenden Äußerung — nur echte Stimme zählt
   let silenceStreak = 0, vadAnalyser = null, vadData = null;
   let vadNoiseFloor = 0.01;
-  let outputAnalyser = null;
 
-  // 3D-Punktnetz-Kugel
-  let orbCtx = null, orbCanvas = null, orbSpin = 0, orbLevel = 0, orbRaf = 0, orbVisible = false;
-  let orbPoints = [];
-  const ORB_COLOR = C.accent;
-  const ORB_LAT = 26, ORB_LON = 40;
+  // Graues Punktnetz (Sprachmodus)
+  let orbCtx = null, orbCanvas = null, orbLevel = 0, orbRaf = 0, orbVisible = false;
+  const DOT_COLOR = '#8b8b8f';
 
-  // Persisted so reloading the page continues the same conversation
-  // instead of silently starting a new, empty one every time. Ein optionaler
-  // ?conv=<id>-Parameter (Deep-Link) setzt die ID in localStorage und wird
-  // priorisiert — praktisch, um eine bestimmte Unterhaltung zu öffnen.
+  // Persisted conversation id; ?conv=<id>-Deep-Link priorisiert (siehe unten).
   const params = new URLSearchParams(location.search);
   const deepConv = params.get('conv');
-  if (deepConv) localStorage.setItem('jarvis_conversation_id', deepConv);
-  let currentConversationId = deepConv || localStorage.getItem('jarvis_conversation_id') || null;
+  // Pro Modus getrennte Konversationen: Chat und Code bekommen je einen
+  // eigenen Speicher. IDs sind mit dem Modus geprefixt ("code-…"), damit das
+  // Backend sie in eigene Dateien legt und die Sidebar nur die Konversationen
+  // des aktiven Modus zeigt. Alte (ungepräfixte) IDs zählen als Chat, damit
+  // nichts verloren geht.
+  function modeKey(mode) { return 'jarvis_conv_' + mode; }
+  function isModeConv(mode, id) {
+    return mode === 'code' ? String(id).startsWith('code-') : !String(id).startsWith('code-');
+  }
+  if (deepConv) {
+    activeMode = String(deepConv).startsWith('code-') ? 'code' : 'chat';
+    localStorage.setItem(modeKey(activeMode), deepConv);
+  }
+  let currentConversationId =
+    (deepConv && isModeConv(activeMode, deepConv)) ? deepConv
+    : localStorage.getItem(modeKey(activeMode))
+    || (activeMode === 'chat' ? localStorage.getItem('jarvis_conversation_id') : null)
+    || null;
   function ensureConversationId() {
-    if (!currentConversationId) {
-      currentConversationId = (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2));
-      localStorage.setItem('jarvis_conversation_id', currentConversationId);
+    if (!currentConversationId || !isModeConv(activeMode, currentConversationId)) {
+      currentConversationId = activeMode + '-' + (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2));
     }
+    localStorage.setItem(modeKey(activeMode), currentConversationId);
     return currentConversationId;
   }
 
-  function buildSpherePoints() {
-    const pts = [];
-    for (let la = 0; la <= ORB_LAT; la++) {
-      const theta = (la / ORB_LAT) * Math.PI;
-      const y = Math.cos(theta);
-      const r = Math.sin(theta);
-      for (let lo = 0; lo < ORB_LON; lo++) {
-        const phi = (lo / ORB_LON) * Math.PI * 2;
-        pts.push({ x: r * Math.cos(phi), y, z: r * Math.sin(phi) });
-      }
-    }
-    return pts;
-  }
-
-  function drawOrb(now) {
-    const cw = orbCanvas.clientWidth, ch = orbCanvas.clientHeight;
-    if (cw < 4 || ch < 4) return;
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    if (orbCanvas.width !== cw * dpr || orbCanvas.height !== ch * dpr) { orbCanvas.width = cw * dpr; orbCanvas.height = ch * dpr; }
-    orbCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    orbCtx.clearRect(0, 0, cw, ch);
-    const cx = cw / 2, cy = ch / 2;
-    const base = Math.min(cw, ch) * 0.34 * (1 + orbLevel * 0.32);
-    const yaw = orbSpin, pitch = -0.34 + Math.sin(now * 0.0005) * 0.04;
-    const cosY = Math.cos(yaw), sinY = Math.sin(yaw);
-    const cosP = Math.cos(pitch), sinP = Math.sin(pitch);
-    const f = 3.2;
-    const thickness = cw * 0.05;
-    const proj = [];
-    for (let i = 0; i < orbPoints.length; i++) {
-      const p = orbPoints[i];
-      const x1 = p.x * cosY - p.z * sinY;
-      const z1 = p.x * sinY + p.z * cosY;
-      const y2 = p.y * cosP - z1 * sinP;
-      const z2 = p.y * sinP + z1 * cosP;
-      const wob = 1 + Math.sin((p.x + p.y) * 5 + now * 0.0018) * 0.03 * (0.4 + orbLevel);
-      proj.push({ x: cx + x1 * base * wob, y: cy + y2 * base * wob, z: z2, persp: f / (f + z2) });
-    }
-    proj.sort((a, b) => a.z - b.z);
-    for (const pt of proj) {
-      const size = Math.max(0.6, thickness * pt.persp * 0.5);
-      const a = Math.max(0.12, Math.min(1, 0.28 + (1 - pt.persp) * 0.9));
-      orbCtx.fillStyle = ORB_COLOR;
-      orbCtx.globalAlpha = a;
-      orbCtx.beginPath();
-      orbCtx.arc(pt.x, pt.y, size, 0, Math.PI * 2);
-      orbCtx.fill();
-    }
-    orbCtx.globalAlpha = 1;
-  }
-
-  function orbLoop(now) {
-    if (!orbVisible) return;
-    orbSpin = orbSpin * 0.9 + (now * 0.0002) * 0.1;
-    if (outputAnalyser && vadData) {
-      // Pegel aus dem Ausgangs-Analyser (Wiedergabe) switscht zum Input, falls still
-      let sum = 0;
-      outputAnalyser.getByteTimeDomainData(vadData);
-      for (let i = 0; i < vadData.length; i++) { const v = (vadData[i] - 128) / 128; sum += v * v; }
-      orbLevel = Math.min(1, Math.sqrt(sum / vadData.length) * 4);
-    } else {
-      orbLevel = Math.max(0, orbLevel * 0.95 - 0.005);
-    }
-    drawOrb(now);
-    orbRaf = requestAnimationFrame(orbLoop);
-  }
-
-  function showOrb() {
-    orbVisible = true;
-    if (!orbRaf) orbRaf = requestAnimationFrame(orbLoop);
-  }
-  function hideOrb() {
-    orbVisible = false;
+  // Uhrzeit-Begrüßung (bewusst deutsch, vom Nutzer so gewünscht).
+  function timeGreeting() {
+    const h = new Date().getHours();
+    if (h >= 5 && h < 11) return 'Morgen, Chef';
+    if (h >= 11 && h < 15) return 'Mittag, Chef';
+    if (h >= 15 && h < 22) return 'Abend, Chef';
+    return 'Mondscheingespräch';
   }
 
   // --------------------------------------------------------- UI: buildUi()
-  // Ersetzt das kollabierte/leere Snapshot-DOM durch eine schlanke, funktionale
-  // Claude-UI. Bewusst KEIN Klonen von Snapshot-Elementen — deren React-Maße
-  // kollabieren zu height:0.
   function buildUi() {
     uiEl = document.createElement('div');
     uiEl.id = 'jsApp';
     uiEl.style.cssText = `position:fixed;inset:0;z-index:30;display:flex;background:${C.bg};color:${C.text};font-family:${C.font};`;
     uiEl.innerHTML = `
-      <button class="js-side-toggle" title="Sidebar ein/aus" style="position:absolute;top:18px;left:16px;z-index:31;background:none;border:none;color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;border-radius:8px;">${ICONS.sidebar}</button>
+      <button class="js-side-toggle" title="Toggle sidebar" style="position:absolute;top:18px;left:16px;z-index:31;background:none;border:none;color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;border-radius:8px;">${ICONS.menu}</button>
       <aside class="js-sidebar" style="width:308px;flex:0 0 308px;height:100%;display:flex;flex-direction:column;background:${C.bgSoft};border-right:1px solid ${C.border};">
-        <div class="js-sidebar-top" style="padding:20px 12px 6px;display:flex;flex-direction:column;gap:14px;">
-          <div class="js-brand" style="display:flex;align-items:center;gap:9px;padding:0 6px 0 44px;">
-            <span style="width:26px;height:26px;border-radius:50%;background:${C.accent};color:#fff;display:inline-flex;align-items:center;justify-content:center;box-shadow:0 0 0 4px rgba(217,119,87,.15);">${ICONS.logo}</span>
-            <span style="font-size:15px;font-weight:600;letter-spacing:.04em;color:${C.text};">JARVIS</span>
+        <div class="js-sidebar-top" style="padding:16px 12px 6px;display:flex;flex-direction:column;gap:12px;">
+          <div class="js-mode" style="display:flex;padding:3px;gap:3px;background:${C.bgHover};border:1px solid ${C.border};border-radius:11px;margin-left:44px;">
+            <button class="js-pill active" data-mode="chat" style="flex:1;display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:7px 10px;border-radius:8px;border:none;background:transparent;color:${C.textSoft};font-size:13px;font-weight:500;cursor:pointer;transition:background .15s,color .15s;">${ICONS.chat}<span>Chat</span></button>
+            <button class="js-pill" data-mode="code" title="Code with opencode" style="flex:1;display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:7px 10px;border-radius:8px;border:none;background:transparent;color:${C.textSoft};font-size:13px;font-weight:500;cursor:pointer;transition:background .15s,color .15s;">${ICONS.code}<span>Code</span></button>
           </div>
-          <button class="js-new" style="display:flex;align-items:center;gap:8px;padding:9px 12px;background:${C.bgHover};border:1px solid ${C.border};border-radius:11px;color:${C.text};font-size:13px;font-weight:500;cursor:pointer;transition:background .15s;">${ICONS.plus}<span>Neue Unterhaltung</span></button>
-          <div class="js-chats-label" style="padding:2px 8px 4px;font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:${C.textDim};">Unterhaltungen</div>
+          <button class="js-new" style="display:flex;align-items:center;gap:8px;padding:9px 12px;background:${C.bgHover};border:1px solid ${C.border};border-radius:11px;color:${C.text};font-size:13px;font-weight:500;cursor:pointer;transition:background .15s;">${ICONS.plus}<span>New conversation</span></button>
+          <div style="padding:2px 8px 4px;font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:${C.textDim};">Conversations</div>
         </div>
-        <div class="js-chats" style="flex:0 0 1px;flex:1 1 auto;overflow-y:auto;padding:2px 8px 10px;"></div>
+        <div class="js-chats" style="flex:1 1 auto;overflow-y:auto;padding:2px 8px 10px;"></div>
         <div class="js-settings-row" style="padding:10px 12px;border-top:1px solid ${C.border};display:flex;align-items:center;gap:8px;">
-          <button class="js-settings" title="Einstellungen" style="width:32px;height:32px;border-radius:9px;background:none;border:none;color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;transition:background .15s;">${ICONS.gear}</button>
-          <span class="js-account" style="width:22px;height:22px;border-radius:50%;background:linear-gradient(135deg,${C.accent},#b45a3c);display:inline-flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#fff;">C</span>
-          <div style="flex:1;min-width:0;display:flex;flex-direction:column;">
-            <span style="font-size:13px;color:${C.text};line-height:1.2;">Chef · Pro</span>
-            <span class="js-status" style="font-size:11px;color:${C.textDim};line-height:1.3;">Online</span>
-          </div>
+          <button class="js-settings" title="Settings" style="width:32px;height:32px;border-radius:9px;background:none;border:none;color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;transition:background .15s;">${ICONS.settings}</button>
+          <span class="js-settings-label" style="font-size:13px;color:${C.textSoft};">Settings</span>
         </div>
       </aside>
       <div class="js-main" style="flex:1;height:100%;display:flex;flex-direction:column;min-width:0;position:relative;">
-        <div class="js-welcome" style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:0 32px;gap:18px;">
-          <div class="js-welcome-mark" style="width:52px;height:52px;border-radius:50%;background:${C.accent};color:#fff;display:flex;align-items:center;justify-content:center;box-shadow:0 0 0 8px rgba(217,119,87,.12), 0 12px 40px rgba(217,119,87,.25);">${ICONS.logo}</div>
-          <div>
-            <h1 class="js-welcome-title" style="font-size:30px;font-weight:600;letter-spacing:-.01em;color:${C.text};margin:0 0 8px;">Willkommen zurück.</h1>
-            <p class="js-welcome-sub" style="font-size:14px;color:${C.textSoft};margin:0;max-width:440px;line-height:1.55;">Wie kann ich dir heute helfen? Sprich, diktiere oder schreib einfach los.</p>
-          </div>
+        <div class="js-welcome" style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:0 32px;gap:14px;">
+          <h1 class="js-welcome-title" style="font-family:${C.serif};font-size:30px;font-weight:600;letter-spacing:-.01em;color:${C.text};margin:0 0 4px;">${timeGreeting()}</h1>
+          <p class="js-welcome-sub" style="font-size:14px;color:${C.textSoft};margin:0;max-width:440px;line-height:1.55;">How can I help you today? Speak, dictate, or just type.</p>
         </div>
         <div class="js-thread" style="flex:1;overflow-y:auto;scrollbar-width:thin;position:relative;"></div>
+        <div class="js-codeview" style="position:absolute;inset:0;display:none;flex-direction:column;min-width:0;min-height:0;">
+          <div class="js-code-header" style="display:flex;align-items:center;gap:10px;padding:12px 18px;border-bottom:1px solid ${C.border};flex:0 0 auto;">
+            <span class="js-code-title" style="font-size:14px;font-weight:600;color:${C.text};">Code</span>
+            <button class="js-code-model" title="Change opencode model" style="display:inline-flex;align-items:center;gap:6px;padding:5px 10px;background:none;border:1px solid ${C.border};border-radius:9px;color:${C.textSoft};font-size:12px;cursor:pointer;font-family:${C.font};">
+              <span class="js-code-model-label">Model…</span>
+            </button>
+            <span class="js-code-dir" style="flex:1;font-size:12px;color:${C.textDim};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:right;" title="Working directory"></span>
+            <button class="js-code-cancel" title="Stop" style="display:none;align-items:center;gap:6px;padding:5px 10px;background:none;border:1px solid ${C.border};border-radius:9px;color:${C.accent};font-size:12px;cursor:pointer;font-family:${C.font};">Stop</button>
+          </div>
+          <div class="js-code-thread" style="flex:1 1 auto;overflow-y:auto;scrollbar-width:thin;padding:24px 22px 96px;"></div>
+          <div class="js-code-composer" style="position:absolute;left:0;right:0;bottom:0;padding:0 22px 20px;background:linear-gradient(transparent,${C.bg} 55%);">
+            <div style="max-width:820px;margin:0 auto;background:${C.bgSoft};border:1px solid ${C.border};border-radius:16px;box-shadow:0 10px 34px rgba(0,0,0,.38);">
+              <div class="js-code-editor" contenteditable="true" data-placeholder="Describe a coding task…" style="min-height:58px;max-height:200px;overflow-y:auto;padding:14px 16px;color:${C.text};font-size:15px;line-height:1.5;outline:none;white-space:pre-wrap;word-break:break-word;"></div>
+              <div style="display:flex;align-items:center;gap:8px;padding:6px 10px 10px;">
+                <button class="js-code-send" title="Send to opencode" style="width:38px;height:38px;border-radius:50%;background:${C.accent};border:none;color:#fff;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;">${ICONS.send}</button>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
       <div class="js-composer" style="position:absolute;left:308px;right:0;bottom:0;padding:0 24px 22px;background:linear-gradient(transparent,${C.bg} 55%);">
         <div style="max-width:760px;margin:0 auto;">
-          <div class="js-inputbox" style="background:${C.bgSoft};border:1px solid ${C.border};border-radius:18px;box-shadow:0 10px 34px rgba(0,0,0,.38);">
-            <div class="js-editor" contenteditable="true" data-placeholder="Beschreibe eine Aufgabe oder stelle eine Frage" style="min-height:60px;max-height:200px;overflow-y:auto;padding:16px;color:${C.text};font-size:15px;line-height:1.5;outline:none;white-space:pre-wrap;word-break:break-word;"></div>
+          <div style="background:${C.bgSoft};border:1px solid ${C.border};border-radius:18px;box-shadow:0 10px 34px rgba(0,0,0,.38);">
+            <div class="js-editor" contenteditable="true" data-placeholder="Describe a task or ask a question" style="min-height:60px;max-height:200px;overflow-y:auto;padding:16px;color:${C.text};font-size:15px;line-height:1.5;outline:none;white-space:pre-wrap;word-break:break-word;"></div>
             <div style="display:flex;align-items:center;gap:8px;padding:6px 10px 10px;">
-              <button class="js-upload" title="Dateien hochladen" style="width:34px;height:34px;border-radius:9px;background:none;border:none;color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;transition:background .15s;">${ICONS.upload}</button>
-              <button class="js-note" title="Diktieren" style="display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border-radius:9px;background:none;border:none;color:${C.textSoft};font-size:13px;cursor:pointer;transition:background .15s;">${ICONS.dictation}<span>Diktieren</span></button>
+              <button class="js-upload" title="Attach files" style="width:34px;height:34px;border-radius:9px;background:none;border:none;color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;transition:background .15s;">${ICONS.paperclip}</button>
               <div style="flex:1;"></div>
-              <button class="js-model" title="Modell wechseln" style="display:inline-flex;align-items:center;gap:6px;padding:6px 10px;background:none;border:none;color:${C.textSoft};font-size:13px;cursor:pointer;transition:background .15s;">
-                <span class="js-model-label">Modell…</span>
+              <button class="js-model" title="Change model" style="display:inline-flex;align-items:center;gap:6px;padding:6px 10px;background:none;border:none;color:${C.textSoft};font-size:13px;cursor:pointer;transition:background .15s;">
+                <span class="js-model-label">Model…</span>
                 <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
               </button>
-              <button class="js-speech" title="Sprachmodus" style="width:34px;height:34px;border-radius:50%;background:${C.bgHover};border:1px solid ${C.border};color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;transition:background .15s;">${ICONS.speech}</button>
-              <button class="js-send" title="Senden" style="width:34px;height:34px;border-radius:50%;background:${C.accent};border:none;color:#fff;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;">${ICONS.send}</button>
+              <button class="js-note" title="Dictate" style="width:34px;height:34px;border-radius:9px;background:none;border:none;color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;transition:background .15s;">${ICONS.mic}</button>
+              <button class="js-speech" title="Voice mode" style="width:38px;height:38px;border-radius:50%;background:${C.bgHover};border:1px solid ${C.border};color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;transition:background .15s;">${ICONS.audio}</button>
+              <button class="js-send" title="Send" style="width:38px;height:38px;border-radius:50%;background:${C.accent};border:none;color:#fff;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;">${ICONS.send}</button>
             </div>
           </div>
           <div class="js-modelmenu" style="display:none;margin-top:8px;background:${C.bgSoft};border:1px solid ${C.border};border-radius:12px;overflow:hidden;box-shadow:0 10px 30px rgba(0,0,0,.4);"></div>
@@ -282,8 +309,65 @@
       </div>
     `;
     document.body.appendChild(uiEl);
-    // Die tote Snapshot-DOM verstecken, aber die CSS-Tokens auf :root behalten.
     document.body.classList.add('js-app-active');
+
+    // Sprachmodus-Bottom-Leiste (mute / stop / send / chat) — body-Kind, z-index 50.
+    speechBarEl = document.createElement('div');
+    speechBarEl.id = 'jsSpeechbar';
+    speechBarEl.style.cssText = 'position:fixed;left:0;right:0;bottom:24px;z-index:50;display:none;justify-content:center;pointer-events:none;';
+    speechBarEl.innerHTML = `
+      <div style="pointer-events:auto;display:flex;align-items:center;gap:10px;padding:8px 12px;background:${C.bgSoft};border:1px solid ${C.border};border-radius:16px;box-shadow:0 12px 40px rgba(0,0,0,.5);">
+        <button class="js-sp-mute" title="Mikrofon aus" style="width:44px;height:44px;border-radius:14px;background:${C.bgHover};border:1px solid ${C.border};color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;">${ICONS.mic}</button>
+        <button class="js-sp-stop" title="Stopp" style="width:44px;height:44px;border-radius:14px;background:${C.bgHover};border:1px solid ${C.border};color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;">${ICONS.stop}</button>
+        <button class="js-sp-send" title="Senden" style="width:44px;height:44px;border-radius:14px;background:${C.bgHover};border:1px solid ${C.border};color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;">${ICONS.send}</button>
+        <button class="js-sp-chat" title="Chat-Modus" style="width:44px;height:44px;border-radius:14px;background:${C.bgHover};border:1px solid ${C.border};color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;">${ICONS.chat}</button>
+      </div>
+    `;
+    document.body.appendChild(speechBarEl);
+
+    // Sprachmodus-Beschriftung (live erkannte Wörter + Jarvis-Antwort). In
+    // Speech-Mode ist der Chatverlauf versteckt, also bleibt hier eine
+    // lesbare Zeile darüber, was gerade passiert.
+    speechCaptionEl = document.createElement('div');
+    speechCaptionEl.id = 'jsSpeechCaption';
+    speechCaptionEl.style.cssText = `position:fixed;left:0;right:0;bottom:92px;z-index:50;display:none;justify-content:center;pointer-events:none;`;
+    speechCaptionEl.innerHTML = `
+      <div style="pointer-events:auto;max-width:720px;width:calc(100% - 64px);padding:10px 16px;background:${C.bgSoft};border:1px solid ${C.border};border-radius:14px;box-shadow:0 12px 40px rgba(0,0,0,.5);display:flex;flex-direction:column;gap:4px;">
+        <div class="js-spc-status" style="font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:${C.textDim};">Listen</div>
+        <div class="js-spc-user" style="font-size:15px;color:${C.text};min-height:20px;white-space:pre-wrap;word-break:break-word;">…</div>
+        <div class="js-spc-reply" style="font-size:14px;color:${C.textSoft};min-height:0;white-space:pre-wrap;word-break:break-word;"></div>
+      </div>
+    `;
+    spcStatusEl = $('.js-spc-status', speechCaptionEl);
+    spcUserEl = $('.js-spc-user', speechCaptionEl);
+    spcReplyEl = $('.js-spc-reply', speechCaptionEl);
+    document.body.appendChild(speechCaptionEl);
+
+    // Settings-Sheet (kein Fake-Profil — echte Einstellungen hier).
+    settingsSheetEl = document.createElement('div');
+    settingsSheetEl.id = 'jsSettingsSheet';
+    settingsSheetEl.style.cssText = `position:fixed;inset:0;z-index:60;display:none;align-items:flex-start;justify-content:flex-start;padding:64px 0 24px 320px;background:rgba(0,0,0,.35);`;
+    settingsSheetEl.innerHTML = `
+      <div style="width:340px;max-width:90vw;background:${C.bgSoft};border:1px solid ${C.border};border-radius:16px;box-shadow:0 20px 60px rgba(0,0,0,.5);overflow:hidden;">
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:1px solid ${C.border};">
+          <span style="font-size:15px;font-weight:600;color:${C.text};">Settings</span>
+          <button class="js-settings-close" title="Close" style="width:28px;height:28px;border-radius:8px;background:none;border:none;color:${C.textSoft};cursor:pointer;font-size:16px;line-height:1;">×</button>
+        </div>
+        <div style="padding:12px 6px;">
+          <div style="padding:6px 10px;font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:${C.textDim};">Model</div>
+          <div class="js-settings-models"></div>
+        </div>
+        <div style="padding:12px 6px 16px;border-top:1px solid ${C.border};">
+          <div style="padding:6px 10px;font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:${C.textDim};">Code</div>
+          <div style="padding:4px 10px;display:flex;flex-direction:column;gap:8px;">
+            <span style="font-size:12px;color:${C.textSoft};">Working directory for opencode</span>
+            <input class="js-code-dir-input" type="text" placeholder="~/Developer" spellcheck="false" style="width:100%;box-sizing:border-box;padding:9px 10px;background:${C.bg};border:1px solid ${C.border};border-radius:8px;color:${C.text};font-size:13px;outline:none;font-family:${C.font};" />
+            <button class="js-code-dir-save" style="align-self:flex-start;padding:7px 12px;border:none;border-radius:8px;background:${C.accent};color:#fff;font-size:12px;cursor:pointer;font-family:${C.font};">Save</button>
+          </div>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(settingsSheetEl);
 
     sidebarEl = $('.js-sidebar', uiEl);
     chatListEl = $('.js-chats', uiEl);
@@ -298,9 +382,15 @@
     settingsBtn = $('.js-settings', uiEl);
     modelEl = $('.js-model-label', uiEl);
     modelMenuEl = $('.js-modelmenu', uiEl);
+    spMuteBtn = $('.js-sp-mute', speechBarEl);
+    spStopBtn = $('.js-sp-stop', speechBarEl);
+    spSendBtn = $('.js-sp-send', speechBarEl);
+    spChatBtn = $('.js-sp-chat', speechBarEl);
+    settingsModelsEl = $('.js-settings-models', settingsSheetEl);
 
     injectSkinCss();
     wireUi();
+    setMode('chat');
   }
 
   function injectSkinCss() {
@@ -308,16 +398,19 @@
     const s = document.createElement('style');
     s.id = 'jsAppCss';
     s.textContent = `
-      body.js-app-active > :not(#jsApp):not(#jarvisOrb):not(script):not(style) { display:none !important; }
+      body.js-app-active > :not(#jsApp):not(#jarvisOrb):not(#jsSpeechbar):not(#jsSettingsSheet):not(script):not(style) { display:none !important; }
       body.js-app-active { overflow:hidden; }
       .js-sidebar button:focus-visible, .js-main button:focus-visible { outline:2px solid ${C.accent}; outline-offset:2px; }
       .js-editor:empty::before, .js-editor.is-empty::before { content:attr(data-placeholder); color:${C.textDim}; pointer-events:none; }
       .js-editor:focus::before { opacity:.7; }
-      .js-brand svg, .js-side-toggle svg, .js-new svg, .js-upload svg, .js-note svg, .js-speech svg, .js-settings svg { width:16px; height:16px; display:block; }
-      .js-upload svg, .js-note svg, .js-speech svg, .js-settings svg { width:18px; height:18px; }
-      .js-send svg { width:18px; height:18px; display:block; }
-      .js-welcome-mark svg { width:26px; height:26px; display:block; }
-      .js-side-toggle:hover, .js-new:hover, .js-upload:hover, .js-note:hover, .js-model:hover, .js-settings:hover { background:${C.bgHover}; color:${C.text}; }
+      .js-side-toggle svg, .js-new svg, .js-upload svg, .js-note svg, .js-speech svg, .js-settings svg { width:16px; height:16px; display:block; }
+      .js-upload svg, .js-note svg, .js-settings svg { width:18px; height:18px; }
+      .js-speech svg, .js-send svg { width:18px; height:18px; display:block; }
+      .js-sp-mute svg, .js-sp-stop svg, .js-sp-chat svg, .js-sp-send svg { width:20px; height:20px; display:block; }
+      .js-pill svg { width:16px; height:16px; display:block; }
+      .js-side-toggle:hover, .js-new:hover, .js-upload:hover, .js-note:hover, .js-model:hover, .js-settings:hover, .js-sp-mute:hover, .js-sp-stop:hover, .js-sp-chat:hover { background:${C.bgHover}; color:${C.text}; }
+      .js-pill.active { background:${C.accent} !important; color:#fff !important; }
+      .js-pill:not(.active):hover { background:${C.bgHover}; color:${C.text}; }
       .js-note.on { color:${C.accent} !important; background:rgba(217,119,87,.12) !important; }
       .js-note.on svg { animation:js-note-pulse 1.4s ease-in-out infinite; }
       @keyframes js-note-pulse { 0%,100% { opacity:1; } 50% { opacity:.45; } }
@@ -330,42 +423,85 @@
       .js-chat-item .js-ico { flex:0 0 auto; display:inline-flex; width:15px; height:15px; color:${C.accent}; }
       .js-chat-item .js-ico svg { width:15px; height:15px; display:block; }
       .js-chat-item .js-txt { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-      .js-turn { max-width:760px; margin:0 auto 26px; font-family:${C.font}; line-height:1.6; }
-      .js-you .js-text { color:${C.textSoft}; }
-      .js-jarvis .js-text { color:${C.text}; white-space:pre-wrap; word-break:break-word; }
-      .js-you::before { content:"Du"; display:block; font-size:11px; letter-spacing:.2em; text-transform:uppercase; color:${C.accent}; margin-bottom:4px; }
-      .js-jarvis::before { content:"Jarvis"; display:block; font-size:11px; letter-spacing:.2em; text-transform:uppercase; color:${C.textDim}; margin-bottom:4px; }
+      .js-turn { max-width:760px; margin:0 auto 26px; font-family:${C.font}; line-height:1.6; display:flex; }
+      .js-you { justify-content:flex-end; }
+      .js-jarvis { justify-content:flex-start; text-align:left; }
+      .js-you .js-text { background:${C.accent}; color:#fff; border-radius:20px; padding:10px 16px; max-width:72%; white-space:pre-wrap; word-break:break-word; }
+      .js-jarvis .js-text { color:${C.text}; white-space:pre-wrap; word-break:break-word; max-width:100%; }
       .js-jarvis .js-text.thinking { color:${C.textDim}; font-style:italic; }
       .js-thread { padding:64px 24px 180px; }
       .js-main .js-welcome { opacity:1; transition:opacity .25s ease; }
       .js-main.has-content .js-welcome { opacity:0; pointer-events:none; }
+      .js-main.js-speech-active .js-thread, .js-main.js-speech-active .js-welcome { display:none !important; }
+      .js-code-editor:empty::before, .js-code-editor.is-empty::before { content:attr(data-placeholder); color:${C.textDim}; pointer-events:none; }
+      .js-code-editor:focus::before { opacity:.7; }
+      #jsApp.js-code-active .js-thread, #jsApp.js-code-active .js-welcome, #jsApp.js-code-active .js-composer { display:none !important; }
+      #jsApp.js-code-active .js-codeview { display:flex !important; }
     `;
     document.head.appendChild(s);
   }
 
   // ------------------------------------------------------------- wire UI
   function setMode(mode) {
+    if (mode !== 'chat' && mode !== 'code') return;
+    const isCode = mode === 'code';
+    const pills = uiEl ? uiEl.querySelectorAll('.js-pill') : [];
+    pills.forEach((p) => p.classList.toggle('active', p.dataset.mode === mode));
+    if (uiEl) uiEl.classList.toggle('js-code-active', isCode);
+    if (isCode) {
+      // Code-Tab führt keine Chat-Konversationen; eigener Zustand + Socket.
+      buildCodeView();
+      loadCodeStatus();
+      ensureCodeSocket();
+      return;
+    }
+    if (currentConversationId) localStorage.setItem(modeKey(activeMode), currentConversationId);
     activeMode = mode;
-    if (modelEl) modelEl.textContent = 'Modell…';
+    const saved = localStorage.getItem(modeKey(mode));
+    const nextId = saved && isModeConv(mode, saved) ? saved : null;
+    if (nextId === currentConversationId) { loadConversationList(); return; }
+    currentConversationId = nextId;
+    renderConversation(nextId);
+    loadConversationList();
   }
 
-  // Der Willkommens-Hero rutscht weg, sobald die Unterhaltung Inhalt hat.
+  // Lädt die Turns einer Konversation in den Thread (oder leert ihn, wenn
+  // id=null). Wird von setMode und openConversation gemeinsam genutzt.
+  async function renderConversation(id) {
+    const el = ensureThread();
+    if (!el) return;
+    el.innerHTML = '';
+    history = [];
+    let turns = [];
+    if (id) {
+      try {
+        const r = await fetch(`/conversations/${encodeURIComponent(id)}`);
+        const j = await r.json();
+        turns = j.turns || [];
+      } catch (e) { turns = []; }
+    }
+    for (const t of turns) {
+      addThreadTurn(t.role === 'you' ? 'you' : 'jarvis', t.text);
+      history.push({ role: t.role === 'you' ? 'user' : 'assistant', content: t.text });
+    }
+    if (history.length > 40) history = history.slice(-40);
+    if (el.children.length) el.scrollTop = el.scrollHeight;
+    syncWelcome();
+  }
+
   function syncWelcome() {
     if (!threadEl) return;
     chatRootEl.classList.toggle('has-content', threadEl.children.length > 0);
   }
 
-  // Sidebar list — backed by the real per-conversation store (backend/
-  // conversations.py), not the flat /transcript debug log: each entry is
-  // one actual conversation with a short, model-generated title (see
-  // llm_client.generate_title), not a raw truncated first message.
+  // Sidebar list — backed by the real per-conversation store.
   async function loadConversationList() {
     if (!chatListEl) return;
     let list = [];
     try {
       const r = await fetch('/conversations');
       const j = await r.json();
-      list = j.conversations || [];
+      list = (j.conversations || []).filter((c) => isModeConv(activeMode, c.id));
     } catch (e) { list = []; }
     chatListEl.innerHTML = '';
     if (!list.length) {
@@ -373,7 +509,7 @@
       d.className = 'js-chat-item';
       d.style.color = C.textDim;
       d.style.cursor = 'default';
-      d.textContent = 'Noch keine Gespräche';
+      d.textContent = 'No conversations yet';
       chatListEl.appendChild(d);
       return;
     }
@@ -383,10 +519,10 @@
       if (conv.id === currentConversationId) el.classList.add('selected');
       const ico = document.createElement('span');
       ico.className = 'js-ico';
-      ico.innerHTML = ICONS.spark;
+      ico.innerHTML = ICONS.chat;
       const txt = document.createElement('span');
       txt.className = 'js-txt';
-      txt.textContent = conv.title || 'Neuer Chat';
+      txt.textContent = conv.title || 'New chat';
       txt.title = txt.textContent;
       el.appendChild(ico);
       el.appendChild(txt);
@@ -398,40 +534,31 @@
   async function openConversation(id) {
     if (id === currentConversationId) return;
     currentConversationId = id;
-    localStorage.setItem('jarvis_conversation_id', id);
-    let turns = [];
-    try {
-      const r = await fetch(`/conversations/${encodeURIComponent(id)}`);
-      const j = await r.json();
-      turns = j.turns || [];
-    } catch (e) { turns = []; }
-    showThread();
-    const el = ensureThread();
-    el.innerHTML = '';
-    history = [];
-    for (const t of turns) {
-      addThreadTurn(t.role === 'you' ? 'you' : 'jarvis', t.text);
-      history.push({ role: t.role === 'you' ? 'user' : 'assistant', content: t.text });
-    }
-    if (history.length > 40) history = history.slice(-40);
-    if (el.children.length) el.scrollTop = el.scrollHeight;
+    localStorage.setItem(modeKey(activeMode), id);
+    await renderConversation(id);
     loadConversationList();
   }
 
   function startNewConversation() {
-    currentConversationId = (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2));
-    localStorage.setItem('jarvis_conversation_id', currentConversationId);
+    currentConversationId = activeMode + '-' + (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2));
+    localStorage.setItem(modeKey(activeMode), currentConversationId);
     history = [];
     clearThreadUI();
     loadConversationList();
   }
 
   function wireUi() {
-    // Neu
     $('.js-new', uiEl).addEventListener('click', startNewConversation);
-    // Senden
+
+    // Chat/Code-Toggle
+    uiEl.querySelectorAll('.js-pill').forEach((p) => {
+      p.addEventListener('click', (e) => {
+        e.preventDefault(); e.stopPropagation();
+        setMode(p.dataset.mode);
+      });
+    });
+
     if (sendBtn) sendBtn.addEventListener('click', (e) => { e.preventDefault(); sendFromComposer(); });
-    // Composer: Enter sendet; Placeholder-Klasse beim Tippen entfernen.
     if (composerInput) {
       composerInput.addEventListener('keydown', (e) => {
         if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendFromComposer(); }
@@ -441,18 +568,37 @@
         if (sendBtn) sendBtn.disabled = composerInput.innerText.trim().length === 0;
       });
     }
-    // Sprachmodus (Vollbild-Orb, spricht Antworten)
     if (speechBtn) speechBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); speechMode ? exitSpeech() : enterSpeech(); });
-    // Diktat (schreibt ins Eingabefeld)
     if (noteBtn) noteBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); setDictating(!dictating); });
-    // Dateien hochladen
     if (uploadBtn) uploadBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); if (fileInput) fileInput.click(); });
-    if (settingsBtn) settingsBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); window.alert('Einstellungen folgen in Kürze.'); });
-    // Modell-Auswahl
+    if (settingsBtn) settingsBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); openSettings(); });
+    const closeSettingsBtn = $('.js-settings-close', settingsSheetEl);
+    if (closeSettingsBtn) closeSettingsBtn.addEventListener('click', closeSettings);
+    if (settingsSheetEl) settingsSheetEl.addEventListener('click', (e) => { if (e.target === settingsSheetEl) closeSettings(); });
+
+    // Code-Verzeichnis speichern
+    const codeDirInput = $('.js-code-dir-input', settingsSheetEl);
+    const codeDirSave = $('.js-code-dir-save', settingsSheetEl);
+    if (codeDirSave && codeDirInput) {
+      codeDirSave.addEventListener('click', async () => {
+        const v = codeDirInput.value.trim();
+        if (!v) return;
+        try {
+          await fetch('/code/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dir: v }) });
+          if (codeDirEl) { codeDirEl.textContent = v; codeDirEl.title = v; }
+        } catch (e) {}
+      });
+    }
+
     if (modelEl) modelEl.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); toggleModelMenu(); });
     window.addEventListener('click', () => { if (modelMenuEl) modelMenuEl.style.display = 'none'; });
 
-    // Verstecktes Datei-Eingabefeld; Inhalt wird dem Thread als Anhang gemeldet.
+    // Sprachmodus-Bottom-Leiste
+    if (spMuteBtn) spMuteBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); muted = !muted; updateMuteIcon(); });
+    if (spStopBtn) spStopBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); cancelRecording(); silenceStreak = 0; stopSpeech(); });
+    if (spSendBtn) spSendBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); stopRecording(); });
+    if (spChatBtn) spChatBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); exitSpeech(); });
+
     fileInput = document.createElement('input');
     fileInput.type = 'file';
     fileInput.multiple = true;
@@ -467,9 +613,6 @@
     });
     document.body.appendChild(fileInput);
 
-    // Restore the last-open conversation's turns on load, then the sidebar
-    // list — opening the app should reveal a chat that's already there,
-    // not an empty thread until something is clicked.
     (async () => {
       if (currentConversationId) {
         try {
@@ -491,14 +634,10 @@
 
   // ---------------------------------------------------------------- thread
   function ensureThread() {
-    if (!threadEl) return createThread();
-    return threadEl;
-  }
-  function createThread() {
-    // threadEl wird von buildUi() angelegt; hier nur zurückgeben falls fehlend.
     if (!threadEl) { const m = $('.js-thread', uiEl); if (m) threadEl = m; }
     return threadEl;
   }
+  function showThread() {}
 
   function addThreadTurn(role, text) {
     const el = ensureThread();
@@ -515,7 +654,6 @@
     return inner;
   }
 
-  function showThread() {}
   function clearThreadUI() {
     if (threadEl) threadEl.innerHTML = '';
     syncWelcome();
@@ -532,22 +670,31 @@
     if (!text || busy) return;
     if (composerInput) { composerInput.innerText = ''; composerInput.classList.remove('is-empty'); }
     showThread();
+    progressHostEl = null; // neue Runde eigener Fortschrittsblöcke
     addThreadTurn('you', text);
     const said = addThreadTurn('jarvis', '');
     said.classList.add('thinking');
     said.textContent = '';
     setBusy(true);
+    noteSpeechReply('');
+    setSpeechStatus('Denke');
 
     const parts = [];
     let fullText = '';
+    turnAborted = false;
+    abortController = new AbortController();
+    activeReader = null;
+    currentTurnId = String(++turnCounter);
     try {
       const resp = await fetch('/chat/stream', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: text, history, turn_id: String(++turnCounter), mode: activeMode, conversation_id: ensureConversationId() }),
+        signal: abortController.signal,
+        body: JSON.stringify({ message: text, history, turn_id: currentTurnId, mode: activeMode, conversation_id: ensureConversationId() }),
       });
       if (!resp.ok) throw new Error('HTTP ' + resp.status);
       const reader = resp.body.getReader();
+      activeReader = reader;
       const decoder = new TextDecoder();
       let buf = '';
       while (true) {
@@ -568,19 +715,30 @@
             said.classList.remove('thinking');
             if (evt.text) parts.push(evt.text);
             said.textContent = parts.join(' ');
-            // The backend embeds each sentence's audio in this same event
-            // (see backend/main.py's /chat/stream) rather than sending a
-            // separate "audio"-typed event — that type never actually
-            // arrives, so playback silently never fired without this.
-            if (evt.audio) await playClip(base64ToBlob(evt.audio, evt.mime || 'audio/mpeg'));
+            noteSpeechReply(parts.join(' '));
+          } else if (evt.type === 'audio') {
+            // Sprache NUR im Sprachmodus abspielen; in allen anderen Modi
+            // (Text-/Diktat) wird vertonter Text verworfen — Jarvis spricht
+            // ausschließlich, wenn der Sprachmodus aktiv ist.
+            if (speechMode) enqueueClip(base64ToBlob(evt.audio, evt.mime || 'audio/mpeg'));
           } else if (evt.type === 'done') {
             fullText = evt.full_text || '';
           }
         }
       }
     } catch (err) {
-      const fb = "Ich komme gerade nicht an mein Sprachmodell ran. Läuft LM Studio und ist Gemma dort geladen?";
-      if (!fullText) { fullText = fb; said.classList.remove('thinking'); said.textContent = fb; }
+      // Abbruch durch den Stop-Button ist KEIN Fehler — keine Meldung anzeigen.
+      if (turnAborted) { fullText = fullText || ''; }
+      else if (!fullText) { const fb = "I can't reach my language model right now. Is LM Studio running with Gemma loaded?"; fullText = fb; said.classList.remove('thinking'); said.textContent = fb; }
+    }
+    activeReader = null;
+    abortController = null;
+    if (turnAborted) {
+      // abgebrochen: keine Historie, Status zurück in den Bereit-Zustand
+      turnAborted = false;
+      setBusy(false);
+      if (speechMode) setSpeechStatus('Bereit');
+      return;
     }
     if (fullText) {
       history.push({ role: 'user', content: text });
@@ -588,10 +746,6 @@
       if (history.length > 40) history = history.slice(-40);
     }
     setBusy(false);
-    // Picks up the freshly generated title once it's ready — generation
-    // runs in the background on the server, a beat behind the reply
-    // itself, so a second refresh shortly after catches it for a brand
-    // new conversation's first turn.
     loadConversationList();
     setTimeout(loadConversationList, 2500);
   }
@@ -599,6 +753,150 @@
   function sendFromComposer() {
     const text = composerInput ? composerInput.innerText.trim() : '';
     if (text) sendMessage(text);
+  }
+
+  // ------------------------------------------------------ panel / Fortschritt
+  /* Builds und andere Tool-Aktionen laufen im Hintergrund (async) und pinken
+     ihre Fortschritte über den /ws-Kanal: "task" (Status-Lebenszyklus),
+     "files", "code", "notify", "markdown", "link", "action". Ohne diesen
+     Handler bliebe davon nichts im Interface sichtbar — genau das war
+     "verbose fehlt". Die Task-Status werden je id aktualisiert (started ->
+     done/failed), damit sie sich nicht stapeln. */
+  let progressHostEl = null;
+  let panelSock = null;
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+
+  function openPanelSocket() {
+    if (panelSock) return;
+    try {
+      panelSock = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws');
+    } catch (e) { return; }
+    panelSock.onmessage = (ev) => {
+      let msg; try { msg = JSON.parse(ev.data); } catch (e) { return; }
+      if (msg && msg.type === 'panel' && msg.item) renderPanelItem(msg.item);
+    };
+    panelSock.onclose = () => { panelSock = null; };
+    panelSock.onerror = () => { try { panelSock.close(); } catch (e) {} };
+  }
+
+  function progressHost() {
+    const el = ensureThread();
+    if (!el) return null;
+    if (!progressHostEl || !progressHostEl.isConnected) {
+      progressHostEl = document.createElement('div');
+      progressHostEl.className = 'js-progress';
+      progressHostEl.style.cssText = `max-width:760px;margin:0 auto 26px;display:flex;flex-direction:column;gap:10px;font-family:${C.font};`;
+      el.appendChild(progressHostEl);
+      el.scrollTop = el.scrollHeight;
+    }
+    return progressHostEl;
+  }
+
+  function scrollThread() {
+    const el = ensureThread();
+    if (el) el.scrollTop = el.scrollHeight;
+  }
+
+  function renderPanelItem(item) {
+    const host = progressHost();
+    if (!host) return;
+    const kind = item.kind;
+
+    if (kind === 'task' || kind === 'action') {
+      // Ein Lebenszyklus (started -> done/failed) lebt in EINEM Block, keyed by id.
+      const key = item.id || (item.action ? item.action : 't');
+      let block = host.querySelector(`[data-progresstask="${key}"]`);
+      if (!block) {
+        block = document.createElement('div');
+        block.setAttribute('data-progresstask', String(key));
+        block.style.cssText = `display:flex;align-items:center;gap:9px;padding:10px 12px;border:1px solid ${C.border};border-radius:12px;background:${C.bgSoft};font-size:13px;`;
+        host.appendChild(block);
+      }
+      const status = item.status || 'läuft';
+      let col = C.accent, txt = item.label || (item.action ? item.action : 'Build'), tail = status;
+      if (status === 'done') { col = '#3dbd7d'; txt = item.action ? (item.action + ' fertig') : 'fertig'; tail = ''; }
+      else if (status === 'failed' || status === 'fehlgeschlagen') { col = '#e5534b'; txt = item.action ? (item.action + ' fehlgeschlagen') : 'fehlgeschlagen'; tail = ''; }
+      else if (status === 'started') { txt = item.label || (item.action ? item.action : 'build'); tail = 'läuft'; }
+      const detail = item.detail || '';
+      block.innerHTML = `<span style="width:9px;height:9px;border-radius:50%;background:${col};flex:0 0 auto;"></span><span style="flex:1 1 auto;color:${C.text};">${escapeHtml(txt)}${detail ? ' <span style="color:' + C.textDim + ';">' + escapeHtml(detail) + '</span>' : ''}</span><span style="color:${col};font-size:12px;flex:0 0 auto;">${escapeHtml(tail)}</span>`;
+      scrollThread();
+      return;
+    }
+
+    if (kind === 'notify') {
+      const b = document.createElement('div');
+      b.style.cssText = `padding:10px 12px;border:1px solid ${C.border};border-left:3px solid ${C.accent};border-radius:10px;background:${C.bgSoft};font-size:13px;color:${C.text};`;
+      b.textContent = item.text || '';
+      host.appendChild(b);
+      scrollThread();
+      return;
+    }
+
+    if (kind === 'markdown') {
+      const b = document.createElement('div');
+      b.style.cssText = `padding:10px 12px;border:1px solid ${C.border};border-radius:10px;background:${C.bgSoft};font-size:13px;color:${C.textSoft};`;
+      b.textContent = (item.title ? item.title + ' — ' : '') + (item.text || '');
+      host.appendChild(b);
+      scrollThread();
+      return;
+    }
+
+    if (kind === 'link') {
+      const b = document.createElement('button');
+      b.textContent = item.title || 'Öffnen';
+      b.style.cssText = `align-self:flex-start;padding:8px 14px;border:none;border-radius:10px;background:${C.accent};color:#fff;font-size:13px;cursor:pointer;font-family:${C.font};`;
+      b.addEventListener('click', () => { try { window.open(item.url, '_blank'); } catch (e) {} });
+      host.appendChild(b);
+      scrollThread();
+      return;
+    }
+
+    if (kind === 'code') {
+      const wrap = document.createElement('details');
+      wrap.className = 'js-code';
+      wrap.style.cssText = `border:1px solid ${C.border};border-radius:10px;overflow:hidden;background:#0e1220;`;
+      const sum = document.createElement('summary');
+      sum.textContent = (item.title || 'Code') + (item.language ? ' · ' + item.language : '');
+      sum.style.cssText = `padding:8px 12px;font-size:12px;color:${C.textDim};cursor:pointer;background:${C.bgSoft};`;
+      const pre = document.createElement('pre');
+      pre.style.cssText = `margin:0;padding:12px;overflow:auto;font-size:12px;line-height:1.5;`;
+      const code = document.createElement('code');
+      code.textContent = item.text || '';
+      code.style.cssText = `font-family:${C.font + ',monospace'};color:#d8dee9;white-space:pre-wrap;word-break:break-word;`;
+      pre.appendChild(code); wrap.appendChild(sum); wrap.appendChild(pre);
+      wrap.open = true;
+      host.appendChild(wrap);
+      scrollThread();
+      return;
+    }
+
+    if (kind === 'files') {
+      const files = Array.isArray(item.files) ? item.files : [];
+      const wrap = document.createElement('details');
+      wrap.className = 'js-files';
+      wrap.style.cssText = `border:1px solid ${C.border};border-radius:10px;overflow:hidden;background:${C.bgSoft};`;
+      const sum = document.createElement('summary');
+      sum.textContent = item.title || (files.length + ' Datei(en)');
+      sum.style.cssText = `padding:8px 12px;font-size:12px;color:${C.textDim};cursor:pointer;`;
+      const list = document.createElement('div');
+      list.style.cssText = `padding:0 12px 12px;font-size:12px;color:${C.textSoft};white-space:pre-wrap;word-break:break-word;`;
+      list.textContent = files.length ? files.slice(0, 40).join('\n') + (files.length > 40 ? '\n…' : '') : (item.path || '');
+      wrap.appendChild(sum); wrap.appendChild(list);
+      wrap.open = true;
+      host.appendChild(wrap);
+      scrollThread();
+      return;
+    }
+
+    // Unbekannte kind (z.B. image) — kleine Zeile, damit nichts verschluckt wird.
+    const b = document.createElement('div');
+    b.style.cssText = `padding:10px 12px;border:1px dashed ${C.border};border-radius:10px;font-size:12px;color:${C.textDim};`;
+    b.textContent = item.title || String(kind);
+    host.appendChild(b);
+    scrollThread();
   }
 
   // ---------------------------------------------------------------- modelle
@@ -616,7 +914,7 @@
     modelMenuEl.innerHTML = '';
     if (!models.length) {
       const d = document.createElement('div');
-      d.textContent = 'Keine Modelle — LM Studio gestartet?';
+      d.textContent = 'No models — LM Studio running?';
       d.style.cssText = `padding:10px 14px;font-size:13px;color:${C.textDim};`;
       modelMenuEl.appendChild(d);
     } else {
@@ -637,9 +935,350 @@
     }
     modelMenuEl.style.display = 'block';
   }
+
   function setModelLabel(id) {
     const short = String(id).split('/').pop();
     if (modelEl) modelEl.textContent = short;
+  }
+
+  // ------------------------------------------------------------- code-tab
+  /* Der Code-Tab treibt headless OpenCode (opencode run --format json) über
+     einen WebSocket; die Events werden als eigene Chat-Antwort gerendert —
+     kein Terminal, keine Raw-TUI. opencode braucht ~20k Context-Token, daher
+     zeigt das Modell-Dropdown die geladene Context-Größe und warnt zu kleine
+     Modelle (Exceed-context-Fehler würde LM Studio sonst still schlucken). */
+
+  function buildCodeView() {
+    if (codeViewEl) return;
+    if (!uiEl) return;
+    codeViewEl = $('.js-codeview', uiEl);
+    codeThreadEl = $('.js-code-thread', uiEl);
+    codeEditorEl = $('.js-code-editor', uiEl);
+    codeDirEl = $('.js-code-dir', uiEl);
+    codeModelEl = $('.js-code-model', uiEl);
+    codeModelMenuEl = $('.js-code-modelmenu', uiEl);
+    codeSendBtn = $('.js-code-send', uiEl);
+    codeCancelBtn = $('.js-code-cancel', uiEl);
+
+    // Modell-Dropdown (schwebt unter dem Header, wird bei Bedarf gefüllt).
+    codeModelMenuEl = document.createElement('div');
+    codeModelMenuEl.className = 'js-code-modelmenu';
+    codeModelMenuEl.style.cssText = `position:absolute;top:52px;left:16px;z-index:25;min-width:230px;background:${C.bgSoft};border:1px solid ${C.border};border-radius:12px;overflow:hidden;box-shadow:0 12px 30px rgba(0,0,0,.4);display:none;`;
+    codeViewEl.appendChild(codeModelMenuEl);
+
+    if (codeSendBtn) codeSendBtn.addEventListener('click', (e) => { e.preventDefault(); sendCodePrompt(); });
+    if (codeEditorEl) {
+      codeEditorEl.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendCodePrompt(); }
+      });
+      codeEditorEl.addEventListener('input', () => {
+        codeEditorEl.classList.toggle('is-empty', codeEditorEl.innerText.trim().length === 0);
+      });
+      codeEditorEl.classList.add('is-empty');
+    }
+    if (codeCancelBtn) codeCancelBtn.addEventListener('click', (e) => { e.preventDefault(); cancelCodeRun(); });
+    if (codeModelEl) codeModelEl.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); toggleCodeModelMenu(); });
+    window.addEventListener('click', () => { if (codeModelMenuEl) codeModelMenuEl.style.display = 'none'; });
+  }
+
+  async function loadCodeStatus() {
+    try {
+      const r = await fetch('/code/status');
+      const j = await r.json();
+      if (j.dir && codeDirEl) { codeDirEl.textContent = j.dir; codeDirEl.title = j.dir; }
+      if (j.models) { codeModels = j.models || []; codeMinContext = j.min_context || 24000; }
+      if (j.default) codeDefault = j.default;
+      // Start immer mit dem opencode-tauglichen Default (genug Kontext), nicht
+      // mit dem Chat-Modell — das kann zu wenig Kontext haben (siehe Backend).
+      codeModel = codeDefault || j.model || '';
+      setCodeModelLabel(codeModel);
+    } catch (e) {}
+  }
+
+  function setCodeModelLabel(id) {
+    const short = String(id || '').split('/').pop();
+    const label = codeModelEl ? codeModelEl.querySelector('.js-code-model-label') : null;
+    if (label) label.textContent = short || 'Model…';
+  }
+
+  function toggleCodeModelMenu() {
+    if (!codeModelMenuEl) return;
+    const open = codeModelMenuEl.style.display === 'block';
+    codeModelMenuEl.style.display = open ? 'none' : 'block';
+    if (!open) renderCodeModelList();
+  }
+
+  function renderCodeModelList() {
+    if (!codeModelMenuEl) return;
+    codeModelMenuEl.innerHTML = '';
+    const list = (codeModels && codeModels.length) ? codeModels : [];
+    if (!list.length) {
+      const d = document.createElement('div');
+      d.textContent = 'Keine LM-Studio-Modelle geladen.';
+      d.style.cssText = `padding:12px 14px;font-size:13px;color:${C.textDim};`;
+      codeModelMenuEl.appendChild(d);
+      return;
+    }
+    // Aufsteigend pro Modell eine Zeile: ID + großer Punkt für genug Context.
+    for (const m of list) {
+      const b = document.createElement('button');
+      const enough = (m.loaded_context || 0) >= codeMinContext;
+      const state = m.state === 'loaded' ? (enough ? 'ready' : 'too-small') : 'not-loaded';
+      const badge = state === 'ready' ? 'bereit'
+        : state === 'too-small' ? `Context zu klein (${fmtK(m.loaded_context)})`
+        : 'nicht geladen';
+      b.style.cssText = `display:block;width:100%;text-align:left;padding:9px 14px;background:none;border:none;color:${C.textSoft};font-size:13px;cursor:pointer;`;
+      b.onmouseenter = () => { b.style.background = C.bgHover; };
+      b.onmouseleave = () => { b.style.background = 'none'; };
+      b.innerHTML = `<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;">
+          <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(m.id)}</span>
+          <span style="color:${state === 'ready' ? '#3dbd7d' : state === 'not-loaded' ? C.textDim : '#e5a50a'};font-size:11px;flex:0 0 auto;">${escapeHtml(badge)}</span>
+        </div>`;
+      b.addEventListener('click', () => {
+        codeModel = m.id;
+        setCodeModelLabel(codeModel);
+        codeModelMenuEl.style.display = 'none';
+      });
+      codeModelMenuEl.appendChild(b);
+    }
+  }
+
+  function fmtK(n) {
+    n = Number(n) || 0;
+    if (n >= 1000) return Math.round(n / 1000) + 'k';
+    return String(n);
+  }
+
+  function ensureCodeSocket() {
+    if (codeWsOpen || codeWs) return;
+    if (codeReconnectTimer) { clearTimeout(codeReconnectTimer); codeReconnectTimer = null; }
+    openCodeSocket();
+  }
+
+  function openCodeSocket() {
+    if (codeWsOpen || codeWs) return;
+    try {
+      codeWs = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/code/ws');
+    } catch (e) { codeWs = null; scheduleCodeReconnect(); return; }
+    codeWs.onopen = () => { codeWsOpen = true; };
+    codeWs.onmessage = (ev) => { handleCodeMessage(ev); };
+    codeWs.onclose = () => { codeWsOpen = false; codeWs = null; scheduleCodeReconnect(); };
+    codeWs.onerror = () => { try { codeWs.close(); } catch (e) {} };
+  }
+
+  function scheduleCodeReconnect() {
+    if (codeReconnectTimer || activeMode !== 'code') return;
+    codeReconnectTimer = setTimeout(() => { codeReconnectTimer = null; openCodeSocket(); }, 2000);
+  }
+
+  function handleCodeMessage(ev) {
+    let msg; try { msg = JSON.parse(ev.data); } catch (e) { return; }
+    if (msg.type === 'event') { renderCodeEvent(msg.event); return; }
+    if (msg.type === 'done') {
+      codeRunning = false; codeCancelled = false; updateCodeControls();
+      if (codeActiveBubble) { codeActiveBubble.innerHTML = renderMarkdown(codeBubbleMd); codeActiveBubble = null; }
+      codeBubbleMd = '';
+      return;
+    }
+    if (msg.type === 'error') {
+      renderCodeError(msg.message || 'Fehler');
+      codeRunning = false; codeCancelled = false; updateCodeControls();
+      codeActiveBubble = null; codeBubbleMd = '';
+      return;
+    }
+  }
+
+  function sendCodePrompt() {
+    const text = codeEditorEl ? codeEditorEl.innerText.trim() : '';
+    if (!text || !codeWsOpen || codeRunning) return;
+    const model = codeModel || codeDefault;
+    codeRunning = true; codeCancelled = false;
+    codeBubbleMd = ''; codeActiveBubble = null;
+    addCodeUserTurn(text);
+    if (codeEditorEl) { codeEditorEl.innerText = ''; codeEditorEl.classList.add('is-empty'); }
+    updateCodeControls();
+    codeWs.send(JSON.stringify({ type: 'prompt', text: text, model: model }));
+  }
+
+  function cancelCodeRun() {
+    if (!codeWsOpen || !codeRunning) return;
+    codeCancelled = true;
+    codeWs.send(JSON.stringify({ type: 'cancel' }));
+  }
+
+  function updateCodeControls() {
+    if (codeCancelBtn) codeCancelBtn.style.display = codeRunning ? 'inline-flex' : 'none';
+  }
+
+  function ensureCodeThread() {
+    if (!codeThreadEl && uiEl) codeThreadEl = $('.js-code-thread', uiEl);
+    return codeThreadEl;
+  }
+
+  function addCodeUserTurn(text) {
+    const el = ensureCodeThread();
+    if (!el) return;
+    const row = document.createElement('div');
+    row.style.cssText = `display:flex;justify-content:flex-end;margin:0 auto 22px;max-width:820px;`;
+    const b = document.createElement('div');
+    b.style.cssText = `background:${C.accent};color:#fff;border-radius:20px;padding:10px 16px;max-width:72%;white-space:pre-wrap;word-break:break-word;font-size:14px;line-height:1.55;`;
+    b.textContent = text;
+    row.appendChild(b); el.appendChild(row);
+    el.scrollTop = el.scrollHeight;
+  }
+
+  function renderCodeEvent(ev) {
+    const el = ensureCodeThread();
+    if (!el || !ev) return;
+    const t = ev.type;
+    const part = ev.part || {};
+
+    if (t === 'step_start') {
+      codeActiveBubble = newCodeBubble(el);
+      return;
+    }
+    if (t === 'text' || part.type === 'text') {
+      if (!codeActiveBubble) codeActiveBubble = newCodeBubble(el);
+      codeBubbleMd += part.text || '';
+      codeActiveBubble.appendChild(document.createTextNode(part.text || ''));
+      el.scrollTop = el.scrollHeight;
+      return;
+    }
+    if (t === 'reasoning' || part.type === 'reasoning') {
+      if (!codeActiveBubble) codeActiveBubble = newCodeBubble(el);
+      const line = document.createElement('div');
+      line.style.cssText = `color:${C.textDim};font-style:italic;`;
+      line.textContent = part.text || '';
+      codeActiveBubble.appendChild(line);
+      return;
+    }
+    if (t === 'step_finish') {
+      if (codeActiveBubble) { codeActiveBubble.innerHTML = renderMarkdown(codeBubbleMd); codeActiveBubble = null; }
+      return;
+    }
+    if (t === 'tool' || part.type === 'tool') {
+      addCodeTool(el, part);
+      return;
+    }
+    if (t === 'error') {
+      renderCodeError(part.message || part.text || 'Fehler');
+      return;
+    }
+  }
+
+  function newCodeBubble(el) {
+    const row = document.createElement('div');
+    row.style.cssText = `display:flex;justify-content:flex-start;margin:0 auto 24px;max-width:820px;`;
+    const b = document.createElement('div');
+    b.style.cssText = `color:${C.text};font-size:14px;line-height:1.65;white-space:pre-wrap;word-break:break-word;max-width:100%;`;
+    row.appendChild(b); el.appendChild(row);
+    el.scrollTop = el.scrollHeight;
+    return b;
+  }
+
+  function addCodeTool(el, part) {
+    const name = part.tool || part.name || 'tool';
+    const sub = String(part.title || part.subtitle || '').trim();
+    const state = String(part.state || '').toLowerCase();
+    const col = state === 'done' ? '#3dbd7d' : (state === 'error' || state === 'failed') ? '#e5534b' : C.accent;
+    const b = document.createElement('div');
+    b.style.cssText = `display:flex;align-items:center;gap:8px;max-width:820px;margin:0 auto 10px;padding:8px 12px;border:1px solid ${C.border};border-radius:10px;background:${C.bgSoft};font-size:13px;color:${C.text};`;
+    b.innerHTML = `<span style="width:8px;height:8px;border-radius:50%;background:${col};flex:0 0 auto;"></span><span style="color:${C.text};">${escapeHtml(name)}</span>${sub ? ` <span style="color:${C.textDim};">${escapeHtml(sub)}</span>` : ''}${state && state !== 'running' ? ` <span style="color:${col};flex:0 0 auto;margin-left:auto;">${escapeHtml(state)}</span>` : ''}`;
+    el.appendChild(b);
+    el.scrollTop = el.scrollHeight;
+  }
+
+  function renderCodeError(message) {
+    const el = ensureCodeThread();
+    if (!el) return;
+    const b = document.createElement('div');
+    b.style.cssText = `max-width:820px;margin:0 auto 24px;padding:10px 14px;border:1px solid ${C.border};border-left:3px solid #e5534b;border-radius:10px;background:${C.bgSoft};font-size:13px;color:#e5534b;white-space:pre-wrap;word-break:break-word;`;
+    b.textContent = message || 'Fehler';
+    el.appendChild(b);
+    el.scrollTop = el.scrollHeight;
+  }
+
+  // Minimaler, sicherer Markdown-Renderer (kein CDN). Escapen, dann eine
+  // kleine Teilmenge: Fenced-Code-Blöcke, Inline-Code, Bold, Headlines,
+  // Zeilenumbrüche. In try/catch gekapselt — schlägt es fehl, bleibt der
+  // bereits gerenderte Rohtext als Fallback stehen.
+  function renderMarkdown(src) {
+    // Fenced-Code-Blöcke zuerst aus dem ROHEN Text ziehen (Inhalt genau einmal
+    // escapen), dann den Rest escapen und eine kleine Markdown-Teilmenge
+    // anwenden, zum Schluss die Code-Blöcke wieder einsetzen.
+    try {
+      let text = String(src || '');
+      const codeBlocks = [];
+      text = text.replace(/```([^\n]*)\n([\s\S]*?)```/g, (m, lang, body) => {
+        codeBlocks.push({ lang: String(lang || ''), body: escapeHtml(body) });
+        return '@@CB' + (codeBlocks.length - 1) + '@@';
+      });
+      text = escapeHtml(text);
+      text = text.replace(/`([^`\n]+)`/g, '<code>$1</code>');
+      text = text.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
+      text = text.replace(/\*([^*\n]+)\*/g, '<em>$1</em>');
+      text = text.replace(/^### (.*)$/gm, '<h6>$1</h6>');
+      text = text.replace(/^## (.*)$/gm, '<h5>$1</h5>');
+      text = text.replace(/^# (.*)$/gm, '<h4>$1</h4>');
+      text = text.replace(/\n/g, '<br>');
+      text = text.replace(/@@CB(\d+)@@/g, (m, i) => {
+        const cb = codeBlocks[+i];
+        const lang = cb.lang ? ' · ' + String(cb.lang).trim() : '';
+        return '<details class="js-code" style="border:1px solid ' + C.border + ';border-radius:10px;overflow:hidden;background:#0e1220;margin:10px 0;"><summary style="padding:8px 12px;font-size:12px;color:' + C.textDim + ';cursor:pointer;background:' + C.bgSoft + ';">Code' + lang + '</summary><pre style="margin:0;padding:12px;overflow:auto;font-size:12px;line-height:1.5;color:#d8dee9;white-space:pre-wrap;word-break:break-word;font-family:monospace;">' + cb.body + '</pre></details>';
+      });
+      return text;
+    } catch (e) {
+      return escapeHtml(String(src || ''));
+    }
+  }
+
+  // ---------------------------------------------------------------- settings
+  /* Echte Einstellungen statt Fake-Profil: ein Sheet mit der Modell-Auswahl. */
+  async function openSettings() {
+    if (!settingsSheetEl) return;
+    settingsSheetEl.style.display = 'flex';
+    // Code-Verzeichnis aus /code/status vorbelegen.
+    try {
+      const r = await fetch('/code/status');
+      const j = await r.json();
+      const din = $('.js-code-dir-input', settingsSheetEl);
+      if (din && j.dir) din.value = j.dir;
+    } catch (e) {}
+    if (settingsModelsEl) {
+      settingsModelsEl.innerHTML = '';
+      const load = async () => {
+        let models = [];
+        try {
+          const r = await fetch('/models');
+          const j = await r.json();
+          models = j.models || [];
+          if (j.current) setModelLabel(j.current);
+        } catch (e) { models = []; }
+        if (!models.length) {
+          const d = document.createElement('div');
+          d.textContent = 'No models — LM Studio running?';
+          d.style.cssText = `padding:10px 14px;font-size:13px;color:${C.textDim};`;
+          settingsModelsEl.appendChild(d);
+          return;
+        }
+        for (const m of models) {
+          const b = document.createElement('button');
+          b.textContent = m;
+          b.style.cssText = `display:block;width:100%;text-align:left;padding:9px 14px;background:none;border:none;color:${C.textSoft};font-size:13px;cursor:pointer;`;
+          b.onmouseenter = () => { b.style.background = C.bgHover; };
+          b.onmouseleave = () => { b.style.background = 'none'; };
+          b.addEventListener('click', () => {
+            setModelLabel(m);
+            try { fetch('/models/select', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: m }) }); } catch (e2) {}
+          });
+          settingsModelsEl.appendChild(b);
+        }
+      };
+      load();
+    }
+  }
+  function closeSettings() {
+    if (settingsSheetEl) settingsSheetEl.style.display = 'none';
   }
 
   // ---------------------------------------------------------------- sprache
@@ -687,7 +1326,16 @@
       else { pcmRing.push(data); if (pcmRing.length > 9) pcmRing.shift(); }
     };
   }
-  function beginUtterance() { utterancePCM = pcmRing.slice(); utteranceStartedAt = Date.now(); }
+  function beginUtterance() {
+    utterancePCM = pcmRing.slice();
+    utteranceStartedAt = Date.now();
+    utterancePeak = 0;
+    lastLiveStt = '';
+    lastSttLen = 0;   // Live-STT-Mindestpuffer neu starten
+    dictBase = composerInput ? composerInput.innerText.trim() : '';
+    noteSpeechWords('…');
+    setSpeechStatus('Hören');
+  }
   function stopRecording() {
     const chunks = utterancePCM || [];
     utterancePCM = null;
@@ -709,14 +1357,76 @@
     text = text.trim();
     if (!text) return;
     if (speechMode) { sendMessage(text); return; }
-    // Diktat-Modus: transkribierten Text ans Eingabefeld anhängen, nicht senden.
     if (dictating && composerInput) {
-      const cur = composerInput.innerText.trim();
-      composerInput.innerText = cur ? cur + ' ' + text : text;
+      // überschreibt den Live-Stand mit dem finalen Erkennungsergebnis —
+      // gleiche Basis, kein doppeltes Anhängen.
+      composerInput.innerText = dictBase ? dictBase + ' ' + text : text;
       composerInput.classList.remove('is-empty');
       if (sendBtn) sendBtn.disabled = false;
     }
   }
+
+  // ------------------------------------------- Sprachmodus-Beschriftung
+  function showSpeechCaption() {
+    if (speechCaptionEl) speechCaptionEl.style.display = 'flex';
+  }
+  function hideSpeechCaption() {
+    if (speechCaptionEl) speechCaptionEl.style.display = 'none';
+  }
+  function setSpeechStatus(s) {
+    if (spcStatusEl) spcStatusEl.textContent = s;
+  }
+  function noteSpeechWords(t) {
+    if (spcUserEl) spcUserEl.textContent = t || '…';
+  }
+  function noteSpeechReply(t) {
+    if (spcReplyEl) { spcReplyEl.textContent = t || ''; spcReplyEl.style.minHeight = t ? '' : '0'; }
+  }
+
+  // Live-Transkription: solange eine Sprachaufnahme läuft, wird der wachsende
+  // Puffer regelmäßig an /stt geschickt und die erkannten Wörter als Live-
+  // Beschriftung gezeigt. Weil die Erkennung auf der CPU läuft und das Backend
+  // /stt über einen einzigen Lock serialisiert, wird nur gesendet, wenn der
+  // vorherige Aufruf fertig ist (sttBusy) UND seit dem letzten Mal ~0,5 s
+  // neues Audio dazukam — so verstopfen Live-Partials den Lock nicht mehr.
+  let liveSttTimer = null, lastLiveStt = '', sttBusy = false, lastSttLen = 0;
+  function startLiveStt() {
+    if (liveSttTimer) return;
+    liveSttTimer = setInterval(async () => {
+      if (sttBusy) return;                                   // noch ein /stt offen
+      if ((!speechMode && !dictating) || !utterancePCM || !utterancePCM.length) return;
+      if (lastSttLen && utterancePCM.length - lastSttLen < pcmSampleRate * 0.5) return; // genug Neues
+      sttBusy = true;
+      lastSttLen = utterancePCM.length;
+      try {
+        const blob = encodeWav(concatFloat32(utterancePCM), pcmSampleRate);
+        const fd = new FormData(); fd.append('audio', blob, 'speech.wav');
+        const r = await fetch('/stt', { method: 'POST', body: fd });
+        const j = await r.json();
+        const t = (j.text || '').trim();
+        if (t && t !== lastLiveStt) {
+          lastLiveStt = t;
+          // Sprachmodus: Live-Wörter in der Beschriftung anzeigen.
+          noteSpeechWords(t);
+          // Diktat: Live-Wörter DIREKT ins Eingabefeld schreiben. Idempotent:
+          // immer dieselbe Basis + der jeweils erkannte Stand, damit nichts
+          // doppelt landet (kein Anhängen an den eigenen vorherigen Stand).
+          if (dictating && composerInput) {
+            composerInput.innerText = dictBase ? dictBase + ' ' + t : t;
+            composerInput.classList.remove('is-empty');
+            if (sendBtn) sendBtn.disabled = false;
+          }
+        }
+      } catch (e) { /* STT darf nie laufen stören */ }
+      finally { sttBusy = false; }
+    }, 1600);
+  }
+  function stopLiveStt() {
+    if (liveSttTimer) { clearInterval(liveSttTimer); liveSttTimer = null; }
+    lastLiveStt = '';
+    noteSpeechWords('…');
+  }
+
   function vadTick() {
     if (!vadAnalyser || !vadData) return;
     vadAnalyser.getByteTimeDomainData(vadData);
@@ -725,65 +1435,275 @@
     const rms = Math.sqrt(sum / vadData.length);
     const listening = (speechMode || dictating) && !muted && !busy;
     vadNoiseFloor = vadNoiseFloor * 0.98 + rms * 0.02;
-    const thresh = Math.max(vadNoiseFloor * 2.4, 0.025);
+    // Schwelle deutlich über dem Grundrauschen: reine Umgebungsgeräusche
+    // (Lüfter, Raum, Tastatur) dürfen keine "Äußerung" starten.
+    const thresh = Math.max(vadNoiseFloor * 3.2, 0.04);
     const above = rms > thresh;
     if (above && !utterancePCM) { if (listening) beginUtterance(); }
     if (utterancePCM) {
+      // Spitzenpegel über die ganze Aufnahme — nur echte Stimme (deutlich über
+      // dem Bodenrauschen) zählt als hörbare Antwort.
+      utterancePeak = Math.max(utterancePeak, rms);
       if (above) { silenceStreak = 0; }
-      else { silenceStreak++; if (silenceStreak >= 28) { silenceStreak = 0; stopRecording(); } }
+      else {
+        // Auto-Send: nach ~640 ms Stille (8 Ticks à 80 ms) automatisch
+        // absenden, statt auf den Senden-Button zu warten. Notbremse: eine
+        // länger als 12 s laufende "Äußerung" wird ebenfalls abgeschickt,
+        // falls die Stille-Erkennung wegen Umgebungsgeräuschen nie greift.
+        silenceStreak++;
+        const voiceFloor = Math.max(vadNoiseFloor * 4, 0.05);
+        const hasVoice = utterancePeak > voiceFloor;
+        if (silenceStreak >= 8 || Date.now() - utteranceStartedAt > 12000) {
+          silenceStreak = 0;
+          // Nur echtes Gesprochenes absenden; reines Rauschen verwerfen.
+          if (hasVoice) stopRecording(); else cancelRecording();
+        }
+      }
     }
+  }
+
+  function updateMuteIcon() {
+    if (!spMuteBtn) return;
+    spMuteBtn.innerHTML = muted ? ICONS.micOff : ICONS.mic;
+    spMuteBtn.title = muted ? 'Mikrofon an' : 'Mikrofon aus';
+  }
+
+  // Speech-Bar über dem Chat-Bereich zentrieren (gleicher Mittelpunkt wie der
+  // Orb), nicht über dem Vollbild — die Sidebar verschiebt den Chat-Bereich.
+  function layoutSpeechBar() {
+    if (!speechBarEl || !chatRootEl) return;
+    const rect = chatRootEl.getBoundingClientRect();
+    const cx = rect.left + rect.width / 2;
+    const delta = cx - window.innerWidth / 2;
+    const inner = speechBarEl.firstElementChild;
+    if (inner) inner.style.transform = 'translateX(' + delta + 'px)';
   }
 
   function enterSpeech() {
     ensureMic().then(() => {
       speechMode = true;
       showOrb();
-      if (composerTray) composerTray.style.opacity = '0.25';
+      showSpeechCaption();
+      setSpeechStatus('Bereit');
+      startLiveStt();
+      if (composerTray) composerTray.style.display = 'none';
+      if (chatRootEl) chatRootEl.classList.add('js-speech-active');
+      if (speechBarEl) speechBarEl.style.display = 'flex';
+      layoutSpeechBar();
       if (speechBtn) speechBtn.classList.add('on');
     }).catch(() => {
-      if (speechBtn) speechBtn.title = 'Mikrofon abgelehnt — Tippen funktioniert';
+      if (speechBtn) speechBtn.title = 'Microphone denied — typing still works';
     });
   }
   function exitSpeech() {
     speechMode = false;
     hideOrb();
+    hideSpeechCaption();
+    stopLiveStt();
     cancelRecording();
-    if (composerTray) composerTray.style.opacity = '';
+    if (composerTray) composerTray.style.display = '';
+    if (chatRootEl) chatRootEl.classList.remove('js-speech-active');
+    if (speechBarEl) speechBarEl.style.display = 'none';
     if (speechBtn) speechBtn.classList.remove('on');
   }
 
-  // Diktat-Modus: Hört zu und schreibt Transkripte ins Eingabefeld.
+  // Diktat-Modus: transkribiert ins Eingabefeld. Live-Transkription läuft
+  // mit, damit die erkannten Wörter schon während des Sprechens erscheinen.
   function setDictating(should) {
     if (should && !micReady) {
       ensureMic().then(() => {
         dictating = true;
         if (noteBtn) noteBtn.classList.add('on');
-        if (noteBtn) noteBtn.title = 'Diktat aus';
+        if (noteBtn) noteBtn.title = 'Dictation off';
+        startLiveStt();
       }).catch(() => {
-        if (noteBtn) noteBtn.title = 'Mikrofon abgelehnt';
+        if (noteBtn) noteBtn.title = 'Microphone denied';
         dictating = false;
       });
       return;
     }
     dictating = should;
     if (noteBtn) noteBtn.classList.toggle('on', should);
-    if (noteBtn) noteBtn.title = should ? 'Diktat aus' : 'Diktieren';
+    if (noteBtn) noteBtn.title = should ? 'Dictation off' : 'Dictate';
+    if (should) startLiveStt(); else stopLiveStt();
+  }
+
+    // ------------------------------------------- 3D-Punktkugel (Sprachmodus)
+  function makeSpherePoints(n) {
+    // Fibonacci-Kugel: gleichmäßige Verteilung, ohne Pole zu klumpen.
+    const pts = [];
+    const golden = Math.PI * (3 - Math.sqrt(5));
+    for (let i = 0; i < n; i++) {
+      const t = i / n;
+      const y = 1 - t * 2;                        // +1 … -1
+      const r = Math.sqrt(Math.max(0, 1 - y * y));
+      const th = golden * i;
+      pts.push({ x: Math.cos(th) * r, y, z: Math.sin(th) * r });
+    }
+    return pts;
+  }
+  let orbPoints = makeSpherePoints(300);   // weniger Punkte → klare, ruhige Kugel
+  let orbRotY = 0, orbRotX = -0.38;
+
+  // Eine konstante Farbe für alle Zustände — die Status werden nur über die
+  // BEWEGUNG erzählt (wie in der alten JARVIS-Kugel), nicht über Farbwechsel.
+  const ORB_COLOR = C.accent;
+
+  // aktueller Orb-Zustand: jeder bekommt eine eigene Animation
+  function orbStatus() {
+    if (speaking) return 'speaking';
+    if (busy) return 'thinking';
+    if (speechMode && !muted) return 'listening';
+    return 'idle';
+  }
+
+  function drawOrb(now) {
+    const cw = orbCanvas.clientWidth, ch = orbCanvas.clientHeight;
+    if (cw < 4 || ch < 4) return;
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    if (orbCanvas.width !== cw * dpr || orbCanvas.height !== ch * dpr) { orbCanvas.width = cw * dpr; orbCanvas.height = ch * dpr; }
+    orbCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    orbCtx.clearRect(0, 0, cw, ch);
+    // Zentrum über dem Chat-Bereich (rechts der Sidebar)
+    const rect = chatRootEl ? chatRootEl.getBoundingClientRect() : { left: 0, top: 0, width: cw, height: ch };
+    const cx = rect.left + rect.width / 2;
+    const cy = rect.top + rect.height / 2;
+    const R = Math.min(rect.width, rect.height) * 0.10;   // viel kleinere Kugel
+    const lvl = orbLevel || 0;
+    const status = orbStatus();
+    const t = now / 1000;
+
+    // Rotationsgeschwindigkeit je Zustand — spürbar schneller als zuvor
+    let rotSpeed = 0.005;
+    if (status === 'listening') rotSpeed = 0.006 + lvl * 0.03;
+    else if (status === 'thinking') rotSpeed = 0.011;
+    else if (status === 'speaking') rotSpeed = 0.013;
+    orbRotY += rotSpeed;
+    orbRotX = -0.38 + Math.sin(t * 1.5) * 0.05;   // zügigeres Wanken
+
+    // Denk-Sweep: ein Band wandert von oben nach unten (0 = oben … 1 = unten).
+    // Dreieck-Welle, damit es ohne Sprung durchläuft — wie in der alten Kugel.
+    let sweepT = -1;
+    if (status === 'thinking') {
+      const period = 0.9;
+      const phase = (t % (period * 2)) / (period * 2);
+      sweepT = phase < 0.5 ? phase * 2 : 2 - phase * 2;
+    }
+
+    const cosY = Math.cos(orbRotY), sinY = Math.sin(orbRotY);
+    const cosX = Math.cos(orbRotX), sinX = Math.sin(orbRotX);
+
+    // weicher Glow hinter der Kugel (eine Farbe, keine Status-Änderung)
+    const glow = orbCtx.createRadialGradient(cx, cy, 0, cx, cy, R * 1.5);
+    glow.addColorStop(0, ORB_COLOR + '22');
+    glow.addColorStop(1, ORB_COLOR + '00');
+    orbCtx.globalAlpha = 0.5;
+    orbCtx.fillStyle = glow;
+    orbCtx.beginPath();
+    orbCtx.arc(cx, cy, R * 1.5, 0, Math.PI * 2);
+    orbCtx.fill();
+
+    orbCtx.fillStyle = ORB_COLOR;
+    for (let i = 0; i < orbPoints.length; i++) {
+      const p = orbPoints[i];
+      const bx = p.x, by = p.y, bz = p.z;
+
+      // POSITIONS-Dynamik: radialer Versatz je Punkt — die Punkte bewegen sich,
+      // die Farbe bleibt gleich. Alle Wellen basieren auf der POSITION (nicht
+      // auf Zufall), damit Nachbarpunkte kohärent zusammenlaufen statt
+      // chaotisch zu zucken — wie in der alten Kugel.
+      let dr = 0;
+      if (status === 'idle') {
+        // ruhiges Atmen + langsame kohärente Welle (ohne Zufall)
+        const breathe = Math.sin(t * 1.4);
+        const wave = Math.sin(bx * 2.1 + by * 1.8 + t * 1.1);
+        dr = breathe * 0.03 + wave * 0.05;
+      } else if (status === 'listening') {
+        // Rippel: kohärente Welle über die Position, von der Lautstärke gesteuert
+        const ripple = Math.sin(bx * 4 + t * 5.0) * Math.cos(by * 4 - t * 3.6);
+        dr = lvl * 0.5 * ripple;
+      } else if (status === 'thinking') {
+        // Sweep-Band wandert von oben nach unten (Dreieck-Welle) und drückt
+        // die Punkte darin nach außen; leichte kohärente Welle dazu
+        const rowT = (1 - by) / 2;
+        const sweep = sweepT >= 0 ? Math.exp(-Math.pow((rowT - sweepT) * 6, 2)) : 0;
+        dr = 0.3 * sweep + 0.06 * Math.sin(bx * 2 + bz * 2 + t * 2.6);
+      } else { // speaking — mehrere kohärente Wellen; jeder Punkt hat seinen
+               // eigenen Wert, aber Bewegungen laufen als Wellen über die Fläche
+        const rippleA = Math.sin(bx * 3.5 + t * 6.5) * Math.cos(by * 3.3 - t * 5.2);
+        const rippleB = Math.sin(bz * 4.2 - t * 6.0);
+        const rippleC = Math.sin((bx + bz) * 2.6 + t * 7.5);
+        dr = 0.20 * rippleA + 0.15 * rippleB + 0.13 * rippleC;
+      }
+      const r = 1 + dr;
+      const x = bx * r, y = by * r, z = bz * r;
+      // Rotation um Y
+      const x1 = x * cosY + z * sinY;
+      const z1 = -x * sinY + z * cosY;
+      // Rotation um X (Kippwinkel)
+      const y1 = y * cosX - z1 * sinX;
+      const z2 = y * sinX + z1 * cosX;
+      const persp = 3.4;
+      const scale = persp / (persp - z2);
+      const sx = cx + x1 * R * scale;
+      const sy = cy + y1 * R * scale;
+      const depth = (z2 + 1) / 2;                 // 0 fern … 1 nah
+      // fettere Punkte, dicht beieinander; Alpha nur = Tiefenausblendung
+      const size = 1.4 + depth * 1.9;
+      const alpha = 0.16 + depth * 0.55;
+      orbCtx.globalAlpha = Math.min(1, Math.max(0, alpha));
+      orbCtx.beginPath();
+      orbCtx.arc(sx, sy, size, 0, Math.PI * 2);
+      orbCtx.fill();
+    }
+    orbCtx.globalAlpha = 1;
+  }
+
+  // Pegel der gesprochenen Stimme aus dem TTS-Ausgangsanalysator — die Orb
+  // pulsiert mit dem, was wirklich aus dem Lautsprecher kommt (nicht mit einem
+  // erfundenen Wert). Leichte Verstärkung, damit die Rippel sichtbar werden.
+  function speechLevel() {
+    if (outputAnalyser && outBuf) {
+      const r = rmsFrom(outputAnalyser, outBuf);
+      return Math.min(1, r * 1.8);
+    }
+    return 0;
+  }
+
+  function orbLoop(now) {
+    if (!orbVisible) return;
+    // Zuletzt gesprochen wird beim „Hören" das Mikrofon gemessen, beim
+    // „Sprechen" die eigene TTS-Ausgabe — alles dynamisch am echten Audio.
+    const listening = speechMode && !muted && !busy && !speaking;
+    const source = speaking ? speechLevel() : (listening ? getMicLevel() : 0);
+    orbLevel = Math.max(0, orbLevel * 0.78 + source * 0.22);
+    drawOrb(now);
+    orbRaf = requestAnimationFrame(orbLoop);
+  }
+
+  function showOrb() {
+    orbVisible = true;
+    if (orbCanvas) orbCanvas.style.display = 'block';
+    if (!orbRaf) orbRaf = requestAnimationFrame(orbLoop);
+  }
+  function hideOrb() {
+    orbVisible = false;
+    // nicht nur die Animationsschleife stoppen, sondern den Canvas wirklich
+    // ausblenden — sonst bleibt der letzte Frame als "Geister-Kugel" stehen.
+    if (orbCanvas) { orbCanvas.style.display = 'none'; }
+    if (orbCtx && orbCanvas) { const w = orbCanvas.clientWidth, h = orbCanvas.clientHeight; if (w && h) { orbCtx.setTransform(1,0,0,1,0,0); orbCtx.clearRect(0,0,w,h); } }
   }
 
   // ---------------------------------------------------------------- boot
   function boot() {
     buildUi();
-    // 3D-Orb-Canvas (Hintergrund, nur im Sprachmodus sichtbar)
+    setMode(activeMode); // Sidebar befüllen + aktive Konversation des Modus laden
+    document.title = 'Jarvis';
     orbCanvas = document.createElement('canvas');
     orbCanvas.id = 'jarvisOrb';
-    // z-index 40: die Vollbild-Kugel muss VOR der UI (z-index:30) liegen, sonst
-    // verschwindet sie hinter dem opaken #jsApp-Hintergrund und der Sprachmodus
-    // wirkt, als sei er verschwunden. pointer-events:none lässt Klicks zur UI durch.
-    orbCanvas.style.cssText = 'position:fixed;inset:0;z-index:40;pointer-events:none;background:transparent;';
+    orbCanvas.style.cssText = 'position:fixed;inset:0;width:100vw;height:100vh;z-index:40;pointer-events:none;background:transparent;';
     document.body.appendChild(orbCanvas);
     orbCtx = orbCanvas.getContext('2d');
-    orbPoints = buildSpherePoints();
-    // Sidebar-Toggle
     const t = $('.js-side-toggle', uiEl);
     if (t) t.addEventListener('click', () => {
       const aside = $('.js-sidebar', uiEl);
@@ -791,10 +1711,12 @@
       aside.style.display = open ? 'none' : 'flex';
       const comp = $('.js-composer', uiEl);
       if (comp) comp.style.left = open ? '0' : '308px';
+      if (orbCanvas) orbCanvas.style.left = open ? '0' : '308px';
+      layoutSpeechBar();
     });
-    setMode('chat');
-    // Initial Modell-Label setzen
+    window.addEventListener('resize', layoutSpeechBar);
     fetch('/models').then((r) => r.json()).then((j) => { if (j.current) setModelLabel(j.current); }).catch(() => {});
+    openPanelSocket();
   }
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
