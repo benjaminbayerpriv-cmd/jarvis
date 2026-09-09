@@ -715,7 +715,7 @@
       .js-chat-item { display:flex; align-items:center; gap:9px; padding:7px 10px; border-radius:10px; cursor:pointer; font-size:13px; color:${C.textSoft}; position:relative; }
       .js-chat-item:hover { background:${C.bgHover}; color:${C.text}; }
       .js-chat-item.selected { background:${C.bgHover}; color:${C.text}; }
-      .js-chat-item .js-ico { flex:0 0 auto; display:inline-flex; width:15px; height:15px; color:${C.accent}; }
+      .js-chat-item .js-ico { flex:0 0 auto; display:inline-flex; width:15px; height:15px; color:${C.textDim}; }
       .js-chat-item .js-ico svg { width:15px; height:15px; display:block; }
       .js-chats-toggle .js-chats-chevron svg, .js-pinned-toggle .js-pinned-chevron svg, .js-projects-pinned-toggle .js-projects-pinned-chevron svg { width:13px; height:13px; display:block; }
       .js-chats-toggle.is-collapsed .js-chats-chevron, .js-pinned-toggle.is-collapsed .js-pinned-chevron, .js-projects-pinned-toggle.is-collapsed .js-projects-pinned-chevron { transform:rotate(-90deg); }
