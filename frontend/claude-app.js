@@ -44,6 +44,7 @@
     close: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>',
     volume: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 4.702a.705.705 0 0 0-1.203-.498L6.413 7.587A1.4 1.4 0 0 1 5.416 8H3a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2.416a1.4 1.4 0 0 1 .997.413l3.383 3.384A.705.705 0 0 0 11 19.298z"/><path d="M16 9a5 5 0 0 1 0 6"/><path d="M19.364 18.364a9 9 0 0 0 0-12.728"/></svg>',
     muted: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 4.702a.7.7 0 0 0-1.203-.498L6.413 7.587A1.4 1.4 0 0 1 5.416 8H3a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2.416a1.4 1.4 0 0 1 .997.413l3.383 3.384A.7.7 0 0 0 11 19.298z"/><path d="m16.5 14.5 5-5"/><path d="m16.5 9.5 5 5"/></svg>',
+    folder: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg>',
   };
 
   // ---------------------------------------------------------------- helfer
@@ -369,6 +370,7 @@
             <button class="js-pill" data-mode="code" title="Code with opencode" style="flex:1;display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:7px 10px;border-radius:8px;border:none;background:transparent;color:${C.textSoft};font-size:13px;font-weight:500;cursor:pointer;transition:background .15s,color .15s;">${ICONS.code}<span>Code</span></button>
           </div>
           <button class="js-new" style="display:flex;align-items:center;gap:8px;padding:9px 12px;background:${C.bgHover};border:1px solid ${C.border};border-radius:11px;color:${C.text};font-size:13px;font-weight:500;cursor:pointer;transition:background .15s;">${ICONS.plus}<span>New conversation</span></button>
+          <button class="js-projects" style="display:flex;align-items:center;gap:8px;padding:9px 12px;background:none;border:none;border-radius:11px;color:${C.textSoft};font-size:13px;font-weight:500;cursor:pointer;transition:background .15s;">${ICONS.folder}<span>Projects</span></button>
           <div style="padding:2px 8px 4px;font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:${C.textDim};">Conversations</div>
         </div>
         <div class="js-chats" style="flex:1 1 auto;overflow-y:auto;padding:2px 8px 10px;"></div>
@@ -514,13 +516,14 @@
       .js-sidebar button:focus-visible, .js-main button:focus-visible { outline:2px solid ${C.accent}; outline-offset:2px; }
       .js-editor:empty::before, .js-editor.is-empty::before { content:attr(data-placeholder); color:${C.textDim}; pointer-events:none; }
       .js-editor:focus::before { opacity:.7; }
-      .js-side-toggle svg, .js-new svg, .js-upload svg, .js-note svg, .js-speech svg, .js-settings svg { width:16px; height:16px; display:block; }
+      .js-side-toggle svg, .js-new svg, .js-projects svg, .js-upload svg, .js-note svg, .js-speech svg, .js-settings svg { width:16px; height:16px; display:block; }
       .js-upload svg, .js-note svg, .js-settings svg { width:18px; height:18px; }
       .js-speech svg, .js-send svg { width:18px; height:18px; display:block; }
       .js-sp-mute svg, .js-sp-stop svg, .js-sp-chat svg, .js-sp-send svg { width:20px; height:20px; display:block; }
       .js-pill svg { width:16px; height:16px; display:block; }
-      .js-side-toggle:hover, .js-new:hover, .js-upload:hover, .js-note:hover, .js-model:hover, .js-settings:hover, .js-sp-mute:hover, .js-sp-stop:hover, .js-sp-chat:hover { background:${C.bgHover}; color:${C.text}; }
+      .js-side-toggle:hover, .js-new:hover, .js-projects:hover, .js-upload:hover, .js-note:hover, .js-model:hover, .js-settings:hover, .js-sp-mute:hover, .js-sp-stop:hover, .js-sp-chat:hover { background:${C.bgHover}; color:${C.text}; }
       .js-pill.active { background:${C.accent} !important; color:#fff !important; }
+      .js-code-active .js-projects, .js-code-active .js-projects-note { display:none !important; }
       .js-pill:not(.active):hover { background:${C.bgHover}; color:${C.text}; }
       .js-note.on { color:${C.accent} !important; background:rgba(217,119,87,.12) !important; }
       .js-note.on svg { animation:js-note-pulse 1.4s ease-in-out infinite; }
@@ -670,6 +673,20 @@
 
   function wireUi() {
     $('.js-new', uiEl).addEventListener('click', startNewConversation);
+    // Projects gibt es (noch) nicht als echtes Feature — nur der Button, wie
+    // angefragt. Ein Klick zeigt das ehrlich statt so zu tun, als würde
+    // etwas passieren.
+    $('.js-projects', uiEl).addEventListener('click', (e) => {
+      e.preventDefault();
+      const btn = e.currentTarget;
+      const existing = btn.nextElementSibling && btn.nextElementSibling.classList.contains('js-projects-note') ? btn.nextElementSibling : null;
+      if (existing) { existing.remove(); return; }
+      const note = document.createElement('div');
+      note.className = 'js-projects-note';
+      note.textContent = 'Projekte gibt es noch nicht — kommt später.';
+      note.style.cssText = `padding:6px 12px 2px;font-size:12px;color:${C.textDim};`;
+      btn.insertAdjacentElement('afterend', note);
+    });
 
     // Chat/Code-Toggle
     uiEl.querySelectorAll('.js-pill').forEach((p) => {
