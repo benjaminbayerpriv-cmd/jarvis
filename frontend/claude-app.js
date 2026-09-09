@@ -561,8 +561,15 @@
           <button class="js-newproject-close" title="Schließen" style="width:28px;height:28px;border-radius:8px;background:none;border:none;color:${C.textSoft};cursor:pointer;font-size:16px;line-height:1;">×</button>
         </div>
         <div style="padding:18px;display:flex;flex-direction:column;gap:12px;">
+          <div class="js-newproject-dir-row" style="display:flex;flex-direction:column;gap:6px;">
+            <label style="font-size:12px;color:${C.textSoft};">Ordner</label>
+            <input class="js-newproject-dir" type="text" placeholder="z. B. C:\Users\du\Documents\MeinProjekt" spellcheck="false" style="width:100%;box-sizing:border-box;padding:9px 10px;background:${C.bg};border:1px solid ${C.border};border-radius:8px;color:${C.text};font-size:13px;outline:none;font-family:${C.font};" />
+            <span style="font-size:11px;color:${C.textDim};">Pfad eines bestehenden Ordners, oder ein neuer wird angelegt. Die Chats dieses Projekts landen dort drin.</span>
+          </div>
+          <div class="js-newproject-dir-display" style="display:none;font-size:12px;color:${C.textDim};font-family:monospace;word-break:break-all;"></div>
+          <div class="js-newproject-error" style="font-size:12px;color:#e5735f;min-height:0;"></div>
           <div style="display:flex;flex-direction:column;gap:6px;">
-            <label style="font-size:12px;color:${C.textSoft};">Name</label>
+            <label style="font-size:12px;color:${C.textSoft};">Name (optional, sonst der Ordnername)</label>
             <input class="js-newproject-name" type="text" placeholder="z. B. Lokale Coding KI" style="width:100%;box-sizing:border-box;padding:9px 10px;background:${C.bg};border:1px solid ${C.border};border-radius:8px;color:${C.text};font-size:13px;outline:none;font-family:${C.font};" />
           </div>
           <div style="display:flex;flex-direction:column;gap:6px;">
@@ -738,7 +745,7 @@
 
   // Lädt die Turns einer Konversation in den Thread (oder leert ihn, wenn
   // id=null). Wird von setMode und openConversation gemeinsam genutzt.
-  async function renderConversation(id) {
+  async function renderConversation(id, projectId) {
     const el = ensureThread();
     if (!el) return;
     el.innerHTML = '';
@@ -746,7 +753,8 @@
     let turns = [];
     if (id) {
       try {
-        const r = await fetch(`/conversations/${encodeURIComponent(id)}`);
+        const qs = projectId ? `?project_id=${encodeURIComponent(projectId)}` : '';
+        const r = await fetch(`/conversations/${encodeURIComponent(id)}${qs}`);
         const j = await r.json();
         turns = j.turns || [];
       } catch (e) { turns = []; }
@@ -802,13 +810,13 @@
     }
   }
 
-  async function openConversation(id) {
+  async function openConversation(id, projectId) {
     closeProjectsView();
-    currentProjectId = null;
+    currentProjectId = projectId || null;
     if (id === currentConversationId) return;
     currentConversationId = id;
     localStorage.setItem(modeKey(activeMode), id);
-    await renderConversation(id);
+    await renderConversation(id, projectId);
     loadConversationList();
   }
 
@@ -875,9 +883,10 @@
       `).join('');
       pdRecentEl.querySelectorAll('.js-pd-recent-item').forEach((btn) => {
         btn.addEventListener('click', () => {
+          const pid = viewingProjectId;
           closeProjectDetail();
           setMode('chat');
-          openConversation(btn.dataset.id);
+          openConversation(btn.dataset.id, pid);
         });
       });
     } catch (e) {
@@ -928,6 +937,7 @@
           ${p.tag ? `<span style="font-size:11px;padding:2px 8px;border-radius:10px;background:${C.bgHover};color:${C.textSoft};">${escapeHtml(p.tag)}</span>` : ''}
         </div>
         <button class="js-project-menu-btn" data-id="${p.id}" title="Optionen" style="position:absolute;top:12px;right:10px;background:none;border:none;color:${C.textSoft};cursor:pointer;padding:4px;display:inline-flex;">${ICONS.dots}</button>
+        ${p.dir ? `<div style="font-size:11px;color:${C.textDim};font-family:monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-bottom:8px;" title="${escapeHtml(p.dir)}">${escapeHtml(p.dir)}</div>` : ''}
         ${p.description ? `<div style="font-size:13px;color:${C.textSoft};line-height:1.45;flex:1;">${escapeHtml(p.description)}</div>` : '<div style="flex:1;"></div>'}
         <div style="font-size:12px;color:${C.textDim};margin-top:10px;">${formatProjectDate(p.created_at)}</div>
       </div>
@@ -938,16 +948,26 @@
     editingProjectId = null;
     $('.js-newproject-title', newProjectSheetEl).textContent = 'Neues Projekt';
     $('.js-newproject-create', newProjectSheetEl).textContent = 'Erstellen';
+    $('.js-newproject-dir-row', newProjectSheetEl).style.display = 'flex';
+    $('.js-newproject-dir-display', newProjectSheetEl).style.display = 'none';
+    $('.js-newproject-dir', newProjectSheetEl).value = '';
     $('.js-newproject-name', newProjectSheetEl).value = '';
     $('.js-newproject-desc', newProjectSheetEl).value = '';
     newProjectSheetEl.style.display = 'flex';
-    $('.js-newproject-name', newProjectSheetEl).focus();
+    $('.js-newproject-dir', newProjectSheetEl).focus();
   }
   function openEditProjectModal(project) {
     if (!newProjectSheetEl) return;
     editingProjectId = project.id;
     $('.js-newproject-title', newProjectSheetEl).textContent = 'Projekt umbenennen';
     $('.js-newproject-create', newProjectSheetEl).textContent = 'Speichern';
+    // Der Ordner ist die eigentliche Identität des Projekts (dort liegen
+    // seine Chats) — beim Umbenennen nur anzeigen, nicht änderbar, um nicht
+    // aus Versehen den Bezug zu den schon gespeicherten Chats zu kappen.
+    $('.js-newproject-dir-row', newProjectSheetEl).style.display = 'none';
+    const dirDisplay = $('.js-newproject-dir-display', newProjectSheetEl);
+    dirDisplay.style.display = 'block';
+    dirDisplay.textContent = project.dir || '';
     $('.js-newproject-name', newProjectSheetEl).value = project.name || '';
     $('.js-newproject-desc', newProjectSheetEl).value = project.description || '';
     newProjectSheetEl.style.display = 'flex';
@@ -959,8 +979,9 @@
   }
   async function createProjectFromModal() {
     const name = $('.js-newproject-name', newProjectSheetEl).value.trim();
-    if (!name) return;
     const description = $('.js-newproject-desc', newProjectSheetEl).value.trim();
+    const errEl = $('.js-newproject-error', newProjectSheetEl);
+    if (errEl) errEl.textContent = '';
     try {
       if (editingProjectId) {
         await fetch(`/projects/${encodeURIComponent(editingProjectId)}`, {
@@ -969,13 +990,23 @@
           body: JSON.stringify({ name, description }),
         });
       } else {
-        await fetch('/projects', {
+        const dir = $('.js-newproject-dir', newProjectSheetEl).value.trim();
+        if (!dir) return;
+        const r = await fetch('/projects', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name, description }),
+          body: JSON.stringify({ dir, name, description }),
         });
+        if (!r.ok) {
+          const j = await r.json().catch(() => ({}));
+          if (errEl) errEl.textContent = j.detail || 'Ordner konnte nicht verwendet werden.';
+          return;
+        }
       }
-    } catch (e) {}
+    } catch (e) {
+      if (errEl) errEl.textContent = 'Netzwerkfehler.';
+      return;
+    }
     closeNewProjectModal();
     loadProjects();
   }
