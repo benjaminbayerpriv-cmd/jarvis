@@ -124,6 +124,9 @@ class ChatRequest(BaseModel):
     turn_id: str | None = None
     conversation_id: str | None = None
     mode: str = "chat"  # "chat" | "code" — Chat|Code-Umschalter im Frontend
+    # Data-URLs ("data:image/jpeg;base64,...") vom Datei-Anhang im Frontend —
+    # nur an vision-fähige Modelle weitergereicht, siehe llm_client._build_messages.
+    images: list[str] | None = None
 
 
 class CancelRequest(BaseModel):
@@ -311,7 +314,7 @@ def chat_stream(req: ChatRequest):
     def generate():
         full_text = ""
         try:
-            for event in llm_client.stream_reply(req.message, req.history, turn_id=req.turn_id, mode=req.mode):
+            for event in llm_client.stream_reply(req.message, req.history, turn_id=req.turn_id, mode=req.mode, images=req.images):
                 if event["type"] == "sentence":
                     text = _strip_emojis(event["text"])
                     # Leere Sätze (löst ein Reasoning-Modell manchmal am Ende aus)

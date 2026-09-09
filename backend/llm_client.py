@@ -275,7 +275,22 @@ zeige Differenzen oder genaue Schritte und bleibe knapp. Wenn etwas programmiert
 werden soll, frage weiterhin zuerst nach dem Zielordner."""
 
 
-def _build_messages(user_message: str, history: list | None, mode: str | None = None) -> list:
+def _user_content(user_message: str, images: list[str] | None):
+    """Plain string for a text-only turn, or an OpenAI vision-style content
+    array (text + one or more image_url parts) when images are attached —
+    LM Studio's OpenAI-compatible endpoint accepts this shape for any
+    "vlm"-typed model (see list_model_capabilities). Each image is a data
+    URL ("data:image/jpeg;base64,...") straight from the frontend's
+    FileReader — nothing server-side re-encodes or validates it beyond
+    LM Studio's own request handling."""
+    if not images:
+        return user_message
+    content = [{"type": "text", "text": user_message}]
+    content.extend({"type": "image_url", "image_url": {"url": img}} for img in images)
+    return content
+
+
+def _build_messages(user_message: str, history: list | None, mode: str | None = None, images: list[str] | None = None) -> list:
     # Qwen3.5's chat template rejects the request outright ("System message
     # must be at the beginning") the moment more than one system-role entry
     # shows up anywhere in the list — which used to happen constantly here:
@@ -315,7 +330,7 @@ def _build_messages(user_message: str, history: list | None, mode: str | None = 
 
     messages = [{"role": "system", "content": "\n\n".join(system_parts)}]
     messages.extend(conversation)
-    messages.append({"role": "user", "content": user_message})
+    messages.append({"role": "user", "content": _user_content(user_message, images)})
     return messages
 
 
@@ -577,6 +592,16 @@ def _detect_capabilities(model_id: str, meta: dict) -> list[str]:
                 hay.append(cfg[key])
 
     caps: list[str] = []
+    # LM Studio's native /api/v0/models marks every vision-capable model
+    # with `"type": "vlm"` — by far the most reliable signal available
+    # (it's LM Studio's own classification, not a guess from the id/arch
+    # string), but wasn't being read at all: only "owned_by", "architecture",
+    # "arch", "model_type" were ever added to `hay` above, never "type".
+    # Observed live: google/gemma-4-e4b, qwen3.5-9b, qwen3.8-27b and
+    # devstral-small-2-24b-instruct-2512 are all real "vlm" models that
+    # this endpoint reported as having zero capabilities.
+    if meta.get("type") == "vlm":
+        caps.append("vision")
     if isinstance(meta.get("vision"), bool) and meta["vision"]:
         caps.append("vision")
     if isinstance(meta.get("capabilities"), (list, tuple)):
@@ -1198,19 +1223,19 @@ def _turn_cancelled(turn_id: str | None) -> bool:
     return bool(turn_id) and turn_id in _cancelled_turns
 
 
-def stream_reply(user_message: str, history: list | None = None, turn_id: str | None = None, mode: str | None = None):
+def stream_reply(user_message: str, history: list | None = None, turn_id: str | None = None, mode: str | None = None, images: list[str] | None = None):
     """Thin wrapper around _stream_reply_impl that guarantees turn_id gets
     dropped from _cancelled_turns once the turn ends, cancelled or not —
     otherwise every turn_id a client ever sends would sit in that set
     forever."""
     try:
-        yield from _stream_reply_impl(user_message, history, turn_id, mode)
+        yield from _stream_reply_impl(user_message, history, turn_id, mode, images)
     finally:
         if turn_id:
             _cancelled_turns.discard(turn_id)
 
 
-def _stream_reply_impl(user_message: str, history: list | None = None, turn_id: str | None = None, mode: str | None = None):
+def _stream_reply_impl(user_message: str, history: list | None = None, turn_id: str | None = None, mode: str | None = None, images: list[str] | None = None):
     """Generator yielding {"type": "sentence", "text": ...} as soon as each
     sentence of the reply is complete, then a final {"type": "done"}.
 
@@ -1239,7 +1264,7 @@ def _stream_reply_impl(user_message: str, history: list | None = None, turn_id: 
         yield {"type": "done", "full_text": resolved}
         return
 
-    messages = _build_messages(user_message, history, mode)
+    messages = _build_messages(user_message, history, mode, images)
 
     last_tool_result = None
     full_text_parts = []

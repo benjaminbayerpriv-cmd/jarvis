@@ -46,19 +46,22 @@
   };
 
   // ---------------------------------------------------------------- helfer
-  // Datei-Anhang: liest den TEXT-Inhalt der Datei clientseitig und fügt ihn
-  // direkt in die Nachricht ein — vorher landete hier nur "📎 dateiname.txt"
-  // als reiner Text im Composer, die Datei selbst wurde nie gelesen oder
-  // irgendwohin geschickt (es gibt auch keinen Upload-Endpoint im Backend).
-  // Bewusst nur Text: Bilder/PDFs bräuchten ein multimodales Modell bzw.
-  // eine eigene Backend-Route, die es hier nicht gibt — für die verlinkte
-  // "Datei hochladen"-Erwartung des Nutzers deckt Text/Code den Regelfall
-  // ab (Skripte, Configs, Logs, Notizen), ohne stillschweigend mehr
-  // vorzutäuschen, als die App tatsächlich verarbeiten kann.
+  // Datei-Anhang: liest den Inhalt der Datei clientseitig, statt nur
+  // "📎 dateiname.txt" als reinen Text in den Composer zu schreiben und die
+  // Datei selbst zu verwerfen (der alte Zustand — es gibt auch keinen
+  // generischen Upload-Endpoint im Backend). Zwei Fälle:
+  //  - Bilder gehen, wenn das AKTUELLE Modell laut LM Studio ein "vlm" ist
+  //    (siehe llm_client.list_model_capabilities), als Data-URL direkt mit
+  //    ins Chat-Request (images[], siehe sendMessage) — das Modell sieht
+  //    das Bild wirklich, nicht nur einen Dateinamen.
+  //  - Alles andere wird als Text gelesen und inline in die Nachricht
+  //    eingefügt (PDFs/Audio landen ehrlich als "kann ich nicht lesen"
+  //    statt stillschweigend Datenmüll in den Prompt zu kippen).
   const ATTACH_MAX_CHARS = 20000;
+  let pendingImages = [];  // Data-URLs der aktuell angehängten Bilder, siehe sendMessage
   function looksBinary(text) {
     // NUL-Bytes oder ein hoher Anteil des Unicode-Replacement-Zeichens
-    // deuten auf eine Datei hin, die keine echte Textdatei ist (Bild, PDF,
+    // deuten auf eine Datei hin, die keine echte Textdatei ist (PDF,
     // Audio, …) — FileReader.readAsText() wirft dafür keinen Fehler,
     // sondern liefert einfach unlesbaren Müll zurück.
     if (text.indexOf('\x00') !== -1) return true;
@@ -74,20 +77,38 @@
       reader.readAsText(file);
     });
   }
+  function readFileAsDataURL(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ''));
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(file);
+    });
+  }
   async function readAttachedFile(file) {
+    if (file.type && file.type.startsWith('image/')) {
+      if (!currentModelSupportsVision) {
+        return { text: `📎 ${file.name}: das aktuelle Modell kann keine Bilder lesen — wechsle oben im Modell-Menü zu einem vision-fähigen Modell (z. B. gemma-4-e4b, qwen3.5-9b/3.8-27b, devstral).`, image: null };
+      }
+      try {
+        return { text: `📎 ${file.name} (Bild angehängt)`, image: await readFileAsDataURL(file) };
+      } catch (e) {
+        return { text: `📎 ${file.name}: konnte nicht gelesen werden.`, image: null };
+      }
+    }
     let text;
     try {
       text = await readFileAsText(file);
     } catch (e) {
-      return `📎 ${file.name}: konnte nicht gelesen werden.`;
+      return { text: `📎 ${file.name}: konnte nicht gelesen werden.`, image: null };
     }
     if (looksBinary(text)) {
-      return `📎 ${file.name}: Inhalt kann nicht als Text gelesen werden (Bild/PDF/Binärdatei) — nur Textdateien werden derzeit unterstützt.`;
+      return { text: `📎 ${file.name}: Inhalt kann nicht als Text gelesen werden (PDF/Binärdatei) — nur Text- und Bilddateien werden derzeit unterstützt.`, image: null };
     }
     let truncated = false;
     if (text.length > ATTACH_MAX_CHARS) { text = text.slice(0, ATTACH_MAX_CHARS); truncated = true; }
     const note = truncated ? ` (gekürzt auf ${ATTACH_MAX_CHARS} Zeichen)` : '';
-    return `📎 ${file.name}${note}:\n\`\`\`\n${text}\n\`\`\``;
+    return { text: `📎 ${file.name}${note}:\n\`\`\`\n${text}\n\`\`\``, image: null };
   }
 
   function base64ToBlob(base64, mime) {
@@ -579,9 +600,10 @@
       const files = fileInput.files ? [...fileInput.files] : [];
       fileInput.value = '';
       if (!files.length) return;
-      const blocks = await Promise.all(files.map(readAttachedFile));
+      const results = await Promise.all(files.map(readAttachedFile));
+      for (const r of results) if (r.image) pendingImages.push(r.image);
       const base = (composerInput ? composerInput.innerText : '').trim();
-      const attach = blocks.join('\n\n');
+      const attach = results.map((r) => r.text).join('\n\n');
       if (composerInput) { composerInput.innerText = base ? base + '\n\n' + attach : attach; composerInput.classList.remove('is-empty'); if (sendBtn) sendBtn.disabled = false; }
     });
     document.body.appendChild(fileInput);
@@ -641,6 +663,11 @@
   async function sendMessage(text) {
     text = (text || '').trim();
     if (!text || busy) return;
+    // Sofort abgreifen und leeren: ein Bild, das während dieses laufenden
+    // Requests noch angehängt wird, gehört zum NÄCHSTEN Turn, nicht zu
+    // diesem hier.
+    const imagesForThisTurn = pendingImages;
+    pendingImages = [];
     if (composerInput) { composerInput.innerText = ''; composerInput.classList.remove('is-empty'); }
     showThread();
     progressHostEl = null; // neue Runde eigener Fortschrittsblöcke
@@ -664,7 +691,7 @@
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         signal: abortController.signal,
-        body: JSON.stringify({ message: text, history, turn_id: currentTurnId, mode: activeMode, conversation_id: ensureConversationId() }),
+        body: JSON.stringify({ message: text, history, turn_id: currentTurnId, mode: activeMode, conversation_id: ensureConversationId(), images: imagesForThisTurn }),
       });
       if (!resp.ok) throw new Error('HTTP ' + resp.status);
       const reader = resp.body.getReader();
@@ -878,6 +905,20 @@
   }
 
   // ---------------------------------------------------------------- modelle
+  // Bild-Anhänge (siehe readAttachedFile) brauchen ein vision-fähiges Modell
+  // ("vlm" laut LM Studios eigener Klassifikation, siehe
+  // llm_client.list_model_capabilities) — modelCapsMap merkt sich das pro
+  // Modell-Id, currentModelSupportsVision spiegelt das gerade aktive.
+  let modelCapsMap = {};
+  let currentModelSupportsVision = false;
+  function applyModelCaps(j) {
+    modelCapsMap = j.model_caps || {};
+    currentModelSupportsVision = (j.current_caps || []).includes('vision');
+  }
+  function selectModelCaps(id) {
+    currentModelSupportsVision = (modelCapsMap[id] || []).includes('vision');
+  }
+
   async function toggleModelMenu() {
     if (!modelMenuEl) return;
     const open = modelMenuEl.style.display !== 'none';
@@ -887,6 +928,7 @@
       const r = await fetch('/models');
       const j = await r.json();
       models = (j.models || []).map((m) => ({ id: m }));
+      applyModelCaps(j);
       if (j.current) setModelLabel(j.current);
     } catch (e) { models = []; }
     modelMenuEl.innerHTML = '';
@@ -906,6 +948,7 @@
           e.stopPropagation();
           modelMenuEl.style.display = 'none';
           setModelLabel(m.id);
+          selectModelCaps(m.id);
           try { await fetch('/models/select', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: m.id }) }); } catch (e2) {}
         });
         modelMenuEl.appendChild(b);
@@ -932,6 +975,7 @@
           const r = await fetch('/models');
           const j = await r.json();
           models = j.models || [];
+          applyModelCaps(j);
           if (j.current) setModelLabel(j.current);
         } catch (e) { models = []; }
         if (!models.length) {
@@ -949,6 +993,7 @@
           b.onmouseleave = () => { b.style.background = 'none'; };
           b.addEventListener('click', () => {
             setModelLabel(m);
+            selectModelCaps(m);
             try { fetch('/models/select', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: m }) }); } catch (e2) {}
           });
           settingsModelsEl.appendChild(b);
@@ -1370,7 +1415,7 @@
       layoutSpeechBar();
     });
     window.addEventListener('resize', layoutSpeechBar);
-    fetch('/models').then((r) => r.json()).then((j) => { if (j.current) setModelLabel(j.current); }).catch(() => {});
+    fetch('/models').then((r) => r.json()).then((j) => { applyModelCaps(j); if (j.current) setModelLabel(j.current); }).catch(() => {});
     openPanelSocket();
   }
 
