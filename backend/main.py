@@ -143,6 +143,11 @@ class CreateProjectRequest(BaseModel):
     tag: str = ""
 
 
+class UpdateProjectRequest(BaseModel):
+    name: str | None = None
+    description: str | None = None
+
+
 class ChatResponse(BaseModel):
     reply: str
 
@@ -443,6 +448,16 @@ def create_project(req: CreateProjectRequest):
     if not req.name.strip():
         raise HTTPException(status_code=422, detail="name darf nicht leer sein")
     return projects.create(req.name, req.description, req.tag)
+
+
+@app.patch("/projects/{project_id}")
+def update_project(project_id: str, req: UpdateProjectRequest):
+    if req.name is not None and not req.name.strip():
+        raise HTTPException(status_code=422, detail="name darf nicht leer sein")
+    updated = projects.update(project_id, req.name, req.description)
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Projekt nicht gefunden")
+    return updated
 
 
 @app.delete("/projects/{project_id}")
