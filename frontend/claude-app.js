@@ -48,6 +48,8 @@
     search: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>',
     sort: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 16 4 4 4-4"/><path d="M7 20V4"/><path d="m21 8-4-4-4 4"/><path d="M17 4v16"/></svg>',
     dots: '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg>',
+    chevronDown: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>',
+    bullet: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="8" x2="21" y1="6" y2="6"/><line x1="8" x2="21" y1="12" y2="12"/><line x1="8" x2="21" y1="18" y2="18"/><line x1="3" x2="3.01" y1="6" y2="6"/><line x1="3" x2="3.01" y1="12" y2="12"/><line x1="3" x2="3.01" y1="18" y2="18"/></svg>',
   };
 
   // ---------------------------------------------------------------- helfer
@@ -385,7 +387,10 @@
           </div>
           <button class="js-new" style="display:flex;align-items:center;gap:8px;padding:9px 12px;background:${C.bgHover};border:1px solid ${C.border};border-radius:11px;color:${C.text};font-size:13px;font-weight:500;cursor:pointer;transition:background .15s;">${ICONS.plus}<span>New conversation</span></button>
           <button class="js-projects" style="display:flex;align-items:center;gap:8px;padding:9px 12px;background:${C.bgHover};border:1px solid ${C.border};border-radius:11px;color:${C.text};font-size:13px;font-weight:500;cursor:pointer;transition:background .15s;">${ICONS.folder}<span>Projekte</span></button>
-          <div style="padding:2px 8px 4px;font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:${C.textDim};">Conversations</div>
+          <button class="js-chats-toggle" style="display:flex;align-items:center;gap:4px;padding:2px 8px 4px;background:none;border:none;font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:${C.textDim};cursor:pointer;font-family:${C.font};">
+            <span class="js-chats-chevron" style="display:inline-flex;transition:transform .15s;">${ICONS.chevronDown}</span>
+            <span>Conversations</span>
+          </button>
         </div>
         <div class="js-chats" style="flex:1 1 auto;overflow-y:auto;padding:2px 8px 10px;"></div>
         <div class="js-settings-row" style="padding:10px 12px;border-top:1px solid ${C.border};display:flex;align-items:center;gap:8px;">
@@ -638,7 +643,6 @@
       .js-pill svg { width:16px; height:16px; display:block; }
       .js-side-toggle:hover, .js-new:hover, .js-projects:hover, .js-upload:hover, .js-note:hover, .js-model:hover, .js-settings:hover, .js-sp-mute:hover, .js-sp-stop:hover, .js-sp-chat:hover { background:${C.bgHover}; color:${C.text}; }
       .js-pill.active { background:${C.accent} !important; color:#fff !important; }
-      .js-code-active .js-projects, .js-code-active .js-projects-note { display:none !important; }
       .js-pill:not(.active):hover { background:${C.bgHover}; color:${C.text}; }
       .js-note.on { color:${C.accent} !important; background:rgba(217,119,87,.12) !important; }
       .js-note.on svg { animation:js-note-pulse 1.4s ease-in-out infinite; }
@@ -651,6 +655,9 @@
       .js-chat-item.selected { background:${C.bgHover}; color:${C.text}; }
       .js-chat-item .js-ico { flex:0 0 auto; display:inline-flex; width:15px; height:15px; color:${C.accent}; }
       .js-chat-item .js-ico svg { width:15px; height:15px; display:block; }
+      .js-chats-toggle .js-chats-chevron svg { width:13px; height:13px; display:block; }
+      .js-chats-toggle.is-collapsed .js-chats-chevron { transform:rotate(-90deg); }
+      .js-chats.is-collapsed { display:none !important; }
       .js-chat-item .js-txt { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
       .js-turn { max-width:760px; margin:0 auto 26px; font-family:${C.font}; line-height:1.6; display:flex; }
       .js-you { justify-content:flex-end; }
@@ -670,6 +677,13 @@
       #jsApp.js-projects-active .js-projects-view { display:flex !important; }
       #jsApp.js-project-detail-active .js-thread, #jsApp.js-project-detail-active .js-welcome, #jsApp.js-project-detail-active .js-composer { display:none !important; }
       #jsApp.js-project-detail-active .js-project-detail-view { display:flex !important; }
+      /* Projekte ist über Chat UND Code hinweg erreichbar (Sidebar-Button
+         bleibt in beiden Modi sichtbar) — diese beiden Regeln müssen NACH
+         den .js-code-active-Regeln oben stehen, damit sie bei gleicher
+         Spezifität + !important gewinnen, wenn jemand Projekte aus dem
+         Code-Tab heraus öffnet (sonst läge das Terminal weiterhin sichtbar
+         unter der Projekte-Ansicht). */
+      #jsApp.js-projects-active .js-codeview, #jsApp.js-project-detail-active .js-codeview { display:none !important; }
       .js-project-card:hover { border-color:${C.textDim}; }
       .js-project-card { position:relative; cursor:pointer; }
       .js-project-menu-btn { opacity:0; transition:opacity .1s; }
@@ -776,7 +790,7 @@
       if (conv.id === currentConversationId) el.classList.add('selected');
       const ico = document.createElement('span');
       ico.className = 'js-ico';
-      ico.innerHTML = ICONS.chat;
+      ico.innerHTML = ICONS.bullet;
       const txt = document.createElement('span');
       txt.className = 'js-txt';
       txt.textContent = conv.title || 'New chat';
@@ -993,6 +1007,16 @@
 
   function wireUi() {
     $('.js-new', uiEl).addEventListener('click', () => { closeProjectsView(); closeProjectDetail(); startNewConversation(); });
+    $('.js-chats-toggle', uiEl).addEventListener('click', (e) => {
+      e.preventDefault();
+      const collapsed = chatListEl.classList.toggle('is-collapsed');
+      $('.js-chats-toggle', uiEl).classList.toggle('is-collapsed', collapsed);
+      localStorage.setItem('jarvis_chats_collapsed', collapsed ? '1' : '0');
+    });
+    if (localStorage.getItem('jarvis_chats_collapsed') === '1') {
+      chatListEl.classList.add('is-collapsed');
+      $('.js-chats-toggle', uiEl).classList.add('is-collapsed');
+    }
     $('.js-projects', uiEl).addEventListener('click', (e) => { e.preventDefault(); openProjectsView(); });
     $('.js-projects-new', uiEl).addEventListener('click', (e) => { e.preventDefault(); openNewProjectModal(); });
     $('.js-projects-search-btn', uiEl).addEventListener('click', (e) => {
