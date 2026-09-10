@@ -141,6 +141,10 @@ class SelectModelRequest(BaseModel):
     model: str
 
 
+class UpdateSettingsRequest(BaseModel):
+    lm_studio_base_url: str | None = None
+
+
 class CreateProjectRequest(BaseModel):
     dir: str
     name: str = ""
@@ -234,16 +238,19 @@ def serve_index():
     return HTMLResponse(html, headers=_NO_CACHE)
 
 
+_JARVIS_FAVICON = b"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+<circle cx="12" cy="12" r="11" fill="#d97757"/>
+<circle cx="12" cy="12" r="4.5" fill="#141311"/>
+</svg>"""
+
+
 @app.get("/favicon.ico")
 def favicon():
-    """Serve the real Claude icon at the browser's default probe path so the
-    frozen snapshot is completely free of 404s (the SSR markup links its
-    shortcut icon to /favicon.ico, and Chrome probes it regardless of the
-    rel="icon" SVG it also links)."""
-    icon = FRONTEND_DIR / "vendor" / "ap" / "cd02a42d9-Vq_H3mgS.svg"
-    if icon.exists():
-        return Response(icon.read_bytes(), media_type="image/svg+xml")
-    return Response(status_code=204)
+    """Own JARVIS icon (a plain terracotta orb) at the browser's default probe
+    path, so the frozen claude.ai snapshot never leaks Anthropic's own logo
+    into the tab bar (the SSR markup links its shortcut icon to /favicon.ico,
+    and Chrome probes it regardless of the rel="icon" SVG it also links)."""
+    return Response(_JARVIS_FAVICON, media_type="image/svg+xml")
 
 
 class NoCacheStatic(StaticFiles):
@@ -475,6 +482,16 @@ def get_conversation(conv_id: str, project_id: str | None = None):
     return {"turns": conversations.load_turns(conv_id)}
 
 
+@app.delete("/conversations/{conv_id}")
+def delete_conversation(conv_id: str, project_id: str | None = None):
+    """Deletes one conversation's JSON file — the sidebar's per-item delete
+    action. Same project_id handling as get_conversation above."""
+    if project_id:
+        base_dir = _project_chats_dir(project_id)
+        return {"ok": conversations.delete(conv_id, base_dir) if base_dir else False}
+    return {"ok": conversations.delete(conv_id)}
+
+
 @app.get("/projects")
 def get_projects():
     return {"projects": projects.list_projects()}
@@ -504,6 +521,18 @@ def update_project(project_id: str, req: UpdateProjectRequest):
 def delete_project(project_id: str):
     projects.delete(project_id)
     return {"ok": True}
+
+
+@app.get("/settings")
+def get_settings():
+    return {"lm_studio_base_url": config.LM_STUDIO_BASE_URL}
+
+
+@app.post("/settings")
+def update_settings(req: UpdateSettingsRequest):
+    if req.lm_studio_base_url is not None and req.lm_studio_base_url.strip():
+        config.set_lm_studio_base_url(req.lm_studio_base_url.strip())
+    return {"lm_studio_base_url": config.LM_STUDIO_BASE_URL}
 
 
 @app.get("/models")

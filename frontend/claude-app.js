@@ -13,14 +13,21 @@
   const $ = (s, r = document) => r.querySelector(s);
 
   // ------------------------------------------------ claude-design-tokens
+  // Echte claude.ai-Dark-Palette (aus dem live-DOM extrahiert: --cds-surface-1
+  // #151515 für Seite/Sidebar, --cds-surface-3 #1f1f1e fürs Composer-Karten,
+  // --cds-gray-200/-350 für Sekundär-/Tertiärtext, ein HELLER Haarlinien-Rand
+  // bei ~10% Deckkraft statt eines dunklen Randtons — auf dunklem Grund liegt
+  // dort ein dezenter LICHTER Ring, kein brauner Schatten).
   const C = {
-    bg: 'var(--ground, #141311)',
-    bgSoft: 'var(--bg-soft, #1b1a17)',
-    bgHover: 'var(--df-hover, #26241f)',
-    text: 'var(--text-primary, #efede8)',
-    textSoft: 'var(--text-secondary, #b0aba0)',
-    textDim: 'var(--text-tertiary, #6b665b)',
-    border: 'var(--border-strong, #34312b)',
+    bg: '#151515',
+    bgSoft: '#151515',
+    bgSurface3: '#1f1f1e',
+    bgHover: 'rgba(255,255,255,.11)',
+    text: '#f0efe8',
+    textSoft: '#c3c0b4',
+    textDim: '#8a8680',
+    border: 'rgba(240,236,225,.14)',
+    borderStrong: 'rgba(240,236,225,.24)',
     accent: '#d97757',                 // Claude-Terracotta
     font: 'var(--font-anthropic-sans, system-ui, sans-serif)',
     serif: 'var(--font-anthropic-serif, Georgia, serif)',
@@ -30,7 +37,7 @@
   // Echte Lucide-Ikonen, 1:1 aus dem Internet (lucide-static), stroke=currentColor.
   const ICONS = {
     menu: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><line x1="4" x2="20" y1="6" y2="6"/><line x1="4" x2="20" y1="12" y2="12"/><line x1="4" x2="20" y1="18" y2="18"/></svg>',
-    plus: '<svg viewBox="172 172 656 656" fill="currentColor" fill-rule="evenodd" aria-hidden="true"><path d="M472 200Q472 188 480.0 180.0Q488 172 500 172Q512 172 520.0 180.0Q528 188 528 200V800Q528 812 520.0 820.0Q512 828 500 828Q488 828 480.0 820.0Q472 812 472 800ZM800 472Q812 472 820.0 480.0Q828 488 828 500Q828 512 820.0 520.0Q812 528 800 528H200Q188 528 180.0 520.0Q172 512 172 500Q172 488 180.0 480.0Q188 472 200 472Z"/></svg>',
+    plus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" aria-hidden="true"><line x1="12" x2="12" y1="5" y2="19"/><line x1="5" x2="19" y1="12" y2="12"/></svg>',
     chat: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z"/></svg>',
     code: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m18 16 4-4-4-4"/><path d="m6 8-4 4 4 4"/><path d="m14.5 4-5 16"/></svg>',
     mic: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/></svg>',
@@ -50,6 +57,15 @@
     dots: '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg>',
     chevronDown: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>',
     bullet: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="8" x2="21" y1="6" y2="6"/><line x1="8" x2="21" y1="12" y2="12"/><line x1="8" x2="21" y1="18" y2="18"/><line x1="3" x2="3.01" y1="6" y2="6"/><line x1="3" x2="3.01" y1="12" y2="12"/><line x1="3" x2="3.01" y1="18" y2="18"/></svg>',
+    layers: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"/><path d="M2 12a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 12"/><path d="M2 17a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 17"/></svg>',
+    clock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>',
+    sliders: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="21" x2="14" y1="4" y2="4"/><line x1="10" x2="3" y1="4" y2="4"/><line x1="21" x2="12" y1="12" y2="12"/><line x1="8" x2="3" y1="12" y2="12"/><line x1="21" x2="16" y1="20" y2="20"/><line x1="12" x2="3" y1="20" y2="20"/><line x1="14" x2="14" y1="2" y2="6"/><line x1="8" x2="8" y1="10" y2="14"/><line x1="16" x2="16" y1="18" y2="22"/></svg>',
+    palette: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22a1 1 0 0 1 0-20 10 9 0 0 1 10 9 5 5 0 0 1-5 5h-2.25a1.75 1.75 0 0 0-1.4 2.8l.3.4a1.75 1.75 0 0 1-1.4 2.8z"/><circle cx="13.5" cy="6.5" r=".5" fill="currentColor"/><circle cx="17.5" cy="10.5" r=".5" fill="currentColor"/><circle cx="6.5" cy="12.5" r=".5" fill="currentColor"/><circle cx="8.5" cy="7.5" r=".5" fill="currentColor"/></svg>',
+    copy: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>',
+    trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>',
+    pin: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V17a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a1 1 0 0 0 0-2H8a1 1 0 0 0 0 2h1z"/></svg>',
+    pinFilled: '<svg viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true"><path d="M12 17v5h-1v-5z"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V17a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a1 1 0 0 0 0-2H8a1 1 0 0 0 0 2h1z"/></svg>',
+    spark: '<svg viewBox="0 0 100 100" fill="currentColor" aria-hidden="true"><path d="m19.6 66.5 19.7-11 .3-1-.3-.5h-1l-3.3-.2-11.2-.3L14 53l-9.5-.5-2.4-.5L0 49l.2-1.5 2-1.3 2.9.2 6.3.5 9.5.6 6.9.4L38 49.1h1.6l.2-.7-.5-.4-.4-.4L29 41l-10.6-7-5.6-4.1-3-2-1.5-2-.6-4.2 2.7-3 3.7.3.9.2 3.7 2.9 8 6.1L37 36l1.5 1.2.6-.4.1-.3-.7-1.1L33 25l-6-10.4-2.7-4.3-.7-2.6c-.3-1-.4-2-.4-3l3-4.2L28 0l4.2.6L33.8 2l2.6 6 4.1 9.3L47 29.9l2 3.8 1 3.4.3 1h.7v-.5l.5-7.2 1-8.7 1-11.2.3-3.2 1.6-3.8 3-2L61 2.6l2 2.9-.3 1.8-1.1 7.7L59 27.1l-1.5 8.2h.9l1-1.1 4.1-5.4 6.9-8.6 3-3.5L77 13l2.3-1.8h4.3l3.1 4.7-1.4 4.9-4.4 5.6-3.7 4.7-5.3 7.1-3.2 5.7.3.4h.7l12-2.6 6.4-1.1 7.6-1.3 3.5 1.6.4 1.6-1.4 3.4-8.2 2-9.6 2-14.3 3.3-.2.1.2.3 6.4.6 2.8.2h6.8l12.6 1 3.3 2 1.9 2.7-.3 2-5.1 2.6-6.8-1.6-16-3.8-5.4-1.3h-.8v.4l4.6 4.5 8.3 7.5L89 80.1l.5 2.4-1.3 2-1.4-.2-9.2-7-3.6-3-8-6.8h-.5v.7l1.8 2.7 9.8 14.7.5 4.5-.7 1.4-2.6 1-2.7-.6-5.8-8-6-9-4.7-8.2-.5.4-2.9 30.2-1.3 1.5-3 1.2-2.5-2-1.4-3 1.4-6.2 1.6-8 1.3-6.4 1.2-7.9.7-2.6v-.2H49L43 72l-9 12.3-7.2 7.6-1.7.7-3-1.5.3-2.8L24 86l10-12.8 6-7.9 4-4.6-.1-.5h-.3L17.2 77.4l-4.7.6-2-2 .2-3 1-1 8-5.5Z"/></svg>',
   };
 
   // ---------------------------------------------------------------- helfer
@@ -70,17 +86,34 @@
     const hasText = !!(composerInput && composerInput.innerText.trim());
     return hasText || pendingImages.length > 0;
   }
+  // Composer-Sende-Slot: im Leerlauf steht dort das Sprachmodus-Icon (Equalizer-
+  // Balken), sobald Text/Anhang vorhanden ist, springt an dieser Stelle der
+  // Senden-Button ein — beide teilen sich den gleichen Platz statt nebeneinander
+  // zu stehen (spiegelt claude.ai's Composer-Verhalten).
+  function updateSendSlot() {
+    const canSend = canSendNow();
+    if (speechBtn) speechBtn.style.display = canSend ? 'none' : 'inline-flex';
+    if (sendBtn) sendBtn.style.display = canSend ? 'inline-flex' : 'none';
+  }
   function renderAttachPreviews() {
-    if (sendBtn) sendBtn.disabled = !canSendNow();
+    updateSendSlot();
     if (!attachPreviewEl) return;
     if (!pendingImages.length) { attachPreviewEl.style.display = 'none'; attachPreviewEl.innerHTML = ''; return; }
     attachPreviewEl.style.display = 'flex';
-    attachPreviewEl.innerHTML = pendingImages.map((att, i) => `
+    attachPreviewEl.innerHTML = pendingImages.map((att, i) => {
+      const title = (att.note ? `${att.name} — ${att.note}` : att.name).replace(/"/g, '&quot;');
+      return `
       <div style="position:relative;width:56px;height:56px;flex:0 0 auto;">
-        <img src="${att.image}" title="${att.name.replace(/"/g, '&quot;')}" style="width:100%;height:100%;object-fit:cover;border-radius:10px;border:1px solid ${C.border};" />
-        <button class="js-attach-remove" data-idx="${i}" title="Entfernen" style="position:absolute;top:-6px;right:-6px;width:18px;height:18px;border-radius:50%;background:${C.bgSoft};border:1px solid ${C.border};color:${C.textSoft};cursor:pointer;font-size:11px;line-height:1;display:flex;align-items:center;justify-content:center;padding:0;">×</button>
+        ${att.image
+          ? `<img src="${att.image}" title="${title}" style="width:100%;height:100%;object-fit:cover;border-radius:10px;border:1px solid ${C.border};" />`
+          : `<div title="${title}" style="width:100%;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;border-radius:10px;border:1px solid ${att.note ? C.accent : C.border};background:${C.bgHover};color:${C.textSoft};padding:2px;">
+               <span style="display:inline-flex;">${ICONS.copy}</span>
+               <span style="font-size:9px;line-height:1.1;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${att.name.replace(/"/g, '&quot;')}</span>
+             </div>`}
+        <button class="js-attach-remove" data-idx="${i}" title="Entfernen" style="position:absolute;top:-6px;right:-6px;width:18px;height:18px;border-radius:50%;background:${C.bgSurface3};border:1px solid ${C.border};color:${C.textSoft};cursor:pointer;font-size:11px;line-height:1;display:flex;align-items:center;justify-content:center;padding:0;">×</button>
       </div>
-    `).join('');
+    `;
+    }).join('');
     attachPreviewEl.querySelectorAll('.js-attach-remove').forEach((btn) => {
       btn.addEventListener('click', (e) => {
         e.preventDefault(); e.stopPropagation();
@@ -147,10 +180,16 @@
       }, 'image/jpeg', 0.9);
     });
   }
+  // Jede Datei wird angehängt (Chip außerhalb der Nachricht, wie bei anderen
+  // KI-Chats) — nur WAS an den Text angehängt wird, wenn tatsächlich gesendet
+  // wird, unterscheidet sich: Bilder gehen als echtes Bild mit, lesbarer Text
+  // wird beim Senden unsichtbar an die Nachricht angehängt, unlesbare
+  // Binärdateien (Fonts, PDFs, …) bekommen nur ihren Dateinamen mit — ihr
+  // Inhalt lässt sich ohne OCR/Parser ohnehin nicht sinnvoll verwenden.
   async function readAttachedFile(file) {
     if (file.type && file.type.startsWith('image/')) {
       if (!currentModelSupportsVision) {
-        return { text: `📎 ${file.name}: das aktuelle Modell kann keine Bilder lesen — wechsle oben im Modell-Menü zu einem vision-fähigen Modell (z. B. gemma-4-e4b, qwen3.5-9b/3.8-27b, devstral).`, image: null };
+        return { name: file.name, image: null, sendText: null, note: 'aktuelles Modell kann keine Bilder lesen' };
       }
       try {
         let image;
@@ -159,24 +198,24 @@
         } catch (e) {
           image = await readFileAsDataURL(file);
         }
-        return { text: `📎 ${file.name} (Bild angehängt)`, image };
+        return { name: file.name, image, sendText: null, note: null };
       } catch (e) {
-        return { text: `📎 ${file.name}: konnte nicht gelesen werden.`, image: null };
+        return { name: file.name, image: null, sendText: null, note: 'konnte nicht gelesen werden' };
       }
     }
     let text;
     try {
       text = await readFileAsText(file);
     } catch (e) {
-      return { text: `📎 ${file.name}: konnte nicht gelesen werden.`, image: null };
+      return { name: file.name, image: null, sendText: null, note: 'konnte nicht gelesen werden' };
     }
     if (looksBinary(text)) {
-      return { text: `📎 ${file.name}: Inhalt kann nicht als Text gelesen werden (PDF/Binärdatei) — nur Text- und Bilddateien werden derzeit unterstützt.`, image: null };
+      return { name: file.name, image: null, sendText: null, note: 'Inhalt ist eine Binärdatei — Name wird mitgesendet, Inhalt nicht' };
     }
     let truncated = false;
     if (text.length > ATTACH_MAX_CHARS) { text = text.slice(0, ATTACH_MAX_CHARS); truncated = true; }
-    const note = truncated ? ` (gekürzt auf ${ATTACH_MAX_CHARS} Zeichen)` : '';
-    return { text: `📎 ${file.name}${note}:\n\`\`\`\n${text}\n\`\`\``, image: null };
+    const note = truncated ? `gekürzt auf ${ATTACH_MAX_CHARS} Zeichen` : null;
+    return { name: file.name, image: null, sendText: `📎 ${file.name}:\n\`\`\`\n${text}\n\`\`\``, note };
   }
 
   function base64ToBlob(base64, mime) {
@@ -366,9 +405,9 @@
   // Uhrzeit-Begrüßung (bewusst deutsch, vom Nutzer so gewünscht).
   function timeGreeting() {
     const h = new Date().getHours();
-    if (h >= 5 && h < 11) return 'Morgen, Chef';
-    if (h >= 11 && h < 15) return 'Mittag, Chef';
-    if (h >= 15 && h < 22) return 'Abend, Chef';
+    if (h >= 5 && h < 11) return 'Guten Morgen, Chef';
+    if (h >= 11 && h < 15) return 'Guten Tag, Chef';
+    if (h >= 15 && h < 22) return 'Guten Abend, Chef';
     return 'Mondscheingespräch';
   }
 
@@ -378,30 +417,55 @@
     uiEl.id = 'jsApp';
     uiEl.style.cssText = `position:fixed;inset:0;z-index:30;display:flex;background:${C.bg};color:${C.text};font-family:${C.font};`;
     uiEl.innerHTML = `
-      <button class="js-side-toggle" title="Sidebar umschalten" style="position:absolute;top:18px;left:16px;z-index:31;background:none;border:none;color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;border-radius:8px;">${ICONS.menu}</button>
+      <button class="js-side-toggle-float" title="Sidebar einblenden" style="display:none;position:absolute;top:15px;left:12px;z-index:31;background:none;border:none;color:${C.textSoft};cursor:pointer;align-items:center;justify-content:center;width:30px;height:30px;border-radius:8px;">${ICONS.menu}</button>
       <aside class="js-sidebar" style="width:308px;flex:0 0 308px;height:100%;display:flex;flex-direction:column;background:${C.bgSoft};border-right:1px solid ${C.border};">
         <div class="js-sidebar-top" style="padding:16px 12px 6px;display:flex;flex-direction:column;gap:12px;">
-          <div class="js-mode" style="display:flex;padding:3px;gap:3px;background:${C.bgHover};border:1px solid ${C.border};border-radius:11px;margin-left:44px;">
-            <button class="js-pill active" data-mode="chat" style="flex:1;display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:7px 10px;border-radius:8px;border:none;background:transparent;color:${C.textSoft};font-size:13px;font-weight:500;cursor:pointer;transition:background .15s,color .15s;">${ICONS.chat}<span>Chat</span></button>
+          <div class="js-sidebar-header" style="display:flex;align-items:center;justify-content:space-between;">
+            <span style="font-family:${C.serif};font-size:15px;font-weight:500;color:${C.text};">Jarvis</span>
+            <div style="display:flex;align-items:center;gap:2px;">
+              <button class="js-side-toggle" title="Sidebar ausblenden" style="background:none;border:none;color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:7px;">${ICONS.menu}</button>
+              <button class="js-search-toggle" title="Bald verfügbar" disabled style="background:none;border:none;color:${C.textDim};cursor:default;display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:7px;opacity:.5;">${ICONS.search}</button>
+            </div>
+          </div>
+          <div class="js-search-row" style="display:none;">
+            <input class="js-search-input" type="text" placeholder="Chats durchsuchen…" style="width:100%;padding:7px 10px;background:${C.bgHover};border:1px solid ${C.border};border-radius:9px;color:${C.text};font-size:13px;font-family:${C.font};outline:none;" />
+          </div>
+          <div class="js-mode" style="display:flex;padding:3px;gap:3px;background:${C.bgHover};border-radius:11px;">
+            <button class="js-pill active" data-mode="chat" style="flex:1;display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:7px 10px;border-radius:8px;border:none;background:transparent;color:${C.textSoft};font-size:13px;font-weight:500;cursor:pointer;transition:background .15s,color .15s;">${ICONS.chat}<span>Startseite</span></button>
             <button class="js-pill" data-mode="code" title="Code mit JARVIS Code" style="flex:1;display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:7px 10px;border-radius:8px;border:none;background:transparent;color:${C.textSoft};font-size:13px;font-weight:500;cursor:pointer;transition:background .15s,color .15s;">${ICONS.code}<span>Code</span></button>
           </div>
           <button class="js-new" style="display:flex;align-items:center;gap:8px;padding:9px 12px;background:${C.bgHover};border:none;border-radius:11px;color:${C.text};font-size:13px;font-weight:500;cursor:pointer;transition:background .15s;">${ICONS.plus}<span>Neu</span></button>
-          <button class="js-projects" style="display:flex;align-items:center;gap:8px;padding:9px 12px;background:${C.bgHover};border:none;border-radius:11px;color:${C.text};font-size:13px;font-weight:500;cursor:pointer;transition:background .15s;">${ICONS.folder}<span>Projekte</span></button>
-          <button class="js-chats-toggle" style="display:flex;align-items:center;gap:4px;padding:2px 8px 4px;background:none;border:none;font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:${C.textDim};cursor:pointer;font-family:${C.font};">
-            <span class="js-chats-chevron" style="display:inline-flex;transition:transform .15s;">${ICONS.chevronDown}</span>
-            <span>Verlauf</span>
-          </button>
+          <div class="js-nav-list" style="display:flex;flex-direction:column;gap:1px;">
+            <button class="js-projects js-navrow" style="display:flex;align-items:center;gap:10px;padding:8px 10px;background:none;border:none;border-radius:9px;color:${C.textSoft};font-size:13px;cursor:pointer;transition:background .15s,color .15s;text-align:left;">${ICONS.folder}<span>Projekte</span></button>
+            <button class="js-artifacts js-navrow" title="Bald verfügbar" style="display:flex;align-items:center;gap:10px;padding:8px 10px;background:none;border:none;border-radius:9px;color:${C.textDim};font-size:13px;cursor:default;text-align:left;opacity:.55;">${ICONS.layers}<span>Artefakte</span></button>
+            <button class="js-customize js-navrow" style="display:flex;align-items:center;gap:10px;padding:8px 10px;background:none;border:none;border-radius:9px;color:${C.textSoft};font-size:13px;cursor:pointer;transition:background .15s,color .15s;text-align:left;">${ICONS.sliders}<span>Anpassen</span></button>
+          </div>
+          <div class="js-projects-pin-section">
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 8px 4px;">
+              <span style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:${C.textDim};">Projekte</span>
+              <button class="js-projects-pin-add" title="Projekt erstellen" style="background:none;border:none;color:${C.textDim};cursor:pointer;display:inline-flex;padding:3px;">${ICONS.plus}</button>
+            </div>
+            <div class="js-projects-pin-hint" style="display:flex;align-items:center;gap:10px;padding:7px 10px;color:${C.textDim};font-size:12.5px;line-height:1.3;">${ICONS.folder}<span>Projekte anheften, um sie hier zu behalten</span></div>
+          </div>
+          <div class="js-chats-toggle-row" style="display:flex;align-items:center;justify-content:space-between;margin-top:6px;">
+            <button class="js-chats-toggle" style="display:flex;align-items:center;gap:4px;padding:8px 8px 4px;background:none;border:none;font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:${C.textDim};cursor:pointer;font-family:${C.font};">
+              <span class="js-chats-chevron" style="display:inline-flex;transition:transform .15s;">${ICONS.chevronDown}</span>
+              <span>Chats und Aufgaben</span>
+            </button>
+            <button class="js-chats-sort" title="Filtern und gruppieren" style="background:none;border:none;color:${C.textDim};cursor:pointer;display:inline-flex;padding:5px;">${ICONS.sort}</button>
+          </div>
         </div>
         <div class="js-chats" style="flex:1 1 auto;overflow-y:auto;padding:2px 8px 10px;"></div>
-        <div class="js-settings-row" style="padding:10px 12px;border-top:1px solid ${C.border};display:flex;align-items:center;gap:8px;">
-          <button class="js-settings" title="Settings" style="width:32px;height:32px;border-radius:9px;background:none;border:none;color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;transition:background .15s;">${ICONS.settings}</button>
-          <span class="js-settings-label" style="font-size:13px;color:${C.textSoft};">Einstellungen</span>
-        </div>
+        <button class="js-settings-row" style="padding:10px 12px;border-top:1px solid ${C.border};border-radius:0;display:flex;align-items:center;gap:8px;background:none;border-left:none;border-right:none;border-bottom:none;width:100%;text-align:left;cursor:pointer;transition:background .15s;font-family:${C.font};">
+          <span class="js-settings" style="width:32px;height:32px;border-radius:9px;color:${C.textSoft};display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;">${ICONS.settings}</span>
+          <span class="js-settings-label" style="font-size:13px;color:${C.textSoft};flex:1;">Einstellungen</span>
+        </button>
       </aside>
       <div class="js-main" style="flex:1;height:100%;display:flex;flex-direction:column;min-width:0;position:relative;">
-        <div class="js-welcome" style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:0 32px;gap:14px;">
-          <h1 class="js-welcome-title" style="font-family:${C.serif};font-size:30px;font-weight:600;letter-spacing:-.01em;color:${C.text};margin:0 0 4px;">${timeGreeting()}</h1>
-          <p class="js-welcome-sub" style="font-size:14px;color:${C.textSoft};margin:0;max-width:440px;line-height:1.55;">Wie kann ich dir heute helfen? Sprich, diktiere oder schreibe einfach.</p>
+        <div class="js-welcome" style="position:absolute;top:40%;left:0;right:0;transform:translateY(-100%);display:flex;flex-direction:column;align-items:center;text-align:center;padding:0 32px;gap:14px;">
+          <h1 class="js-welcome-title" style="font-family:${C.serif};font-size:30px;font-weight:400;letter-spacing:-.01em;color:${C.text};margin:0;">
+            <span>${timeGreeting()}</span>
+          </h1>
         </div>
         <div class="js-thread" style="flex:1;overflow-y:auto;scrollbar-width:thin;position:relative;"></div>
         <div class="js-codeview" style="position:absolute;inset:0;display:none;flex-direction:column;min-width:0;min-height:0;">
@@ -429,11 +493,11 @@
             <input class="js-projects-search-input" type="text" placeholder="Projekte durchsuchen…" style="width:100%;max-width:360px;padding:9px 14px;background:${C.bgHover};border:1px solid ${C.border};border-radius:10px;color:${C.text};font-size:13px;font-family:${C.font};outline:none;" />
           </div>
           <div class="js-projects-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:16px;"></div>
-          <div class="js-project-card-menu" style="display:none;position:absolute;width:170px;background:${C.bgSoft};border:1px solid ${C.border};border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.4);overflow:hidden;z-index:5;">
+          <div class="js-project-card-menu" style="display:none;position:absolute;width:170px;background:${C.bgSurface3};border:1px solid ${C.border};border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.4);overflow:hidden;z-index:5;">
             <button class="js-pcm-rename" style="display:block;width:100%;text-align:left;padding:9px 14px;background:none;border:none;color:${C.text};font-size:13px;cursor:pointer;font-family:${C.font};">Umbenennen</button>
             <button class="js-pcm-delete" style="display:block;width:100%;text-align:left;padding:9px 14px;background:none;border:none;color:#e5735f;font-size:13px;cursor:pointer;font-family:${C.font};">Löschen</button>
           </div>
-          <div class="js-projects-sort-menu" style="display:none;position:absolute;width:190px;background:${C.bgSoft};border:1px solid ${C.border};border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.4);overflow:hidden;z-index:5;">
+          <div class="js-projects-sort-menu" style="display:none;position:absolute;width:190px;background:${C.bgSurface3};border:1px solid ${C.border};border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.4);overflow:hidden;z-index:5;">
             <button class="js-psm-opt" data-sort="newest" style="display:block;width:100%;text-align:left;padding:9px 14px;background:none;border:none;color:${C.text};font-size:13px;cursor:pointer;font-family:${C.font};">Neueste zuerst</button>
             <button class="js-psm-opt" data-sort="oldest" style="display:block;width:100%;text-align:left;padding:9px 14px;background:none;border:none;color:${C.text};font-size:13px;cursor:pointer;font-family:${C.font};">Älteste zuerst</button>
             <button class="js-psm-opt" data-sort="updated" style="display:block;width:100%;text-align:left;padding:9px 14px;background:none;border:none;color:${C.text};font-size:13px;cursor:pointer;font-family:${C.font};">Zuletzt bearbeitet</button>
@@ -448,10 +512,10 @@
           </div>
           <h1 class="js-pd-title" style="font-family:${C.serif};font-size:30px;font-weight:600;color:${C.text};margin:0 0 24px;"></h1>
           <div style="max-width:640px;position:relative;">
-            <div style="background:${C.bgSoft};border:1px solid ${C.border};border-radius:18px;box-shadow:0 10px 34px rgba(0,0,0,.25);">
+            <div style="background:${C.bgSurface3};border:1px solid ${C.border};border-radius:18px;box-shadow:0 10px 34px rgba(0,0,0,.25);">
               <div class="js-pd-editor" contenteditable="true" data-placeholder="Wie kann ich dir heute helfen?" style="min-height:52px;max-height:160px;overflow-y:auto;padding:16px 16px 8px;color:${C.text};font-size:15px;line-height:1.5;outline:none;white-space:pre-wrap;word-break:break-word;"></div>
               <div style="display:flex;align-items:center;gap:8px;padding:6px 10px 10px;">
-                <button class="js-pd-upload" title="Datei anhängen" style="width:34px;height:34px;border-radius:9px;background:none;border:none;color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;">${ICONS.paperclip}</button>
+                <button class="js-pd-upload" title="Datei anhängen" style="width:34px;height:34px;border-radius:9px;background:none;border:none;color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;">${ICONS.plus}</button>
                 <div style="padding:5px 10px;background:${C.bgHover};border-radius:8px;font-size:12px;color:${C.text};font-weight:500;">Chat</div>
                 <div style="flex:1;"></div>
                 <button class="js-pd-model" title="Modell wechseln" style="display:inline-flex;align-items:center;gap:6px;padding:6px 10px;background:none;border:none;color:${C.textSoft};font-size:13px;cursor:pointer;">
@@ -469,23 +533,25 @@
         </div>
       </div>
       <div class="js-composer" style="position:absolute;left:308px;right:0;bottom:0;padding:0 24px 22px;background:linear-gradient(transparent,${C.bg} 55%);">
-        <div style="max-width:760px;margin:0 auto;position:relative;">
-          <div style="background:${C.bgSoft};border:1px solid ${C.border};border-radius:18px;box-shadow:0 10px 34px rgba(0,0,0,.38);">
-            <div class="js-attach-preview" style="display:none;gap:8px;padding:12px 16px 0;flex-wrap:wrap;"></div>
-            <div class="js-editor" contenteditable="true" data-placeholder="Beschreibe eine Aufgabe oder stelle eine Frage" style="min-height:60px;max-height:200px;overflow-y:auto;padding:16px;color:${C.text};font-size:15px;line-height:1.5;outline:none;white-space:pre-wrap;word-break:break-word;"></div>
-            <div style="display:flex;align-items:center;gap:8px;padding:6px 10px 10px;">
-              <button class="js-upload" title="Dateien anhängen" style="width:34px;height:34px;border-radius:9px;background:none;border:none;color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;transition:background .15s;">${ICONS.paperclip}</button>
-              <div style="flex:1;"></div>
-              <button class="js-model" title="Modell wechseln" style="display:inline-flex;align-items:center;gap:6px;padding:6px 10px;background:none;border:none;color:${C.textSoft};font-size:13px;cursor:pointer;transition:background .15s;">
-                <span class="js-model-label">Modell…</span>
-                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
-              </button>
-              <button class="js-note" title="Diktieren" style="width:34px;height:34px;border-radius:9px;background:none;border:none;color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;transition:background .15s;">${ICONS.mic}</button>
-              <button class="js-speech" title="Sprachmodus" style="width:38px;height:38px;border-radius:50%;background:${C.bgHover};border:1px solid ${C.border};color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;transition:background .15s;">${ICONS.audio}</button>
-              <button class="js-send" title="Senden" style="width:38px;height:38px;border-radius:50%;background:${C.accent};border:none;color:#fff;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;">${ICONS.send}</button>
+        <div style="max-width:672px;margin:0 auto;position:relative;">
+          <div style="background:${C.bgSurface3};border-radius:20px;box-shadow:0 4px 20px rgba(0,0,0,.18),0 0 0 1px ${C.borderStrong};">
+            <div class="js-attach-preview" style="display:none;gap:8px;padding:14px 14px 0;flex-wrap:wrap;"></div>
+            <div style="padding:14px;display:flex;flex-direction:column;gap:12px;">
+              <div class="js-editor" contenteditable="true" data-placeholder="Wie kann ich dir heute helfen?" style="min-height:48px;max-height:200px;overflow-y:auto;padding:6px 6px 0;color:${C.text};font-size:15px;line-height:1.5;outline:none;white-space:pre-wrap;word-break:break-word;"></div>
+              <div style="display:flex;align-items:center;gap:8px;">
+                <button class="js-upload" title="Dateien anhängen" style="width:32px;height:32px;margin-left:2px;border-radius:8px;background:none;border:none;color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;transition:background .15s;flex:0 0 auto;">${ICONS.plus}</button>
+                <div style="flex:1;"></div>
+                <button class="js-model" title="Modell wechseln" style="display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 12px;border-radius:8px;background:none;border:none;color:${C.textSoft};font-size:13px;cursor:pointer;transition:background .15s;flex:0 0 auto;">
+                  <span class="js-model-label">Modell…</span>
+                  <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+                </button>
+                <button class="js-note" title="Diktieren" style="width:32px;height:32px;border-radius:8px;background:none;border:none;color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;transition:background .15s;flex:0 0 auto;">${ICONS.mic}</button>
+                <button class="js-speech" title="Sprachmodus" style="width:32px;height:32px;border-radius:8px;background:none;border:none;color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;transition:background .15s;flex:0 0 auto;">${ICONS.audio}</button>
+                <button class="js-send" title="Senden" style="width:32px;height:32px;border-radius:8px;background:${C.accent};border:none;color:#fff;cursor:pointer;display:none;align-items:center;justify-content:center;flex:0 0 auto;">${ICONS.send}</button>
+              </div>
             </div>
           </div>
-          <div class="js-modelmenu" style="display:none;position:absolute;width:220px;max-height:280px;overflow-y:auto;background:${C.bgSoft};border:1px solid ${C.border};border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.4);z-index:10;"></div>
+          <div class="js-modelmenu" style="display:none;position:absolute;width:220px;max-height:280px;overflow-y:auto;background:${C.bgSurface3};border:1px solid ${C.border};border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.4);z-index:10;"></div>
         </div>
       </div>
     `;
@@ -497,7 +563,7 @@
     speechBarEl.id = 'jsSpeechbar';
     speechBarEl.style.cssText = 'position:fixed;left:0;right:0;bottom:24px;z-index:50;display:none;justify-content:center;pointer-events:none;';
     speechBarEl.innerHTML = `
-      <div style="pointer-events:auto;display:flex;align-items:center;gap:10px;padding:8px 12px;background:${C.bgSoft};border:1px solid ${C.border};border-radius:16px;box-shadow:0 12px 40px rgba(0,0,0,.5);">
+      <div style="pointer-events:auto;display:flex;align-items:center;gap:10px;padding:8px 12px;background:${C.bgSurface3};border:1px solid ${C.border};border-radius:16px;box-shadow:0 12px 40px rgba(0,0,0,.5);">
         <button class="js-sp-mute" title="Mikrofon aus" style="width:44px;height:44px;border-radius:14px;background:${C.bgHover};border:1px solid ${C.border};color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;">${ICONS.mic}</button>
         <button class="js-sp-stop" title="Stopp" style="width:44px;height:44px;border-radius:14px;background:${C.bgHover};border:1px solid ${C.border};color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;">${ICONS.stop}</button>
         <button class="js-sp-send" title="Senden" style="width:44px;height:44px;border-radius:14px;background:${C.bgHover};border:1px solid ${C.border};color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;">${ICONS.send}</button>
@@ -513,7 +579,7 @@
     speechCaptionEl.id = 'jsSpeechCaption';
     speechCaptionEl.style.cssText = `position:fixed;left:0;right:0;bottom:92px;z-index:50;display:none;justify-content:center;pointer-events:none;`;
     speechCaptionEl.innerHTML = `
-      <div style="pointer-events:auto;max-width:720px;width:calc(100% - 64px);padding:10px 16px;background:${C.bgSoft};border:1px solid ${C.border};border-radius:14px;box-shadow:0 12px 40px rgba(0,0,0,.5);display:flex;flex-direction:column;gap:4px;">
+      <div style="pointer-events:auto;max-width:720px;width:calc(100% - 64px);padding:10px 16px;background:${C.bgSurface3};border:1px solid ${C.border};border-radius:14px;box-shadow:0 12px 40px rgba(0,0,0,.5);display:flex;flex-direction:column;gap:4px;">
         <div class="js-spc-status" style="font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:${C.textDim};">Zuhören</div>
         <div class="js-spc-user" style="font-size:15px;color:${C.text};min-height:20px;white-space:pre-wrap;word-break:break-word;">…</div>
         <div class="js-spc-reply" style="font-size:14px;color:${C.textSoft};min-height:0;white-space:pre-wrap;word-break:break-word;"></div>
@@ -529,14 +595,26 @@
     settingsSheetEl.id = 'jsSettingsSheet';
     settingsSheetEl.style.cssText = `position:fixed;inset:0;z-index:60;display:none;align-items:flex-start;justify-content:flex-start;padding:64px 0 24px 320px;background:rgba(0,0,0,.35);`;
     settingsSheetEl.innerHTML = `
-      <div style="width:340px;max-width:90vw;background:${C.bgSoft};border:1px solid ${C.border};border-radius:16px;box-shadow:0 20px 60px rgba(0,0,0,.5);overflow:hidden;">
-        <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:1px solid ${C.border};">
+      <div style="width:340px;max-width:90vw;max-height:calc(100vh - 96px);display:flex;flex-direction:column;background:${C.bgSurface3};border:1px solid ${C.border};border-radius:16px;box-shadow:0 20px 60px rgba(0,0,0,.5);overflow:hidden;">
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:1px solid ${C.border};flex:0 0 auto;">
           <span style="font-size:15px;font-weight:600;color:${C.text};">Einstellungen</span>
           <button class="js-settings-close" title="Close" style="width:28px;height:28px;border-radius:8px;background:none;border:none;color:${C.textSoft};cursor:pointer;font-size:16px;line-height:1;">×</button>
         </div>
+        <div style="flex:1 1 auto;overflow-y:auto;">
         <div style="padding:12px 6px;">
           <div style="padding:6px 10px;font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:${C.textDim};">Modell</div>
           <div class="js-settings-models"></div>
+        </div>
+        <div style="padding:12px 6px;border-top:1px solid ${C.border};">
+          <div style="padding:6px 10px;font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:${C.textDim};">Verbindung</div>
+          <div style="padding:4px 10px;display:flex;flex-direction:column;gap:8px;">
+            <span style="font-size:12px;color:${C.textSoft};">LM Studio Endpoint</span>
+            <input class="js-lmstudio-url-input" type="text" placeholder="http://127.0.0.1:1234/v1" spellcheck="false" style="width:100%;box-sizing:border-box;padding:9px 10px;background:${C.bg};border:1px solid ${C.border};border-radius:8px;color:${C.text};font-size:13px;outline:none;font-family:${C.font};" />
+            <div style="display:flex;align-items:center;gap:10px;">
+              <button class="js-lmstudio-url-save" style="align-self:flex-start;padding:7px 12px;border:none;border-radius:8px;background:${C.accent};color:#fff;font-size:12px;cursor:pointer;font-family:${C.font};">Speichern</button>
+              <span class="js-lmstudio-url-status" style="font-size:11.5px;color:${C.textDim};"></span>
+            </div>
+          </div>
         </div>
         <div style="padding:12px 6px 16px;border-top:1px solid ${C.border};">
           <div style="padding:6px 10px;font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:${C.textDim};">Code</div>
@@ -545,6 +623,7 @@
             <input class="js-code-dir-input" type="text" placeholder="~/Developer" spellcheck="false" style="width:100%;box-sizing:border-box;padding:9px 10px;background:${C.bg};border:1px solid ${C.border};border-radius:8px;color:${C.text};font-size:13px;outline:none;font-family:${C.font};" />
             <button class="js-code-dir-save" style="align-self:flex-start;padding:7px 12px;border:none;border-radius:8px;background:${C.accent};color:#fff;font-size:12px;cursor:pointer;font-family:${C.font};">Speichern</button>
           </div>
+        </div>
         </div>
       </div>
     `;
@@ -555,7 +634,7 @@
     newProjectSheetEl.id = 'jsNewProjectSheet';
     newProjectSheetEl.style.cssText = `position:fixed;inset:0;z-index:60;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.5);`;
     newProjectSheetEl.innerHTML = `
-      <div style="width:420px;max-width:90vw;background:${C.bgSoft};border:1px solid ${C.border};border-radius:16px;box-shadow:0 20px 60px rgba(0,0,0,.5);overflow:hidden;">
+      <div style="width:420px;max-width:90vw;background:${C.bgSurface3};border:1px solid ${C.border};border-radius:16px;box-shadow:0 20px 60px rgba(0,0,0,.5);overflow:hidden;">
         <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 18px;border-bottom:1px solid ${C.border};">
           <span class="js-newproject-title" style="font-size:16px;font-weight:600;color:${C.text};">Neues Projekt</span>
           <button class="js-newproject-close" title="Schließen" style="width:28px;height:28px;border-radius:8px;background:none;border:none;color:${C.textSoft};cursor:pointer;font-size:16px;line-height:1;">×</button>
@@ -612,7 +691,7 @@
     pdSpeechBtn = $('.js-pd-speech', uiEl);
     pdSendBtn = $('.js-pd-send', uiEl);
     pdRecentEl = $('.js-pd-recent', uiEl);
-    settingsBtn = $('.js-settings', uiEl);
+    settingsBtn = $('.js-settings-row', uiEl);
     modelEl = $('.js-model-label', uiEl);
     modelBtnEl = $('.js-model', uiEl);
     modelMenuEl = $('.js-modelmenu', uiEl);
@@ -641,15 +720,19 @@
       .js-sidebar button:focus-visible, .js-main button:focus-visible { outline:2px solid ${C.accent}; outline-offset:2px; }
       .js-editor:empty::before, .js-editor.is-empty::before { content:attr(data-placeholder); color:${C.textDim}; pointer-events:none; }
       .js-editor:focus::before { opacity:.7; }
-      .js-side-toggle svg, .js-new svg, .js-projects svg, .js-upload svg, .js-note svg, .js-speech svg, .js-settings svg { width:16px; height:16px; display:block; }
+      .js-side-toggle svg, .js-side-toggle-float svg, .js-new svg, .js-projects svg, .js-upload svg, .js-note svg, .js-speech svg, .js-settings svg, .js-navrow svg { width:16px; height:16px; display:block; flex:0 0 auto; }
+      .js-side-toggle:hover, .js-side-toggle-float:hover { background:${C.bgHover}; color:${C.text}; }
+      .js-search-toggle svg, .js-projects-pin-add svg, .js-chats-sort svg, .js-projects-pin-hint svg { width:15px; height:15px; display:block; flex:0 0 auto; }
+      .js-search-toggle:hover, .js-projects-pin-add:hover, .js-chats-sort:hover { background:${C.bgHover}; color:${C.text}; border-radius:7px; }
       .js-projects-search-btn svg, .js-projects-sort-btn svg { width:18px; height:18px; display:block; }
-      .js-project-menu-btn svg { width:16px; height:16px; display:block; }
+      .js-project-menu-btn svg, .js-project-pin-btn svg { width:16px; height:16px; display:block; }
       .js-upload svg, .js-note svg, .js-settings svg { width:18px; height:18px; }
       .js-speech svg, .js-send svg { width:18px; height:18px; display:block; }
       .js-sp-mute svg, .js-sp-stop svg, .js-sp-chat svg, .js-sp-send svg { width:20px; height:20px; display:block; }
       .js-pill svg { width:16px; height:16px; display:block; }
-      .js-side-toggle:hover, .js-new:hover, .js-projects:hover, .js-upload:hover, .js-note:hover, .js-model:hover, .js-settings:hover, .js-sp-mute:hover, .js-sp-stop:hover, .js-sp-chat:hover { background:${C.bgHover}; color:${C.text}; }
-      .js-pill.active { background:${C.accent} !important; color:#fff !important; }
+      .js-side-toggle:hover, .js-new:hover, .js-projects:hover, .js-upload:hover, .js-note:hover, .js-speech:hover, .js-model:hover, .js-settings-row:hover, .js-sp-mute:hover, .js-sp-stop:hover, .js-sp-chat:hover { background:${C.bgHover}; color:${C.text}; }
+      .js-navrow:not([disabled]):not(.js-artifacts):not(.js-scheduled):hover { background:${C.bgHover}; color:${C.text}; }
+      .js-pill.active { background:${C.bgHover} !important; color:${C.text} !important; box-shadow:inset 0 0 0 1px ${C.border}; }
       .js-pill:not(.active):hover { background:${C.bgHover}; color:${C.text}; }
       .js-note.on { color:${C.accent} !important; background:rgba(217,119,87,.12) !important; }
       .js-note.on svg { animation:js-note-pulse 1.4s ease-in-out infinite; }
@@ -657,24 +740,43 @@
       .js-speech.on { background:${C.accent} !important; border-color:${C.accent} !important; color:#fff !important; }
       .js-speech.on svg { animation:js-speech-pulse 1.3s ease-in-out infinite; }
       @keyframes js-speech-pulse { 0%,100% { transform:scale(1); } 50% { transform:scale(1.14); } }
-      .js-chat-item { display:flex; align-items:center; gap:9px; padding:7px 10px; border-radius:10px; cursor:pointer; font-size:13px; color:${C.textSoft}; }
+      .js-chat-item { position:relative; display:flex; align-items:center; gap:9px; padding:7px 32px 7px 10px; border-radius:10px; cursor:pointer; font-size:13px; color:${C.textSoft}; }
       .js-chat-item:hover { background:${C.bgHover}; color:${C.text}; }
       .js-chat-item.selected { background:${C.bgHover}; color:${C.text}; }
-      .js-chat-item .js-ico { flex:0 0 auto; display:inline-flex; width:15px; height:15px; color:${C.accent}; }
+      .js-chat-item .js-ico { flex:0 0 auto; display:inline-flex; align-items:center; justify-content:center; width:15px; height:15px; color:${C.textDim}; }
       .js-chat-item .js-ico svg { width:15px; height:15px; display:block; }
+      .js-chat-delete { position:absolute; right:6px; top:50%; transform:translateY(-50%); width:22px; height:22px; border-radius:6px; background:none; border:none; color:${C.textDim}; cursor:pointer; display:none; align-items:center; justify-content:center; }
+      .js-chat-item:hover .js-chat-delete { display:inline-flex; }
+      .js-chat-delete:hover { background:${C.border}; color:#e5735f; }
+      .js-chat-delete svg { width:13px; height:13px; display:block; }
       .js-chats-toggle .js-chats-chevron svg { width:13px; height:13px; display:block; }
       .js-chats-toggle.is-collapsed .js-chats-chevron { transform:rotate(-90deg); }
       .js-chats.is-collapsed { display:none !important; }
       .js-chat-item .js-txt { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-      .js-turn { max-width:760px; margin:0 auto 26px; font-family:${C.font}; line-height:1.6; display:flex; }
-      .js-you { justify-content:flex-end; }
-      .js-jarvis { justify-content:flex-start; text-align:left; }
-      .js-you .js-text { background:${C.accent}; color:#fff; border-radius:20px; padding:10px 16px; max-width:72%; white-space:pre-wrap; word-break:break-word; }
-      .js-jarvis .js-text { color:${C.text}; white-space:pre-wrap; word-break:break-word; max-width:100%; }
-      .js-jarvis .js-text.thinking { color:${C.textDim}; font-style:italic; }
+      .js-turn { max-width:768px; margin:0 auto 24px; font-family:${C.font}; line-height:1.6; display:flex; flex-direction:column; }
+      .js-you { align-items:flex-end; }
+      .js-jarvis { align-items:flex-start; text-align:left; }
+      .js-you .js-text { background:${C.bgSurface3}; color:${C.text}; border-radius:18px; padding:12px 16px; max-width:85%; white-space:pre-wrap; word-break:break-word; font-size:15px; }
+      .js-jarvis .js-text { color:${C.text}; white-space:pre-wrap; word-break:break-word; max-width:100%; font-family:${C.serif}; line-height:1.65; }
+      .js-jarvis .js-text.thinking {
+        font-style:italic; font-family:${C.font};
+        background-image:linear-gradient(90deg, ${C.textDim} 0%, ${C.text} 50%, ${C.textDim} 100%);
+        background-size:200% 100%; -webkit-background-clip:text; background-clip:text; color:transparent;
+        animation:js-thinking-shimmer 1.6s linear infinite;
+      }
+      @keyframes js-thinking-shimmer { 0% { background-position:200% 0; } 100% { background-position:-200% 0; } }
+      @media (prefers-reduced-motion:reduce) { .js-jarvis .js-text.thinking { animation:none; color:${C.textDim}; -webkit-background-clip:initial; background-clip:initial; background-image:none; } }
+      .js-turn-actions { display:flex; align-items:center; gap:2px; margin-top:4px; opacity:0; transition:opacity .12s ease; }
+      .js-turn:hover .js-turn-actions, .js-turn.js-actions-pinned .js-turn-actions { opacity:1; }
+      .js-turn-copy { width:28px; height:28px; border-radius:7px; background:none; border:none; color:${C.textDim}; cursor:pointer; display:inline-flex; align-items:center; justify-content:center; }
+      .js-turn-copy:hover { background:${C.bgHover}; color:${C.text}; }
+      .js-turn-copy svg { width:14px; height:14px; display:block; }
       .js-thread { padding:64px 24px 180px; }
       .js-main .js-welcome { opacity:1; transition:opacity .25s ease; }
       .js-main.has-content .js-welcome { opacity:0; pointer-events:none; }
+      .js-composer { transition:top .25s ease, bottom .25s ease, transform .25s ease; }
+      #jsApp:not(.js-has-content) .js-composer { top:40%; bottom:auto; transform:translateY(24px); background:none; padding:0 24px; }
+      #jsApp.js-has-content .js-composer { top:auto; bottom:0; transform:none; }
       .js-main.js-speech-active .js-thread, .js-main.js-speech-active .js-welcome { display:none !important; }
       .js-code-editor:empty::before, .js-code-editor.is-empty::before { content:attr(data-placeholder); color:${C.textDim}; pointer-events:none; }
       .js-code-editor:focus::before { opacity:.7; }
@@ -770,7 +872,13 @@
 
   function syncWelcome() {
     if (!threadEl) return;
-    chatRootEl.classList.toggle('has-content', threadEl.children.length > 0);
+    const hasContent = threadEl.children.length > 0;
+    chatRootEl.classList.toggle('has-content', hasContent);
+    // Solange kein Gespräch läuft, sitzt der Composer direkt unter der
+    // Begrüßung (mittig, wie auf claude.ais /new-Seite) statt permanent am
+    // unteren Bildschirmrand — er wandert erst nach unten, sobald der erste
+    // Turn im Thread steht.
+    if (uiEl) uiEl.classList.toggle('js-has-content', hasContent);
   }
 
   // Sidebar list — backed by the real per-conversation store.
@@ -783,31 +891,59 @@
       list = (j.conversations || []).filter((c) => isModeConv(activeMode, c.id));
     } catch (e) { list = []; }
     chatListEl.innerHTML = '';
+    chatListEl.dataset.empty = list.length ? '' : '1';
     if (!list.length) {
       const d = document.createElement('div');
       d.className = 'js-chat-item';
       d.style.color = C.textDim;
       d.style.cursor = 'default';
-      d.textContent = 'No conversations yet';
+      d.textContent = 'Noch keine Unterhaltungen';
       chatListEl.appendChild(d);
       return;
     }
     for (const conv of list) {
       const el = document.createElement('div');
       el.className = 'js-chat-item';
+      el.dataset.title = (conv.title || 'Neu').toLowerCase();
       if (conv.id === currentConversationId) el.classList.add('selected');
       const ico = document.createElement('span');
       ico.className = 'js-ico';
-      ico.innerHTML = ICONS.bullet;
+      ico.innerHTML = '<span style="display:inline-block;width:6px;height:6px;border-radius:50%;border:1px solid currentColor;opacity:.5;"></span>';
       const txt = document.createElement('span');
       txt.className = 'js-txt';
       txt.textContent = conv.title || 'Neu';
       txt.title = txt.textContent;
+      const delBtn = document.createElement('button');
+      delBtn.type = 'button';
+      delBtn.className = 'js-chat-delete';
+      delBtn.title = 'Löschen';
+      delBtn.innerHTML = ICONS.trash;
+      delBtn.addEventListener('click', async (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (!confirm(`"${conv.title || 'Neu'}" löschen?`)) return;
+        try {
+          const qs = conv.project_id ? `?project_id=${encodeURIComponent(conv.project_id)}` : '';
+          await fetch(`/conversations/${encodeURIComponent(conv.id)}${qs}`, { method: 'DELETE' });
+        } catch (e2) {}
+        if (conv.id === currentConversationId) startNewConversation();
+        loadConversationList();
+      });
       el.appendChild(ico);
       el.appendChild(txt);
+      el.appendChild(delBtn);
       el.addEventListener('click', () => openConversation(conv.id));
       chatListEl.appendChild(el);
     }
+  }
+
+  function filterChatList(query) {
+    if (!chatListEl) return;
+    const q = query.trim().toLowerCase();
+    chatListEl.querySelectorAll('.js-chat-item').forEach((el) => {
+      if (!el.dataset.title) return;
+      el.style.display = !q || el.dataset.title.includes(q) ? '' : 'none';
+    });
   }
 
   async function openConversation(id, projectId) {
@@ -911,6 +1047,7 @@
       projectsList = j.projects || [];
     } catch (e) { projectsList = []; }
     renderProjectsGrid();
+    renderPinnedProjects();
   }
   function sortedProjects(list) {
     list = list.slice();
@@ -931,17 +1068,67 @@
       return;
     }
     projectsGridEl.innerHTML = list.map((p) => `
-      <div class="js-project-card" data-id="${p.id}" style="border:1px solid ${C.border};border-radius:14px;padding:16px 18px;background:${C.bgSoft};transition:border-color .15s;display:flex;flex-direction:column;min-height:110px;">
-        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px;padding-right:20px;">
+      <div class="js-project-card" data-id="${p.id}" style="position:relative;border:1px solid ${C.border};border-radius:14px;padding:16px 18px;background:${C.bgSurface3};transition:border-color .15s;display:flex;flex-direction:column;min-height:110px;">
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px;padding-right:44px;">
           <span style="font-size:14px;font-weight:600;color:${C.text};">${escapeHtml(p.name)}</span>
           ${p.tag ? `<span style="font-size:11px;padding:2px 8px;border-radius:10px;background:${C.bgHover};color:${C.textSoft};">${escapeHtml(p.tag)}</span>` : ''}
         </div>
+        <button class="js-project-pin-btn" data-id="${p.id}" title="${isProjectPinned(p.id) ? 'Lösen' : 'Anheften'}" style="position:absolute;top:12px;right:32px;background:none;border:none;color:${isProjectPinned(p.id) ? C.accent : C.textSoft};cursor:pointer;padding:4px;display:inline-flex;">${isProjectPinned(p.id) ? ICONS.pinFilled : ICONS.pin}</button>
         <button class="js-project-menu-btn" data-id="${p.id}" title="Optionen" style="position:absolute;top:12px;right:10px;background:none;border:none;color:${C.textSoft};cursor:pointer;padding:4px;display:inline-flex;">${ICONS.dots}</button>
         ${p.dir ? `<div style="font-size:11px;color:${C.textDim};font-family:monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-bottom:8px;" title="${escapeHtml(p.dir)}">${escapeHtml(p.dir)}</div>` : ''}
         ${p.description ? `<div style="font-size:13px;color:${C.textSoft};line-height:1.45;flex:1;">${escapeHtml(p.description)}</div>` : '<div style="flex:1;"></div>'}
         <div style="font-size:12px;color:${C.textDim};margin-top:10px;">${formatProjectDate(p.created_at)}</div>
       </div>
     `).join('');
+    projectsGridEl.querySelectorAll('.js-project-pin-btn').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.preventDefault(); e.stopPropagation();
+        toggleProjectPin(btn.dataset.id);
+        renderProjectsGrid();
+        renderPinnedProjects();
+      });
+    });
+  }
+
+  // Angeheftete Projekte — rein clientseitig in localStorage, da es nur
+  // steuert, was in DIESER Sidebar oben auftaucht (keine geteilte
+  // Server-Ansicht, die synchron sein müsste).
+  function getPinnedProjectIds() {
+    try { return JSON.parse(localStorage.getItem('jarvis_pinned_projects') || '[]'); } catch (e) { return []; }
+  }
+  function isProjectPinned(id) { return getPinnedProjectIds().includes(id); }
+  function toggleProjectPin(id) {
+    const ids = getPinnedProjectIds();
+    const i = ids.indexOf(id);
+    if (i >= 0) ids.splice(i, 1); else ids.push(id);
+    localStorage.setItem('jarvis_pinned_projects', JSON.stringify(ids));
+  }
+  function renderPinnedProjects() {
+    const hintEl = $('.js-projects-pin-hint', uiEl);
+    if (!hintEl) return;
+    const ids = getPinnedProjectIds();
+    const pinned = ids.map((id) => projectsList.find((p) => p.id === id)).filter(Boolean);
+    if (!pinned.length) {
+      hintEl.style.display = 'flex';
+      hintEl.nextElementSibling && hintEl.nextElementSibling.remove();
+      return;
+    }
+    hintEl.style.display = 'none';
+    let list = hintEl.nextElementSibling;
+    if (!list || !list.classList.contains('js-projects-pinned-list')) {
+      list = document.createElement('div');
+      list.className = 'js-projects-pinned-list';
+      hintEl.after(list);
+    }
+    list.innerHTML = pinned.map((p) => `
+      <button class="js-navrow js-pinned-project" data-id="${p.id}" style="display:flex;align-items:center;gap:10px;padding:8px 10px;background:none;border:none;border-radius:9px;color:${C.textSoft};font-size:13px;cursor:pointer;text-align:left;width:100%;">${ICONS.folder}<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(p.name)}</span></button>
+    `).join('');
+    list.querySelectorAll('.js-pinned-project').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const p = pinned.find((x) => x.id === btn.dataset.id);
+        if (p) openProjectDetail(p);
+      });
+    });
   }
   function openNewProjectModal() {
     if (!newProjectSheetEl) return;
@@ -1049,6 +1236,18 @@
       $('.js-chats-toggle', uiEl).classList.add('is-collapsed');
     }
     $('.js-projects', uiEl).addEventListener('click', (e) => { e.preventDefault(); openProjectsView(); });
+    $('.js-customize', uiEl).addEventListener('click', (e) => { e.preventDefault(); openSettings(); });
+    $('.js-projects-pin-add', uiEl).addEventListener('click', (e) => { e.preventDefault(); openNewProjectModal(); });
+    $('.js-search-toggle', uiEl).addEventListener('click', (e) => {
+      e.preventDefault();
+      const row = $('.js-search-row', uiEl);
+      const input = $('.js-search-input', uiEl);
+      const show = row.style.display === 'none';
+      row.style.display = show ? 'block' : 'none';
+      if (show) { input.value = ''; input.focus(); filterChatList(''); } else { filterChatList(''); }
+    });
+    $('.js-search-input', uiEl).addEventListener('input', (e) => filterChatList(e.target.value));
+    $('.js-chats-sort', uiEl).addEventListener('click', (e) => { e.preventDefault(); loadConversationList(); });
     $('.js-projects-new', uiEl).addEventListener('click', (e) => { e.preventDefault(); openNewProjectModal(); });
     $('.js-projects-search-btn', uiEl).addEventListener('click', (e) => {
       e.preventDefault();
@@ -1137,9 +1336,10 @@
       });
       composerInput.addEventListener('input', () => {
         composerInput.classList.toggle('is-empty', composerInput.innerText.trim().length === 0);
-        if (sendBtn) sendBtn.disabled = !canSendNow();
+        updateSendSlot();
       });
     }
+    updateSendSlot();
     if (speechBtn) speechBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); speechMode ? exitSpeech() : enterSpeech(); });
     if (noteBtn) noteBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); setDictating(!dictating); });
     if (uploadBtn) uploadBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); if (fileInput) fileInput.click(); });
@@ -1195,6 +1395,25 @@
       });
     }
 
+    // LM-Studio-Endpoint speichern
+    const lmUrlInput = $('.js-lmstudio-url-input', settingsSheetEl);
+    const lmUrlSave = $('.js-lmstudio-url-save', settingsSheetEl);
+    const lmUrlStatus = $('.js-lmstudio-url-status', settingsSheetEl);
+    if (lmUrlSave && lmUrlInput) {
+      lmUrlSave.addEventListener('click', async () => {
+        const v = lmUrlInput.value.trim();
+        if (!v) return;
+        if (lmUrlStatus) lmUrlStatus.textContent = 'Speichert…';
+        try {
+          await fetch('/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ lm_studio_base_url: v }) });
+          if (lmUrlStatus) lmUrlStatus.textContent = 'Gespeichert';
+          lastModelsList = null;
+          fetch('/models').then((r) => r.json()).then((j) => { applyModelCaps(j); if (j.current) setModelLabel(j.current); }).catch(() => {});
+        } catch (e) { if (lmUrlStatus) lmUrlStatus.textContent = 'Fehlgeschlagen'; }
+        setTimeout(() => { if (lmUrlStatus) lmUrlStatus.textContent = ''; }, 2500);
+      });
+    }
+
     if (modelBtnEl) modelBtnEl.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); toggleModelMenu(modelBtnEl); });
     if (pdModelBtn) pdModelBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); toggleModelMenu(pdModelBtn); });
     window.addEventListener('click', () => { if (modelMenuEl) modelMenuEl.style.display = 'none'; modelMenuAnchor = null; });
@@ -1214,18 +1433,10 @@
       fileInput.value = '';
       if (!files.length) return;
       const results = await Promise.all(files.map(readAttachedFile));
-      results.forEach((r, i) => { if (r.image) pendingImages.push({ name: files[i].name, image: r.image }); });
-      // Bilder bekommen nur die Vorschau-Kachel, keinen Text ins Eingabefeld
-      // — die Kachel zeigt ja schon, was angehängt ist. Nur Text-/andere
-      // Dateien (kein `.image`) landen weiterhin als Text im Eingabefeld,
-      // weil die gar keine visuelle Vorschau haben.
-      const textResults = results.filter((r) => !r.image);
-      if (textResults.length && composerInput) {
-        const base = composerInput.innerText.trim();
-        const attach = textResults.map((r) => r.text).join('\n\n');
-        composerInput.innerText = base ? base + '\n\n' + attach : attach;
-        composerInput.classList.remove('is-empty');
-      }
+      // Jede Datei wird als Kachel angehängt — außerhalb des Eingabetextes,
+      // wie bei anderen KI-Chats. Was davon beim Senden tatsächlich mitgeht
+      // (Bild, gelesener Text, oder nur der Dateiname), regelt sendMessage.
+      results.forEach((r) => pendingImages.push(r));
       renderAttachPreviews();
     });
     document.body.appendChild(fileInput);
@@ -1256,21 +1467,47 @@
   }
   function showThread() {}
 
-  function addThreadTurn(role, text, images) {
+  function addThreadTurn(role, text, attachments) {
     const el = ensureThread();
     if (!el) return { classList: { add(){}, remove(){}, toggle(){} }, textContent: '' };
+    // Letzter Turn markiert seine Aktionen dauerhaft sichtbar (nicht erst bei
+    // Hover) — genau wie claude.ai es für die jeweils neueste Antwort tut.
+    el.querySelectorAll('.js-turn.js-actions-pinned').forEach((t) => t.classList.remove('js-actions-pinned'));
     const row = document.createElement('div');
-    row.className = 'js-turn ' + (role === 'you' ? 'js-you' : 'js-jarvis');
-    if (images && images.length) {
-      const imgRow = document.createElement('div');
-      imgRow.style.cssText = `display:flex;gap:6px;flex-wrap:wrap;${text ? 'margin-bottom:8px;' : ''}`;
-      imgRow.innerHTML = images.map((src) => `<img src="${src}" style="width:64px;height:64px;object-fit:cover;border-radius:8px;" />`).join('');
-      row.appendChild(imgRow);
+    row.className = 'js-turn js-actions-pinned ' + (role === 'you' ? 'js-you' : 'js-jarvis');
+    if (attachments && attachments.length) {
+      // Anhänge zeigen sich als Kacheln über der Nachricht — außerhalb des
+      // eigentlichen Nachrichtentexts, wie bei anderen KI-Chats üblich.
+      const attRow = document.createElement('div');
+      attRow.style.cssText = `display:flex;gap:6px;flex-wrap:wrap;${text ? 'margin-bottom:8px;' : ''}`;
+      attRow.innerHTML = attachments.map((a) => (a.image
+        ? `<img src="${a.image}" title="${escapeHtml(a.name || '')}" style="width:64px;height:64px;object-fit:cover;border-radius:8px;" />`
+        : `<div title="${escapeHtml(a.name || '')}" style="width:64px;height:64px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;border-radius:8px;background:${C.bgHover};color:${C.textSoft};padding:2px;">${ICONS.copy}<span style="font-size:9px;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(a.name || '')}</span></div>`
+      )).join('');
+      row.appendChild(attRow);
     }
     const inner = document.createElement('div');
     inner.className = 'js-text';
-    inner.textContent = text;
+    if (role === 'you') {
+      inner.textContent = text;
+    } else {
+      inner.dataset.raw = text;
+      inner.innerHTML = renderMarkdown(text);
+    }
     row.appendChild(inner);
+    const actions = document.createElement('div');
+    actions.className = 'js-turn-actions';
+    const copyBtn = document.createElement('button');
+    copyBtn.type = 'button';
+    copyBtn.className = 'js-turn-copy';
+    copyBtn.title = 'Kopieren';
+    copyBtn.innerHTML = ICONS.copy;
+    copyBtn.addEventListener('click', async (e) => {
+      e.preventDefault();
+      try { await navigator.clipboard.writeText(inner.dataset.raw !== undefined ? inner.dataset.raw : inner.textContent); } catch (e2) {}
+    });
+    actions.appendChild(copyBtn);
+    row.appendChild(actions);
     el.appendChild(row);
     el.scrollTop = el.scrollHeight;
     syncWelcome();
@@ -1294,16 +1531,22 @@
     // Sofort abgreifen und leeren: ein Bild, das während dieses laufenden
     // Requests noch angehängt wird, gehört zum NÄCHSTEN Turn, nicht zu
     // diesem hier.
-    const imagesForThisTurn = pendingImages.map((att) => att.image);
+    const attachmentsForThisTurn = pendingImages.slice();
+    const imagesForThisTurn = attachmentsForThisTurn.filter((a) => a.image).map((a) => a.image);
+    // Lesbarer Text aus Text-Anhängen geht unsichtbar mit an das Modell —
+    // sichtbar bleibt in der eigenen Nachricht nur, was der Nutzer selbst
+    // getippt hat; der Anhang zeigt sich als Kachel, nicht als Textwand.
+    const attachNote = attachmentsForThisTurn.filter((a) => a.sendText).map((a) => a.sendText).join('\n\n');
+    const outgoingText = attachNote ? (text ? text + '\n\n' + attachNote : attachNote) : text;
     pendingImages = [];
-    renderAttachPreviews();
     if (composerInput) { composerInput.innerText = ''; composerInput.classList.remove('is-empty'); }
+    renderAttachPreviews();
     showThread();
     progressHostEl = null; // neue Runde eigener Fortschrittsblöcke
-    addThreadTurn('you', text, imagesForThisTurn);
+    addThreadTurn('you', text, attachmentsForThisTurn);
     const said = addThreadTurn('jarvis', '');
     said.classList.add('thinking');
-    said.textContent = '';
+    said.textContent = 'Denkt nach…';
     setBusy(true);
     stopListening();   // während Jarvis antwortet nicht mithören (Echo-Schutz)
     noteSpeechReply('');
@@ -1320,7 +1563,7 @@
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         signal: abortController.signal,
-        body: JSON.stringify({ message: text, history, turn_id: currentTurnId, mode: activeMode, conversation_id: ensureConversationId(), images: imagesForThisTurn, project_id: currentProjectId }),
+        body: JSON.stringify({ message: outgoingText, history, turn_id: currentTurnId, mode: activeMode, conversation_id: ensureConversationId(), images: imagesForThisTurn, project_id: currentProjectId }),
       });
       if (!resp.ok) throw new Error('HTTP ' + resp.status);
       const reader = resp.body.getReader();
@@ -1340,11 +1583,11 @@
           try { evt = JSON.parse(line); } catch (e) { continue; }
           if (evt.type === 'partial') {
             said.classList.remove('thinking');
-            said.textContent = parts.join(' ') + (evt.text || '');
+            setAssistantText(said, parts.join(' ') + (evt.text || ''));
           } else if (evt.type === 'sentence') {
             said.classList.remove('thinking');
             if (evt.text) parts.push(evt.text);
-            said.textContent = parts.join(' ');
+            setAssistantText(said, parts.join(' '));
             noteSpeechReply(parts.join(' '));
           } else if (evt.type === 'audio') {
             // Sprache NUR im Sprachmodus abspielen; in allen anderen Modi
@@ -1359,7 +1602,7 @@
     } catch (err) {
       // Abbruch durch den Stop-Button ist KEIN Fehler — keine Meldung anzeigen.
       if (turnAborted) { fullText = fullText || ''; }
-      else if (!fullText) { const fb = "I can't reach my language model right now. Is LM Studio running with Gemma loaded?"; fullText = fb; said.classList.remove('thinking'); said.textContent = fb; }
+      else if (!fullText) { const fb = "I can't reach my language model right now. Is LM Studio running with Gemma loaded?"; fullText = fb; said.classList.remove('thinking'); setAssistantText(said, fb); }
     }
     activeReader = null;
     abortController = null;
@@ -1371,8 +1614,12 @@
       if (speechMode) setSpeechStatus('Bereit');
       return;
     }
+    // Finaler Durchlauf mit dem autoritativen Volltext — die Live-Updates
+    // während des Streamens können mitten in einem ```-Block gerendert
+    // haben, bevor der schließende Zaun überhaupt eingetroffen ist.
+    if (fullText) setAssistantText(said, fullText);
     if (fullText) {
-      history.push({ role: 'user', content: text });
+      history.push({ role: 'user', content: outgoingText });
       history.push({ role: 'assistant', content: fullText });
       if (history.length > 40) history = history.slice(-40);
     }
@@ -1401,6 +1648,41 @@
 
   function escapeHtml(s) {
     return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+
+  // Kleiner, abhängigkeitsfreier Markdown-Renderer für Jarvis' Antworten —
+  // deckt nur ab, was tatsächlich im Alltag vorkommt (Codeblöcke, Inline-Code,
+  // fett/kursiv, Listen, Absätze). Kein voller CommonMark-Parser, aber genug,
+  // damit ```-Blöcke nicht mehr als rohe Backticks im Fließtext auftauchen.
+  function renderMarkdown(raw) {
+    let text = String(raw);
+    // Ein Modell (oder ein noch laufender Stream) lässt den schließenden Zaun
+    // manchmal weg — ungerade Anzahl ``` heißt: der letzte Block ist offen,
+    // also am Ende schließen, statt drei rohe Backticks im Fließtext zu zeigen.
+    if (((text.match(/```/g) || []).length) % 2 === 1) text += '\n```';
+    const blocks = [];
+    // Codeblöcke zuerst herausziehen (Platzhalter einsetzen), damit ihr Inhalt
+    // von den restlichen Regeln (fett/kursiv/Listen) nicht mehr angefasst wird.
+    let withPlaceholders = text.replace(/```([a-zA-Z0-9_+-]*)\n?([\s\S]*?)```/g, (m, lang, code) => {
+      const idx = blocks.length;
+      blocks.push(`<pre style="background:${C.bgHover};border:1px solid ${C.border};border-radius:10px;padding:12px 14px;overflow-x:auto;margin:8px 0;"><code style="font-family:Menlo,Monaco,'DejaVu Sans Mono',monospace;font-size:13px;line-height:1.5;white-space:pre;">${escapeHtml(code.replace(/\n$/, ''))}</code></pre>`);
+      return ` ${idx} `;
+    });
+    let html = escapeHtml(withPlaceholders)
+      .replace(/`([^`\n]+)`/g, (m, code) => `<code style="background:${C.bgHover};border-radius:4px;padding:1px 5px;font-family:Menlo,Monaco,'DejaVu Sans Mono',monospace;font-size:.9em;">${code}</code>`)
+      .replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>')
+      .replace(/(?<!\*)\*([^*\n]+)\*(?!\*)/g, '<em>$1</em>')
+      .replace(/^[-*] (.+)$/gm, '<li>$1</li>')
+      .replace(/(<li>.*<\/li>\n?)+/g, (m) => `<ul style="margin:6px 0;padding-left:22px;">${m}</ul>`)
+      .split(/\n{2,}/).map((p) => p.trim()).filter(Boolean)
+      .map((p) => (/^<(ul|pre)/.test(p) ? p : `<p style="margin:0 0 10px;">${p.replace(/\n/g, '<br>')}</p>`))
+      .join('');
+    return html.replace(/ (\d+) /g, (m, idx) => blocks[Number(idx)]);
+  }
+
+  function setAssistantText(el, text) {
+    el.dataset.raw = text;
+    el.innerHTML = renderMarkdown(text);
   }
 
   function openPanelSocket() {
@@ -1446,7 +1728,7 @@
       if (!block) {
         block = document.createElement('div');
         block.setAttribute('data-progresstask', String(key));
-        block.style.cssText = `display:flex;align-items:center;gap:9px;padding:10px 12px;border:1px solid ${C.border};border-radius:12px;background:${C.bgSoft};font-size:13px;`;
+        block.style.cssText = `display:flex;align-items:center;gap:9px;padding:10px 12px;border:1px solid ${C.border};border-radius:12px;background:${C.bgSurface3};font-size:13px;`;
         host.appendChild(block);
       }
       const status = item.status || 'läuft';
@@ -1462,7 +1744,7 @@
 
     if (kind === 'notify') {
       const b = document.createElement('div');
-      b.style.cssText = `padding:10px 12px;border:1px solid ${C.border};border-left:3px solid ${C.accent};border-radius:10px;background:${C.bgSoft};font-size:13px;color:${C.text};`;
+      b.style.cssText = `padding:10px 12px;border:1px solid ${C.border};border-left:3px solid ${C.accent};border-radius:10px;background:${C.bgSurface3};font-size:13px;color:${C.text};`;
       b.textContent = item.text || '';
       host.appendChild(b);
       scrollThread();
@@ -1471,7 +1753,7 @@
 
     if (kind === 'markdown') {
       const b = document.createElement('div');
-      b.style.cssText = `padding:10px 12px;border:1px solid ${C.border};border-radius:10px;background:${C.bgSoft};font-size:13px;color:${C.textSoft};`;
+      b.style.cssText = `padding:10px 12px;border:1px solid ${C.border};border-radius:10px;background:${C.bgSurface3};font-size:13px;color:${C.textSoft};`;
       b.textContent = (item.title ? item.title + ' — ' : '') + (item.text || '');
       host.appendChild(b);
       scrollThread();
@@ -1494,7 +1776,7 @@
       wrap.style.cssText = `border:1px solid ${C.border};border-radius:10px;overflow:hidden;background:#0e1220;`;
       const sum = document.createElement('summary');
       sum.textContent = (item.title || 'Code') + (item.language ? ' · ' + item.language : '');
-      sum.style.cssText = `padding:8px 12px;font-size:12px;color:${C.textDim};cursor:pointer;background:${C.bgSoft};`;
+      sum.style.cssText = `padding:8px 12px;font-size:12px;color:${C.textDim};cursor:pointer;background:${C.bgSurface3};`;
       const pre = document.createElement('pre');
       pre.style.cssText = `margin:0;padding:12px;overflow:auto;font-size:12px;line-height:1.5;`;
       const code = document.createElement('code');
@@ -1511,7 +1793,7 @@
       const files = Array.isArray(item.files) ? item.files : [];
       const wrap = document.createElement('details');
       wrap.className = 'js-files';
-      wrap.style.cssText = `border:1px solid ${C.border};border-radius:10px;overflow:hidden;background:${C.bgSoft};`;
+      wrap.style.cssText = `border:1px solid ${C.border};border-radius:10px;overflow:hidden;background:${C.bgSurface3};`;
       const sum = document.createElement('summary');
       sum.textContent = item.title || (files.length + ' Datei(en)');
       sum.style.cssText = `padding:8px 12px;font-size:12px;color:${C.textDim};cursor:pointer;`;
@@ -1569,15 +1851,26 @@
     modelMenuEl.innerHTML = '';
     if (!models.length) {
       const d = document.createElement('div');
-      d.textContent = 'No models — LM Studio running?';
-      d.style.cssText = `padding:10px 14px;font-size:13px;color:${C.textDim};`;
+      d.textContent = 'Keine Modelle — läuft LM Studio?';
+      d.style.cssText = `padding:14px;font-size:13px;color:${C.textDim};`;
       modelMenuEl.appendChild(d);
       return;
     }
     for (const m of models) {
+      const publisher = String(m.id).includes('/') ? String(m.id).split('/')[0] : '';
       const b = document.createElement('button');
-      b.textContent = m.id;
-      b.style.cssText = `display:block;width:100%;text-align:left;padding:9px 14px;background:none;border:none;color:${C.textSoft};font-size:13px;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;`;
+      b.style.cssText = `display:flex;flex-direction:column;gap:1px;width:100%;text-align:left;padding:8px 14px;background:none;border:none;color:${C.text};font-size:13.5px;font-weight:500;cursor:pointer;line-height:1.35;`;
+      b.title = m.id;
+      const nameEl = document.createElement('span');
+      nameEl.textContent = prettyModelName(m.id);
+      nameEl.style.cssText = `overflow:hidden;text-overflow:ellipsis;white-space:nowrap;`;
+      b.appendChild(nameEl);
+      if (publisher) {
+        const subEl = document.createElement('span');
+        subEl.textContent = publisher;
+        subEl.style.cssText = `font-size:11.5px;font-weight:400;color:${C.textDim};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;`;
+        b.appendChild(subEl);
+      }
       b.onmouseenter = () => { b.style.background = C.bgHover; };
       b.onmouseleave = () => { b.style.background = 'none'; };
       b.addEventListener('click', async (e) => {
@@ -1617,10 +1910,27 @@
     }
   }
 
-  function setModelLabel(id) {
+  // Rohe LM-Studio-IDs ("google/gemma-4-e4b", "qwen2.5-coder-32b-instruct")
+  // sind technische Dateinamen, keine Anzeigenamen. Wir trennen an "-"/"_",
+  // schreiben Wortsegmente groß und heben kurze Größen-/Versionscodes (4b,
+  // e4b, 32b, 3.1 …) komplett in Großbuchstaben — ohne eine Lookup-Tabelle zu
+  // pflegen, die bei jedem neuen Modell wieder veraltet wäre.
+  function prettyModelName(id) {
     const short = String(id).split('/').pop();
-    if (modelEl) modelEl.textContent = short;
-    if (pdModelLabelEl) pdModelLabelEl.textContent = short;
+    return short
+      .split(/[-_]+/)
+      .map((seg) => {
+        if (!seg) return seg;
+        if (seg.length <= 4 && /\d/.test(seg)) return seg.toUpperCase();
+        return seg.charAt(0).toUpperCase() + seg.slice(1);
+      })
+      .join(' ');
+  }
+
+  function setModelLabel(id) {
+    const pretty = prettyModelName(id);
+    if (modelEl) { modelEl.textContent = pretty; modelEl.title = id; }
+    if (pdModelLabelEl) { pdModelLabelEl.textContent = pretty; pdModelLabelEl.title = id; }
   }
 
   // ------------------------------------------------------------- code-tab
@@ -1659,7 +1969,7 @@
       cursorBlink: true,
       fontFamily: '"Menlo","Monaco","DejaVu Sans Mono","Courier New",monospace',
       fontSize: 13,
-      lineHeight: 1.3,
+      lineHeight: 1.0,
       scrollback: 5000,
       theme: {
         background: '#12121c', foreground: '#d8dee9', cursor: '#6aa6ff',
@@ -1791,6 +2101,13 @@
       const din = $('.js-code-dir-input', settingsSheetEl);
       if (din && j.dir) din.value = j.dir;
     } catch (e) {}
+    // LM-Studio-Endpoint aus /settings vorbelegen.
+    try {
+      const r = await fetch('/settings');
+      const j = await r.json();
+      const uin = $('.js-lmstudio-url-input', settingsSheetEl);
+      if (uin && j.lm_studio_base_url) uin.value = j.lm_studio_base_url;
+    } catch (e) {}
     if (settingsModelsEl) {
       settingsModelsEl.innerHTML = '';
       const load = async () => {
@@ -1804,15 +2121,26 @@
         } catch (e) { models = []; }
         if (!models.length) {
           const d = document.createElement('div');
-          d.textContent = 'No models — LM Studio running?';
+          d.textContent = 'Keine Modelle — läuft LM Studio?';
           d.style.cssText = `padding:10px 14px;font-size:13px;color:${C.textDim};`;
           settingsModelsEl.appendChild(d);
           return;
         }
         for (const m of models) {
+          const publisher = String(m).includes('/') ? String(m).split('/')[0] : '';
           const b = document.createElement('button');
-          b.textContent = m;
-          b.style.cssText = `display:block;width:100%;text-align:left;padding:9px 14px;background:none;border:none;color:${C.textSoft};font-size:13px;cursor:pointer;`;
+          b.title = m;
+          b.style.cssText = `display:flex;flex-direction:column;gap:1px;width:100%;text-align:left;padding:8px 14px;background:none;border:none;color:${C.text};font-size:13.5px;font-weight:500;cursor:pointer;line-height:1.35;border-radius:8px;`;
+          const nameEl = document.createElement('span');
+          nameEl.textContent = prettyModelName(m);
+          nameEl.style.cssText = `overflow:hidden;text-overflow:ellipsis;white-space:nowrap;`;
+          b.appendChild(nameEl);
+          if (publisher) {
+            const subEl = document.createElement('span');
+            subEl.textContent = publisher;
+            subEl.style.cssText = `font-size:11.5px;font-weight:400;color:${C.textDim};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;`;
+            b.appendChild(subEl);
+          }
           b.onmouseenter = () => { b.style.background = C.bgHover; };
           b.onmouseleave = () => { b.style.background = 'none'; };
           b.addEventListener('click', () => {
@@ -1914,7 +2242,7 @@
         const composed = dictBase ? dictBase + ' ' + text : text;
         composerInput.innerText = composed;
         composerInput.classList.remove('is-empty');
-        if (sendBtn) sendBtn.disabled = false;
+        updateSendSlot();
         if (final) dictBase = composed;
       }
     };
@@ -2228,16 +2556,21 @@
     orbCanvas.style.cssText = 'position:fixed;inset:0;width:100vw;height:100vh;z-index:40;pointer-events:none;background:transparent;';
     document.body.appendChild(orbCanvas);
     orbCtx = orbCanvas.getContext('2d');
-    const t = $('.js-side-toggle', uiEl);
-    if (t) t.addEventListener('click', () => {
+    const toggleSidebar = () => {
       const aside = $('.js-sidebar', uiEl);
+      const floatBtn = $('.js-side-toggle-float', uiEl);
       const open = aside.style.display !== 'none';
       aside.style.display = open ? 'none' : 'flex';
+      if (floatBtn) floatBtn.style.display = open ? 'inline-flex' : 'none';
       const comp = $('.js-composer', uiEl);
       if (comp) comp.style.left = open ? '0' : '308px';
       if (orbCanvas) orbCanvas.style.left = open ? '0' : '308px';
       layoutSpeechBar();
-    });
+    };
+    const t = $('.js-side-toggle', uiEl);
+    if (t) t.addEventListener('click', toggleSidebar);
+    const tf = $('.js-side-toggle-float', uiEl);
+    if (tf) tf.addEventListener('click', toggleSidebar);
     window.addEventListener('resize', layoutSpeechBar);
     fetch('/models').then((r) => r.json()).then((j) => { applyModelCaps(j); if (j.current) setModelLabel(j.current); }).catch(() => {});
     openPanelSocket();

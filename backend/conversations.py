@@ -101,6 +101,15 @@ def set_title(conv_id: str, title: str, base_dir: Path | None = None) -> None:
         _save(conv, base_dir)
 
 
+def delete(conv_id: str, base_dir: Path | None = None) -> bool:
+    with _lock:
+        path = _path(conv_id, base_dir)
+        if not path.exists():
+            return False
+        path.unlink()
+        return True
+
+
 def list_conversations(base_dir: Path | None = None) -> list[dict]:
     """Metadata only (id/title/updated_at), newest first — the sidebar
     never needs the full turn list just to render its entries. Pass a
