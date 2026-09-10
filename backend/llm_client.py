@@ -1046,6 +1046,13 @@ _CLAUSE_BOUNDARY_WORDS = {
 # swallow the second half of a compound claim too.
 _SUBORDINATORS = _CLAUSE_BOUNDARY_WORDS - {"oder", "und"}
 _NEGATION_WORDS = {"nicht", "kein", "keine", "keinen", "keinem", "keiner"}
+# "ich KANN X" states general capability/ability, not that X is happening or
+# will happen — unlike "ich werde/muss/will X", which _ACTION_STEM_RE's own
+# comment deliberately treats as committing to the action. Cancels a match
+# the same way negation does (observed live: "Ich kann zum Beispiel
+# Webseiten öffnen, ... suchen oder ... programmieren" — a capability
+# listing in answer to "was kannst du?", not a claim any of that just ran).
+_CAPABILITY_WORDS = {"kann", "könnte"}
 _WORD_OR_COMMA_RE = re.compile(r"[\wÄÖÜäöüß]+|,")
 
 
@@ -1094,13 +1101,28 @@ def _direct_ich_claim(sentence: str) -> bool:
         if i > 0 and lowered[i - 1] in _CLAUSE_BOUNDARY_WORDS:
             continue
         negated = False
-        for nxt in lowered[i + 1 : i + 13]:
+        capability = False
+        for j in range(i + 1, min(i + 13, len(tokens))):
+            nxt = lowered[j]
             if nxt == "," or nxt in _CLAUSE_BOUNDARY_WORDS:
                 break
             if nxt in _NEGATION_WORDS:
                 negated = True
                 continue
-            if not negated and _ACTION_STEM_RE.search(nxt):
+            if nxt in _CAPABILITY_WORDS:
+                capability = True
+                continue
+            # German capitalizes every noun but never a mid-sentence finite
+            # verb — a capitalized hit here is almost always the NOUN form
+            # ("eine Web-Suche", "der erste Klick"), not the verb "ich
+            # suche"/"ich klicke". Checked against the ORIGINAL token, since
+            # `lowered` (used for every other comparison here) already threw
+            # that signal away (observed live: "ich brauche dafür eine
+            # Web-Suche" — no action taken or even offered, just naming a
+            # noun — flagged as if it had said "ich suche").
+            if tokens[j][:1].isupper():
+                continue
+            if not negated and not capability and _ACTION_STEM_RE.search(nxt):
                 return True
     return False
 

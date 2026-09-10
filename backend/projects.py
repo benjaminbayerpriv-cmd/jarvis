@@ -63,6 +63,7 @@ def create(dir: str, name: str = "", description: str = "", tag: str = "") -> di
             "description": description.strip(),
             "tag": tag.strip(),
             "dir": str(resolved),
+            "pinned": False,
             "created_at": now,
             "updated_at": now,
         }
@@ -82,7 +83,12 @@ def get(project_id: str) -> dict | None:
         return None
 
 
-def update(project_id: str, name: str | None = None, description: str | None = None) -> dict | None:
+def update(
+    project_id: str,
+    name: str | None = None,
+    description: str | None = None,
+    pinned: bool | None = None,
+) -> dict | None:
     with _lock:
         path = _path(project_id)
         if not path.exists():
@@ -92,6 +98,8 @@ def update(project_id: str, name: str | None = None, description: str | None = N
             project["name"] = name.strip()
         if description is not None:
             project["description"] = description.strip()
+        if pinned is not None:
+            project["pinned"] = pinned
         project["updated_at"] = dt.datetime.now().isoformat(timespec="seconds")
         path.write_text(json.dumps(project, ensure_ascii=False, indent=2), encoding="utf-8")
         return project

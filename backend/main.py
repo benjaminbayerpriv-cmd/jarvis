@@ -5,6 +5,8 @@ import base64
 import json
 import os
 import re
+import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
@@ -155,6 +157,12 @@ class CreateProjectRequest(BaseModel):
 class UpdateProjectRequest(BaseModel):
     name: str | None = None
     description: str | None = None
+    pinned: bool | None = None
+
+
+class UpdateConversationRequest(BaseModel):
+    title: str | None = None
+    pinned: bool | None = None
 
 
 class ChatResponse(BaseModel):
@@ -482,14 +490,40 @@ def get_conversation(conv_id: str, project_id: str | None = None):
     return {"turns": conversations.load_turns(conv_id)}
 
 
+@app.patch("/conversations/{conv_id}")
+def update_conversation(conv_id: str, req: UpdateConversationRequest, project_id: str | None = None):
+    """Rename and/or pin a conversation from the sidebar's three-dot menu."""
+    base_dir = _project_chats_dir(project_id) if project_id else None
+    if req.title is not None:
+        if not req.title.strip():
+            raise HTTPException(status_code=422, detail="Titel darf nicht leer sein")
+        conversations.set_title(conv_id, req.title.strip(), base_dir)
+    if req.pinned is not None:
+        conversations.set_pinned(conv_id, req.pinned, base_dir)
+    return {"ok": True}
+
+
 @app.delete("/conversations/{conv_id}")
 def delete_conversation(conv_id: str, project_id: str | None = None):
-    """Deletes one conversation's JSON file — the sidebar's per-item delete
-    action. Same project_id handling as get_conversation above."""
-    if project_id:
-        base_dir = _project_chats_dir(project_id)
-        return {"ok": conversations.delete(conv_id, base_dir) if base_dir else False}
-    return {"ok": conversations.delete(conv_id)}
+    base_dir = _project_chats_dir(project_id) if project_id else None
+    conversations.delete(conv_id, base_dir)
+    return {"ok": True}
+
+
+@app.post("/conversations/{conv_id}/reveal")
+def reveal_conversation(conv_id: str, project_id: str | None = None):
+    """Opens the OS file manager with the conversation's JSON file
+    selected — the "im Ordner anzeigen" entry in the sidebar's three-dot
+    menu, a stand-in for a full "open with <app>" until that's scoped out
+    (Windows-only for now; the rest of Jarvis already assumes Windows)."""
+    base_dir = _project_chats_dir(project_id) if project_id else None
+    path = conversations.file_path(conv_id, base_dir)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Konversation nicht gefunden")
+    if sys.platform != "win32":
+        raise HTTPException(status_code=501, detail="Nur unter Windows unterstützt")
+    subprocess.run(["explorer", "/select,", str(path)])
+    return {"ok": True}
 
 
 @app.get("/projects")
@@ -511,7 +545,7 @@ def create_project(req: CreateProjectRequest):
 def update_project(project_id: str, req: UpdateProjectRequest):
     if req.name is not None and not req.name.strip():
         raise HTTPException(status_code=422, detail="name darf nicht leer sein")
-    updated = projects.update(project_id, req.name, req.description)
+    updated = projects.update(project_id, req.name, req.description, req.pinned)
     if updated is None:
         raise HTTPException(status_code=404, detail="Projekt nicht gefunden")
     return updated

@@ -56,6 +56,12 @@ def _save(conv: dict, base_dir: Path | None = None) -> None:
     )
 
 
+def file_path(conv_id: str, base_dir: Path | None = None) -> Path:
+    """Public wrapper for _path — used by the "im Ordner anzeigen" endpoint,
+    which needs the real file on disk to hand to the OS file manager."""
+    return _path(conv_id, base_dir)
+
+
 def load_turns(conv_id: str, base_dir: Path | None = None) -> list[dict]:
     conv = _load(conv_id, base_dir)
     return conv["turns"] if conv else []
@@ -101,6 +107,15 @@ def set_title(conv_id: str, title: str, base_dir: Path | None = None) -> None:
         _save(conv, base_dir)
 
 
+def set_pinned(conv_id: str, pinned: bool, base_dir: Path | None = None) -> None:
+    with _lock:
+        conv = _load(conv_id, base_dir)
+        if conv is None:
+            return
+        conv["pinned"] = pinned
+        _save(conv, base_dir)
+
+
 def delete(conv_id: str, base_dir: Path | None = None) -> bool:
     with _lock:
         path = _path(conv_id, base_dir)
@@ -132,6 +147,7 @@ def list_conversations(base_dir: Path | None = None) -> list[dict]:
                 "title": conv.get("title"),
                 "updated_at": conv.get("updated_at", conv.get("created_at", "")),
                 "project_id": conv.get("project_id"),
+                "pinned": bool(conv.get("pinned", False)),
             }
         )
     out.sort(key=lambda c: c["updated_at"], reverse=True)

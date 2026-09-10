@@ -56,7 +56,9 @@
     sort: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 16 4 4 4-4"/><path d="M7 20V4"/><path d="m21 8-4-4-4 4"/><path d="M17 4v16"/></svg>',
     dots: '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg>',
     chevronDown: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>',
-    bullet: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="8" x2="21" y1="6" y2="6"/><line x1="8" x2="21" y1="12" y2="12"/><line x1="8" x2="21" y1="18" y2="18"/><line x1="3" x2="3.01" y1="6" y2="6"/><line x1="3" x2="3.01" y1="12" y2="12"/><line x1="3" x2="3.01" y1="18" y2="18"/></svg>',
+    bullet: '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="12" cy="12" r="5"/></svg>',
+    arrowLeft: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></svg>',
+    arrowRight: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>',
     layers: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"/><path d="M2 12a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 12"/><path d="M2 17a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 17"/></svg>',
     clock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>',
     sliders: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="21" x2="14" y1="4" y2="4"/><line x1="10" x2="3" y1="4" y2="4"/><line x1="21" x2="12" y1="12" y2="12"/><line x1="8" x2="3" y1="12" y2="12"/><line x1="21" x2="16" y1="20" y2="20"/><line x1="12" x2="3" y1="20" y2="20"/><line x1="14" x2="14" y1="2" y2="6"/><line x1="8" x2="8" y1="10" y2="14"/><line x1="16" x2="16" y1="18" y2="22"/></svg>',
@@ -344,7 +346,10 @@
   let attachPreviewEl = null;
   let speechBarEl = null, spMuteBtn = null, spStopBtn = null, spSendBtn = null, spChatBtn = null;
   let speechCaptionEl = null, spcStatusEl = null, spcUserEl = null, spcReplyEl = null;
-  let settingsSheetEl = null, settingsModelsEl = null, newProjectSheetEl = null;
+  let settingsSheetEl = null, settingsModelsEl = null, newProjectSheetEl = null, renameChatSheetEl = null;
+  let pinnedChatListEl = null;
+  let chatItemMenuTargetId = null, chatItemMenuTargetProjectId = null, renamingChatId = null, renamingChatProjectId = null;
+  let allConversations = [];  // letzte /conversations-Antwort — für Umbenennen/Anheften/Löschen ohne erneuten Fetch
 
   // Code-Tab (echte opencode-TUI in einem eingebetteten xterm.js-Terminal)
   let codeViewEl = null, codeTermEl = null, codeDirEl = null;
@@ -353,7 +358,7 @@
   let codeWs = null, codeWsOpen = false, codeReconnectTimer = null, codeExited = false;
 
   // Projects-Ansicht Anker
-  let projectsViewEl = null, projectsGridEl = null, projectsSearchRowEl = null, projectsSearchInputEl = null;
+  let projectsViewEl = null, projectsGridEl = null, projectsPinnedGridEl = null, projectsSearchRowEl = null, projectsSearchInputEl = null;
   let projectsList = [], projectsSortMode = 'newest', projectsSearchOpen = false;
   let projectCardMenuTargetId = null, editingProjectId = null;
   let currentProjectId = null;  // getaggt an die NÄCHSTE neu angelegte Konversation, siehe sendMessage
@@ -362,6 +367,9 @@
   let pdEditorEl = null, pdUploadBtn = null, pdModelBtn = null, pdModelLabelEl = null;
   let pdNoteBtn = null, pdSpeechBtn = null, pdSendBtn = null, pdRecentEl = null;
   let viewingProjectId = null;
+  // Browser-artige Zurück/Vorwärts-Navigation über die "Seiten" der App
+  // (Chat-Konversation, Projekte-Grid, Projekt-Detail) — siehe navRecord/navGo.
+  let navStack = [], navPos = -1, navRestoring = false;
 
   // Sprachmodus + VAD + Diktat + Web-Speech-Erkennung
   let speechMode = false, dictating = false, micReady = false, micStream = null, muted = false;
@@ -418,11 +426,13 @@
     uiEl.style.cssText = `position:fixed;inset:0;z-index:30;display:flex;background:${C.bg};color:${C.text};font-family:${C.font};`;
     uiEl.innerHTML = `
       <button class="js-side-toggle-float" title="Sidebar einblenden" style="display:none;position:absolute;top:15px;left:12px;z-index:31;background:none;border:none;color:${C.textSoft};cursor:pointer;align-items:center;justify-content:center;width:30px;height:30px;border-radius:8px;">${ICONS.menu}</button>
-      <aside class="js-sidebar" style="width:308px;flex:0 0 308px;height:100%;display:flex;flex-direction:column;background:${C.bgSoft};border-right:1px solid ${C.border};">
+      <aside class="js-sidebar" style="width:308px;flex:0 0 308px;height:100%;display:flex;flex-direction:column;background:${C.bgSoft};border-right:1px solid ${C.border};position:relative;">
         <div class="js-sidebar-top" style="padding:16px 12px 6px;display:flex;flex-direction:column;gap:12px;">
           <div class="js-sidebar-header" style="display:flex;align-items:center;justify-content:space-between;">
             <span style="font-family:${C.serif};font-size:15px;font-weight:500;color:${C.text};">Jarvis</span>
             <div style="display:flex;align-items:center;gap:2px;">
+              <button class="js-nav-back" title="Zurück" disabled style="background:none;border:none;color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:7px;">${ICONS.arrowLeft}</button>
+              <button class="js-nav-forward" title="Vorwärts" disabled style="background:none;border:none;color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:7px;">${ICONS.arrowRight}</button>
               <button class="js-side-toggle" title="Sidebar ausblenden" style="background:none;border:none;color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:7px;">${ICONS.menu}</button>
               <button class="js-search-toggle" title="Bald verfügbar" disabled style="background:none;border:none;color:${C.textDim};cursor:default;display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:7px;opacity:.5;">${ICONS.search}</button>
             </div>
@@ -447,15 +457,21 @@
             </div>
             <div class="js-projects-pin-hint" style="display:flex;align-items:center;gap:10px;padding:7px 10px;color:${C.textDim};font-size:12.5px;line-height:1.3;">${ICONS.folder}<span>Projekte anheften, um sie hier zu behalten</span></div>
           </div>
-          <div class="js-chats-toggle-row" style="display:flex;align-items:center;justify-content:space-between;margin-top:6px;">
-            <button class="js-chats-toggle" style="display:flex;align-items:center;gap:4px;padding:8px 8px 4px;background:none;border:none;font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:${C.textDim};cursor:pointer;font-family:${C.font};">
-              <span class="js-chats-chevron" style="display:inline-flex;transition:transform .15s;">${ICONS.chevronDown}</span>
-              <span>Chats und Aufgaben</span>
-            </button>
-            <button class="js-chats-sort" title="Filtern und gruppieren" style="background:none;border:none;color:${C.textDim};cursor:pointer;display:inline-flex;padding:5px;">${ICONS.sort}</button>
-          </div>
+          <button class="js-pinned-toggle" style="display:none;align-items:center;gap:4px;padding:2px 8px 4px;background:none;border:none;font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:${C.textDim};cursor:pointer;font-family:${C.font};">
+            <span class="js-pinned-chevron" style="display:inline-flex;transition:transform .15s;">${ICONS.chevronDown}</span>
+            <span>Angeheftet</span>
+          </button>
         </div>
-        <div class="js-chats" style="flex:1 1 auto;overflow-y:auto;padding:2px 8px 10px;"></div>
+        <div class="js-pinned-chats" style="flex:0 0 auto;overflow-y:auto;padding:2px 8px 0;max-height:40%;"></div>
+        <div class="js-chats-toggle-row" style="display:flex;align-items:center;justify-content:space-between;margin-top:6px;padding:0 4px;">
+          <button class="js-chats-toggle" style="display:flex;align-items:center;gap:4px;padding:8px 8px 4px;background:none;border:none;font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:${C.textDim};cursor:pointer;font-family:${C.font};">
+            <span class="js-chats-chevron" style="display:inline-flex;transition:transform .15s;">${ICONS.chevronDown}</span>
+            <span>Chats und Aufgaben</span>
+          </button>
+          <button class="js-chats-sort" title="Filtern und gruppieren" style="background:none;border:none;color:${C.textDim};cursor:pointer;display:inline-flex;padding:5px;">${ICONS.sort}</button>
+        </div>
+        <div class="js-chats" style="flex:1 1 auto;overflow-y:auto;padding:2px 8px 10px;position:relative;"></div>
+        <div class="js-chatitem-menu" style="display:none;position:absolute;width:180px;background:${C.bgSoft};border:1px solid ${C.border};border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.4);overflow:hidden;z-index:35;"></div>
         <button class="js-settings-row" style="padding:10px 12px;border-top:1px solid ${C.border};border-radius:0;display:flex;align-items:center;gap:8px;background:none;border-left:none;border-right:none;border-bottom:none;width:100%;text-align:left;cursor:pointer;transition:background .15s;font-family:${C.font};">
           <span class="js-settings" style="width:32px;height:32px;border-radius:9px;color:${C.textSoft};display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;">${ICONS.settings}</span>
           <span class="js-settings-label" style="font-size:13px;color:${C.textSoft};flex:1;">Einstellungen</span>
@@ -492,9 +508,15 @@
           <div class="js-projects-search-row" style="display:none;margin-bottom:20px;">
             <input class="js-projects-search-input" type="text" placeholder="Projekte durchsuchen…" style="width:100%;max-width:360px;padding:9px 14px;background:${C.bgHover};border:1px solid ${C.border};border-radius:10px;color:${C.text};font-size:13px;font-family:${C.font};outline:none;" />
           </div>
+          <button class="js-projects-pinned-toggle" style="display:none;align-items:center;gap:4px;padding:0 0 10px;background:none;border:none;font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:${C.textDim};cursor:pointer;font-family:${C.font};">
+            <span class="js-projects-pinned-chevron" style="display:inline-flex;transition:transform .15s;">${ICONS.chevronDown}</span>
+            <span>Angeheftet</span>
+          </button>
+          <div class="js-projects-pinned-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:16px;margin-bottom:24px;"></div>
           <div class="js-projects-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:16px;"></div>
           <div class="js-project-card-menu" style="display:none;position:absolute;width:170px;background:${C.bgSurface3};border:1px solid ${C.border};border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.4);overflow:hidden;z-index:5;">
             <button class="js-pcm-rename" style="display:block;width:100%;text-align:left;padding:9px 14px;background:none;border:none;color:${C.text};font-size:13px;cursor:pointer;font-family:${C.font};">Umbenennen</button>
+            <button class="js-pcm-pin" style="display:block;width:100%;text-align:left;padding:9px 14px;background:none;border:none;color:${C.text};font-size:13px;cursor:pointer;font-family:${C.font};">Anheften</button>
             <button class="js-pcm-delete" style="display:block;width:100%;text-align:left;padding:9px 14px;background:none;border:none;color:#e5735f;font-size:13px;cursor:pointer;font-family:${C.font};">Löschen</button>
           </div>
           <div class="js-projects-sort-menu" style="display:none;position:absolute;width:190px;background:${C.bgSurface3};border:1px solid ${C.border};border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.4);overflow:hidden;z-index:5;">
@@ -664,8 +686,33 @@
     `;
     document.body.appendChild(newProjectSheetEl);
 
+    // Kleiner Umbenennen-Dialog für einzelne Konversationen (Drei-Punkte-Menü
+    // im Chat-Verlauf) — bewusst separat vom Projekt-Dialog oben, der auch
+    // noch einen Ordner/eine Beschreibung mitführt, was eine Konversation
+    // nicht hat.
+    renameChatSheetEl = document.createElement('div');
+    renameChatSheetEl.id = 'jsRenameChatSheet';
+    renameChatSheetEl.style.cssText = `position:fixed;inset:0;z-index:60;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.5);`;
+    renameChatSheetEl.innerHTML = `
+      <div style="width:360px;max-width:90vw;background:${C.bgSoft};border:1px solid ${C.border};border-radius:16px;box-shadow:0 20px 60px rgba(0,0,0,.5);overflow:hidden;">
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 18px;border-bottom:1px solid ${C.border};">
+          <span style="font-size:16px;font-weight:600;color:${C.text};">Umbenennen</span>
+          <button class="js-renamechat-close" title="Schließen" style="width:28px;height:28px;border-radius:8px;background:none;border:none;color:${C.textSoft};cursor:pointer;font-size:16px;line-height:1;">×</button>
+        </div>
+        <div style="padding:18px;display:flex;flex-direction:column;gap:12px;">
+          <input class="js-renamechat-input" type="text" style="width:100%;box-sizing:border-box;padding:9px 10px;background:${C.bg};border:1px solid ${C.border};border-radius:8px;color:${C.text};font-size:13px;outline:none;font-family:${C.font};" />
+          <div style="display:flex;justify-content:flex-end;gap:8px;">
+            <button class="js-renamechat-cancel" style="padding:8px 14px;border:1px solid ${C.border};border-radius:8px;background:none;color:${C.textSoft};font-size:13px;cursor:pointer;font-family:${C.font};">Abbrechen</button>
+            <button class="js-renamechat-save" style="padding:8px 14px;border:none;border-radius:8px;background:${C.accent};color:#fff;font-size:13px;font-weight:600;cursor:pointer;font-family:${C.font};">Speichern</button>
+          </div>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(renameChatSheetEl);
+
     sidebarEl = $('.js-sidebar', uiEl);
     chatListEl = $('.js-chats', uiEl);
+    pinnedChatListEl = $('.js-pinned-chats', uiEl);
     chatRootEl = $('.js-main', uiEl);
     threadEl = $('.js-thread', uiEl);
     composerTray = $('.js-composer', uiEl);
@@ -677,6 +724,7 @@
     attachPreviewEl = $('.js-attach-preview', uiEl);
     projectsViewEl = $('.js-projects-view', uiEl);
     projectsGridEl = $('.js-projects-grid', uiEl);
+    projectsPinnedGridEl = $('.js-projects-pinned-grid', uiEl);
     projectsSearchRowEl = $('.js-projects-search-row', uiEl);
     projectsSearchInputEl = $('.js-projects-search-input', uiEl);
     projectDetailViewEl = $('.js-project-detail-view', uiEl);
@@ -715,7 +763,7 @@
     const s = document.createElement('style');
     s.id = 'jsAppCss';
     s.textContent = `
-      body.js-app-active > :not(#jsApp):not(#jarvisOrb):not(#jsSpeechbar):not(#jsSpeechCaption):not(#jsSettingsSheet):not(#jsNewProjectSheet):not(script):not(style) { display:none !important; }
+      body.js-app-active > :not(#jsApp):not(#jarvisOrb):not(#jsSpeechbar):not(#jsSpeechCaption):not(#jsSettingsSheet):not(#jsNewProjectSheet):not(#jsRenameChatSheet):not(script):not(style) { display:none !important; }
       body.js-app-active { overflow:hidden; }
       .js-sidebar button:focus-visible, .js-main button:focus-visible { outline:2px solid ${C.accent}; outline-offset:2px; }
       .js-editor:empty::before, .js-editor.is-empty::before { content:attr(data-placeholder); color:${C.textDim}; pointer-events:none; }
@@ -724,6 +772,9 @@
       .js-side-toggle:hover, .js-side-toggle-float:hover { background:${C.bgHover}; color:${C.text}; }
       .js-search-toggle svg, .js-projects-pin-add svg, .js-chats-sort svg, .js-projects-pin-hint svg { width:15px; height:15px; display:block; flex:0 0 auto; }
       .js-search-toggle:hover, .js-projects-pin-add:hover, .js-chats-sort:hover { background:${C.bgHover}; color:${C.text}; border-radius:7px; }
+      .js-nav-back svg, .js-nav-forward svg { width:15px; height:15px; display:block; flex:0 0 auto; }
+      .js-nav-back:hover:not(:disabled), .js-nav-forward:hover:not(:disabled) { background:${C.bgHover}; color:${C.text}; }
+      .js-nav-back:disabled, .js-nav-forward:disabled { opacity:.35; cursor:default; }
       .js-projects-search-btn svg, .js-projects-sort-btn svg { width:18px; height:18px; display:block; }
       .js-project-menu-btn svg, .js-project-pin-btn svg { width:16px; height:16px; display:block; }
       .js-upload svg, .js-note svg, .js-settings svg { width:18px; height:18px; }
@@ -745,14 +796,15 @@
       .js-chat-item.selected { background:${C.bgHover}; color:${C.text}; }
       .js-chat-item .js-ico { flex:0 0 auto; display:inline-flex; align-items:center; justify-content:center; width:15px; height:15px; color:${C.textDim}; }
       .js-chat-item .js-ico svg { width:15px; height:15px; display:block; }
-      .js-chat-delete { position:absolute; right:6px; top:50%; transform:translateY(-50%); width:22px; height:22px; border-radius:6px; background:none; border:none; color:${C.textDim}; cursor:pointer; display:none; align-items:center; justify-content:center; }
-      .js-chat-item:hover .js-chat-delete { display:inline-flex; }
-      .js-chat-delete:hover { background:${C.border}; color:#e5735f; }
-      .js-chat-delete svg { width:13px; height:13px; display:block; }
-      .js-chats-toggle .js-chats-chevron svg { width:13px; height:13px; display:block; }
-      .js-chats-toggle.is-collapsed .js-chats-chevron { transform:rotate(-90deg); }
-      .js-chats.is-collapsed { display:none !important; }
-      .js-chat-item .js-txt { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+      .js-chats-toggle .js-chats-chevron svg, .js-pinned-toggle .js-pinned-chevron svg, .js-projects-pinned-toggle .js-projects-pinned-chevron svg { width:13px; height:13px; display:block; }
+      .js-chats-toggle.is-collapsed .js-chats-chevron, .js-pinned-toggle.is-collapsed .js-pinned-chevron, .js-projects-pinned-toggle.is-collapsed .js-projects-pinned-chevron { transform:rotate(-90deg); }
+      .js-chats.is-collapsed, .js-pinned-chats.is-collapsed { display:none !important; }
+      .js-chat-item .js-txt { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; flex:1; }
+      .js-chatitem-menu-btn { opacity:0; transition:opacity .1s; flex:0 0 auto; background:none; border:none; color:${C.textSoft}; cursor:pointer; padding:2px; display:inline-flex; border-radius:6px; }
+      .js-chat-item:hover .js-chatitem-menu-btn, .js-chatitem-menu-btn.is-open { opacity:1; }
+      .js-chatitem-menu-btn:hover { background:${C.border}; }
+      .js-chatitem-menu-btn svg { width:14px; height:14px; display:block; }
+      .js-chatitem-menu button:hover { background:${C.bgHover}; }
       .js-turn { max-width:768px; margin:0 auto 24px; font-family:${C.font}; line-height:1.6; display:flex; flex-direction:column; }
       .js-you { align-items:flex-end; }
       .js-jarvis { align-items:flex-start; text-align:left; }
@@ -797,7 +849,7 @@
       .js-project-card { position:relative; cursor:pointer; }
       .js-project-menu-btn { opacity:0; transition:opacity .1s; }
       .js-project-card:hover .js-project-menu-btn, .js-project-menu-btn.is-open { opacity:1; }
-      .js-pcm-rename:hover, .js-pcm-delete:hover, .js-psm-opt:hover { background:${C.bgHover}; }
+      .js-pcm-rename:hover, .js-pcm-pin:hover, .js-pcm-delete:hover, .js-psm-opt:hover { background:${C.bgHover}; }
       .js-psm-opt.active { color:${C.accent} !important; }
       .js-pd-back:hover { text-decoration:underline; }
       .js-pd-editor:empty::before { content:attr(data-placeholder); color:${C.textDim}; pointer-events:none; }
@@ -810,6 +862,62 @@
   }
 
   // ------------------------------------------------------------- wire UI
+  function navSnapshot() {
+    if (uiEl && uiEl.classList.contains('js-project-detail-active')) return { v: 'projectDetail', id: viewingProjectId };
+    if (uiEl && uiEl.classList.contains('js-projects-active')) return { v: 'projects' };
+    return { v: 'chat', mode: activeMode, id: currentConversationId, projectId: currentProjectId };
+  }
+  function navEqual(a, b) {
+    if (!a || !b || a.v !== b.v) return false;
+    if (a.v === 'chat') return a.mode === b.mode && a.id === b.id;
+    if (a.v === 'projectDetail') return a.id === b.id;
+    return true;  // 'projects' — nur eine Ausprägung
+  }
+  function updateNavButtons() {
+    if (!uiEl) return;
+    const back = $('.js-nav-back', uiEl);
+    const fwd = $('.js-nav-forward', uiEl);
+    if (back) back.disabled = navPos <= 0;
+    if (fwd) fwd.disabled = navPos >= navStack.length - 1;
+  }
+  // Aufgerufen am Ende jeder echten Navigationsaktion (Konversation öffnen,
+  // neuer Chat, Projekte-Grid, Projekt-Detail, Chat/Code-Wechsel) — nie
+  // während navGo() eine alte Seite wiederherstellt (navRestoring), sonst
+  // würde jeder Schritt zurück sofort wieder einen Schritt vorwärts anhängen.
+  function navRecord() {
+    if (navRestoring) return;
+    const snap = navSnapshot();
+    if (navPos >= 0 && navEqual(navStack[navPos], snap)) { updateNavButtons(); return; }
+    navStack = navStack.slice(0, navPos + 1);
+    navStack.push(snap);
+    navPos = navStack.length - 1;
+    updateNavButtons();
+  }
+  function navApply(snap) {
+    if (snap.v === 'projects') { openProjectsView(); return; }
+    if (snap.v === 'projectDetail') {
+      const p = projectsList.find((pp) => pp.id === snap.id);
+      if (p) openProjectDetail(p); else openProjectsView();
+      return;
+    }
+    if (activeMode !== snap.mode) setMode(snap.mode);
+    if (snap.id) {
+      currentConversationId = null;  // erzwingt echtes Neu-Rendern in openConversation
+      openConversation(snap.id, snap.projectId);
+    } else {
+      startNewConversation();
+    }
+  }
+  function navGo(delta) {
+    const newPos = navPos + delta;
+    if (newPos < 0 || newPos >= navStack.length) return;
+    navPos = newPos;
+    navRestoring = true;
+    navApply(navStack[navPos]);
+    navRestoring = false;
+    updateNavButtons();
+  }
+
   function setMode(mode) {
     if (mode !== 'chat' && mode !== 'code') return;
     closeProjectsView();
@@ -823,6 +931,7 @@
       buildCodeView();
       loadCodeStatus();
       ensureCodeSocket();
+      navRecord();
       return;
     }
     // Code-Tab verlassen: den Terminal-Socket schließen (der Server beendet die
@@ -839,10 +948,11 @@
     activeMode = mode;
     const saved = localStorage.getItem(modeKey(mode));
     const nextId = saved && isModeConv(mode, saved) ? saved : null;
-    if (nextId === currentConversationId) { loadConversationList(); return; }
+    if (nextId === currentConversationId) { loadConversationList(); navRecord(); return; }
     currentConversationId = nextId;
     renderConversation(nextId);
     loadConversationList();
+    navRecord();
   }
 
   // Lädt die Turns einer Konversation in den Thread (oder leert ihn, wenn
@@ -882,6 +992,33 @@
   }
 
   // Sidebar list — backed by the real per-conversation store.
+  function renderChatItem(conv) {
+    const el = document.createElement('div');
+    el.className = 'js-chat-item';
+    el.dataset.id = conv.id;
+    if (conv.project_id) el.dataset.projectId = conv.project_id;
+    if (conv.id === currentConversationId) el.classList.add('selected');
+    const ico = document.createElement('span');
+    ico.className = 'js-ico';
+    ico.innerHTML = ICONS.bullet;
+    const txt = document.createElement('span');
+    txt.className = 'js-txt';
+    txt.textContent = conv.title || 'Neu';
+    txt.title = txt.textContent;
+    el.dataset.title = (conv.title || 'Neu').toLowerCase();
+    const menuBtn = document.createElement('button');
+    menuBtn.className = 'js-chatitem-menu-btn';
+    menuBtn.title = 'Optionen';
+    menuBtn.innerHTML = ICONS.dots;
+    el.appendChild(ico);
+    el.appendChild(txt);
+    el.appendChild(menuBtn);
+    el.addEventListener('click', (e) => {
+      if (e.target.closest('.js-chatitem-menu-btn')) return;
+      openConversation(conv.id, conv.project_id || null);
+    });
+    return el;
+  }
   async function loadConversationList() {
     if (!chatListEl) return;
     let list = [];
@@ -890,9 +1027,30 @@
       const j = await r.json();
       list = (j.conversations || []).filter((c) => isModeConv(activeMode, c.id));
     } catch (e) { list = []; }
+    allConversations = list;
+    const pinned = list.filter((c) => c.pinned);
+    const unpinned = list.filter((c) => !c.pinned);
+
+    if (pinnedChatListEl) {
+      pinnedChatListEl.innerHTML = '';
+      if (pinned.length) {
+        pinned.forEach((c) => pinnedChatListEl.appendChild(renderChatItem(c)));
+      } else {
+        const d = document.createElement('div');
+        d.className = 'js-chat-item';
+        d.style.color = C.textDim;
+        d.style.cursor = 'default';
+        d.textContent = 'Noch nichts angeheftet';
+        pinnedChatListEl.appendChild(d);
+      }
+    }
+    // Immer sichtbar, auch ohne angeheftete Elemente — nur das Auf-/
+    // Zuklappen entscheidet, ob die Liste (mit Leerzustand) zu sehen ist.
+    const pinnedToggle = uiEl ? $('.js-pinned-toggle', uiEl) : null;
+    if (pinnedToggle) pinnedToggle.style.display = 'flex';
+
     chatListEl.innerHTML = '';
-    chatListEl.dataset.empty = list.length ? '' : '1';
-    if (!list.length) {
+    if (!unpinned.length) {
       const d = document.createElement('div');
       d.className = 'js-chat-item';
       d.style.color = C.textDim;
@@ -901,40 +1059,7 @@
       chatListEl.appendChild(d);
       return;
     }
-    for (const conv of list) {
-      const el = document.createElement('div');
-      el.className = 'js-chat-item';
-      el.dataset.title = (conv.title || 'Neu').toLowerCase();
-      if (conv.id === currentConversationId) el.classList.add('selected');
-      const ico = document.createElement('span');
-      ico.className = 'js-ico';
-      ico.innerHTML = '<span style="display:inline-block;width:6px;height:6px;border-radius:50%;border:1px solid currentColor;opacity:.5;"></span>';
-      const txt = document.createElement('span');
-      txt.className = 'js-txt';
-      txt.textContent = conv.title || 'Neu';
-      txt.title = txt.textContent;
-      const delBtn = document.createElement('button');
-      delBtn.type = 'button';
-      delBtn.className = 'js-chat-delete';
-      delBtn.title = 'Löschen';
-      delBtn.innerHTML = ICONS.trash;
-      delBtn.addEventListener('click', async (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        if (!confirm(`"${conv.title || 'Neu'}" löschen?`)) return;
-        try {
-          const qs = conv.project_id ? `?project_id=${encodeURIComponent(conv.project_id)}` : '';
-          await fetch(`/conversations/${encodeURIComponent(conv.id)}${qs}`, { method: 'DELETE' });
-        } catch (e2) {}
-        if (conv.id === currentConversationId) startNewConversation();
-        loadConversationList();
-      });
-      el.appendChild(ico);
-      el.appendChild(txt);
-      el.appendChild(delBtn);
-      el.addEventListener('click', () => openConversation(conv.id));
-      chatListEl.appendChild(el);
-    }
+    unpinned.forEach((c) => chatListEl.appendChild(renderChatItem(c)));
   }
 
   function filterChatList(query) {
@@ -949,11 +1074,12 @@
   async function openConversation(id, projectId) {
     closeProjectsView();
     currentProjectId = projectId || null;
-    if (id === currentConversationId) return;
+    if (id === currentConversationId) { navRecord(); return; }
     currentConversationId = id;
     localStorage.setItem(modeKey(activeMode), id);
     await renderConversation(id, projectId);
     loadConversationList();
+    navRecord();
   }
 
   function startNewConversation() {
@@ -963,6 +1089,7 @@
     history = [];
     clearThreadUI();
     loadConversationList();
+    navRecord();
   }
 
   // ------------------------------------------------------------ Projekte
@@ -983,6 +1110,7 @@
     closeProjectDetail();
     if (uiEl) uiEl.classList.add('js-projects-active');
     loadProjects();
+    navRecord();
   }
   function closeProjectsView() {
     if (uiEl) uiEl.classList.remove('js-projects-active');
@@ -995,6 +1123,7 @@
     if (pdTitleEl) pdTitleEl.textContent = project.name;
     if (pdEditorEl) { pdEditorEl.innerText = ''; }
     loadProjectRecent();
+    navRecord();
   }
   function closeProjectDetail() {
     if (uiEl) uiEl.classList.remove('js-project-detail-active');
@@ -1047,7 +1176,6 @@
       projectsList = j.projects || [];
     } catch (e) { projectsList = []; }
     renderProjectsGrid();
-    renderPinnedProjects();
   }
   function sortedProjects(list) {
     list = list.slice();
@@ -1057,57 +1185,70 @@
     else list.sort((a, b) => (b.created_at || '').localeCompare(a.created_at || '')); // 'newest' (Standard)
     return list;
   }
+  function projectCardHtml(p) {
+    return `
+      <div class="js-project-card" data-id="${p.id}" style="position:relative;border:1px solid ${C.border};border-radius:14px;padding:16px 18px;background:${C.bgSurface3};transition:border-color .15s;display:flex;flex-direction:column;min-height:110px;">
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px;padding-right:44px;">
+          <span style="font-size:14px;font-weight:600;color:${C.text};">${escapeHtml(p.name)}</span>
+          ${p.tag ? `<span style="font-size:11px;padding:2px 8px;border-radius:10px;background:${C.bgHover};color:${C.textSoft};">${escapeHtml(p.tag)}</span>` : ''}
+        </div>
+        <button class="js-project-pin-btn" data-id="${p.id}" title="${p.pinned ? 'Lösen' : 'Anheften'}" style="position:absolute;top:12px;right:32px;background:none;border:none;color:${p.pinned ? C.accent : C.textSoft};cursor:pointer;padding:4px;display:inline-flex;">${p.pinned ? ICONS.pinFilled : ICONS.pin}</button>
+        <button class="js-project-menu-btn" data-id="${p.id}" title="Optionen" style="position:absolute;top:12px;right:10px;background:none;border:none;color:${C.textSoft};cursor:pointer;padding:4px;display:inline-flex;">${ICONS.dots}</button>
+        ${p.dir ? `<div style="font-size:11px;color:${C.textDim};font-family:monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-bottom:8px;" title="${escapeHtml(p.dir)}">${escapeHtml(p.dir)}</div>` : ''}
+        ${p.description ? `<div style="font-size:13px;color:${C.textSoft};line-height:1.45;flex:1;">${escapeHtml(p.description)}</div>` : '<div style="flex:1;"></div>'}
+        <div style="font-size:12px;color:${C.textDim};margin-top:10px;">${formatProjectDate(p.created_at)}</div>
+      </div>
+    `;
+  }
   function renderProjectsGrid() {
     if (!projectsGridEl) return;
     let list = projectsList.slice();
     const q = (projectsSearchInputEl ? projectsSearchInputEl.value : '').trim().toLowerCase();
     if (q) list = list.filter((p) => p.name.toLowerCase().includes(q) || (p.description || '').toLowerCase().includes(q));
     list = sortedProjects(list);
-    if (!list.length) {
-      projectsGridEl.innerHTML = `<div style="grid-column:1/-1;color:${C.textDim};font-size:13px;padding:8px 2px;">${q ? 'Keine Projekte gefunden.' : 'Noch keine Projekte — leg oben eins an.'}</div>`;
-      return;
+    const pinned = list.filter((p) => p.pinned);
+    const rest = list.filter((p) => !p.pinned);
+
+    // Immer sichtbar, auch ohne angeheftete Projekte — nur das Auf-/
+    // Zuklappen entscheidet, ob das Grid (mit Leerzustand) zu sehen ist.
+    const pinnedToggle = $('.js-projects-pinned-toggle', uiEl);
+    if (pinnedToggle) pinnedToggle.style.display = 'flex';
+    if (projectsPinnedGridEl) {
+      projectsPinnedGridEl.style.display = projectsPinnedGridEl.classList.contains('is-collapsed') ? 'none' : 'grid';
+      projectsPinnedGridEl.innerHTML = pinned.length
+        ? pinned.map(projectCardHtml).join('')
+        : `<div style="grid-column:1/-1;color:${C.textDim};font-size:13px;">Noch nichts angeheftet.</div>`;
     }
-    projectsGridEl.innerHTML = list.map((p) => `
-      <div class="js-project-card" data-id="${p.id}" style="position:relative;border:1px solid ${C.border};border-radius:14px;padding:16px 18px;background:${C.bgSurface3};transition:border-color .15s;display:flex;flex-direction:column;min-height:110px;">
-        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px;padding-right:44px;">
-          <span style="font-size:14px;font-weight:600;color:${C.text};">${escapeHtml(p.name)}</span>
-          ${p.tag ? `<span style="font-size:11px;padding:2px 8px;border-radius:10px;background:${C.bgHover};color:${C.textSoft};">${escapeHtml(p.tag)}</span>` : ''}
-        </div>
-        <button class="js-project-pin-btn" data-id="${p.id}" title="${isProjectPinned(p.id) ? 'Lösen' : 'Anheften'}" style="position:absolute;top:12px;right:32px;background:none;border:none;color:${isProjectPinned(p.id) ? C.accent : C.textSoft};cursor:pointer;padding:4px;display:inline-flex;">${isProjectPinned(p.id) ? ICONS.pinFilled : ICONS.pin}</button>
-        <button class="js-project-menu-btn" data-id="${p.id}" title="Optionen" style="position:absolute;top:12px;right:10px;background:none;border:none;color:${C.textSoft};cursor:pointer;padding:4px;display:inline-flex;">${ICONS.dots}</button>
-        ${p.dir ? `<div style="font-size:11px;color:${C.textDim};font-family:monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-bottom:8px;" title="${escapeHtml(p.dir)}">${escapeHtml(p.dir)}</div>` : ''}
-        ${p.description ? `<div style="font-size:13px;color:${C.textSoft};line-height:1.45;flex:1;">${escapeHtml(p.description)}</div>` : '<div style="flex:1;"></div>'}
-        <div style="font-size:12px;color:${C.textDim};margin-top:10px;">${formatProjectDate(p.created_at)}</div>
-      </div>
-    `).join('');
-    projectsGridEl.querySelectorAll('.js-project-pin-btn').forEach((btn) => {
-      btn.addEventListener('click', (e) => {
-        e.preventDefault(); e.stopPropagation();
-        toggleProjectPin(btn.dataset.id);
-        renderProjectsGrid();
-        renderPinnedProjects();
+
+    projectsGridEl.innerHTML = rest.length
+      ? rest.map(projectCardHtml).join('')
+      : (pinned.length ? '' : `<div style="grid-column:1/-1;color:${C.textDim};font-size:13px;padding:8px 2px;">${q ? 'Keine Projekte gefunden.' : 'Noch keine Projekte — leg oben eins an.'}</div>`);
+    [projectsGridEl, projectsPinnedGridEl].forEach((gridEl) => {
+      if (!gridEl) return;
+      gridEl.querySelectorAll('.js-project-pin-btn').forEach((btn) => {
+        btn.addEventListener('click', async (e) => {
+          e.preventDefault(); e.stopPropagation();
+          const p = projectsList.find((x) => x.id === btn.dataset.id);
+          if (!p) return;
+          try {
+            await fetch(`/projects/${encodeURIComponent(p.id)}`, {
+              method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pinned: !p.pinned }),
+            });
+          } catch (e2) {}
+          await loadProjects();
+        });
       });
     });
+    renderPinnedProjects();
   }
 
-  // Angeheftete Projekte — rein clientseitig in localStorage, da es nur
-  // steuert, was in DIESER Sidebar oben auftaucht (keine geteilte
-  // Server-Ansicht, die synchron sein müsste).
-  function getPinnedProjectIds() {
-    try { return JSON.parse(localStorage.getItem('jarvis_pinned_projects') || '[]'); } catch (e) { return []; }
-  }
-  function isProjectPinned(id) { return getPinnedProjectIds().includes(id); }
-  function toggleProjectPin(id) {
-    const ids = getPinnedProjectIds();
-    const i = ids.indexOf(id);
-    if (i >= 0) ids.splice(i, 1); else ids.push(id);
-    localStorage.setItem('jarvis_pinned_projects', JSON.stringify(ids));
-  }
+  // Sidebar-Vorschau der angehefteten Projekte — liest dieselben,
+  // serverseitig persistierten p.pinned wie die Projekte-Seite, damit beide
+  // Ansichten (Sidebar + volle Projektliste) immer synchron sind.
   function renderPinnedProjects() {
     const hintEl = $('.js-projects-pin-hint', uiEl);
     if (!hintEl) return;
-    const ids = getPinnedProjectIds();
-    const pinned = ids.map((id) => projectsList.find((p) => p.id === id)).filter(Boolean);
+    const pinned = projectsList.filter((p) => p.pinned);
     if (!pinned.length) {
       hintEl.style.display = 'flex';
       hintEl.nextElementSibling && hintEl.nextElementSibling.remove();
@@ -1223,6 +1364,99 @@
     if (menu) menu.style.display = 'none';
   }
 
+  // ---------------------------------------------------- Konversations-Menü
+  function findConv(id) {
+    return allConversations.find((c) => c.id === id);
+  }
+  function closeChatItemMenu() {
+    const menu = $('.js-chatitem-menu', uiEl);
+    if (menu) menu.style.display = 'none';
+    if (uiEl) uiEl.querySelectorAll('.js-chatitem-menu-btn.is-open').forEach((b) => b.classList.remove('is-open'));
+    chatItemMenuTargetId = null;
+    chatItemMenuTargetProjectId = null;
+  }
+  function openChatItemMenu(btn, id, projectId) {
+    closeProjectCardMenu();
+    closeProjectsSortMenu();
+    const menu = $('.js-chatitem-menu', uiEl);
+    const alreadyOpenForThis = chatItemMenuTargetId === id && menu.style.display !== 'none';
+    closeChatItemMenu();
+    if (alreadyOpenForThis) return;
+    chatItemMenuTargetId = id;
+    chatItemMenuTargetProjectId = projectId || null;
+    const conv = findConv(id);
+    const pinLabel = conv && conv.pinned ? 'Lösen' : 'Anheften';
+    menu.innerHTML = `
+      <button class="js-cim-rename" style="display:block;width:100%;text-align:left;padding:9px 14px;background:none;border:none;color:${C.text};font-size:13px;cursor:pointer;font-family:${C.font};">Umbenennen</button>
+      <button class="js-cim-pin" style="display:block;width:100%;text-align:left;padding:9px 14px;background:none;border:none;color:${C.text};font-size:13px;cursor:pointer;font-family:${C.font};">${pinLabel}</button>
+      <button class="js-cim-reveal" style="display:block;width:100%;text-align:left;padding:9px 14px;background:none;border:none;color:${C.text};font-size:13px;cursor:pointer;font-family:${C.font};">Im Ordner anzeigen</button>
+      <button class="js-cim-delete" style="display:block;width:100%;text-align:left;padding:9px 14px;background:none;border:none;color:#e5735f;font-size:13px;cursor:pointer;font-family:${C.font};">Löschen</button>
+    `;
+    btn.classList.add('is-open');
+    menu.style.display = 'block';
+    positionFloatingMenu(btn, menu);
+    $('.js-cim-rename', menu).addEventListener('click', (e) => { e.preventDefault(); openRenameChatModal(id); closeChatItemMenu(); });
+    $('.js-cim-pin', menu).addEventListener('click', async (e) => {
+      e.preventDefault();
+      const c = findConv(id);
+      const nextPinned = !(c && c.pinned);
+      closeChatItemMenu();
+      try {
+        await fetch(`/conversations/${encodeURIComponent(id)}${projectId ? '?project_id=' + encodeURIComponent(projectId) : ''}`, {
+          method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pinned: nextPinned }),
+        });
+      } catch (e2) {}
+      loadConversationList();
+    });
+    $('.js-cim-reveal', menu).addEventListener('click', async (e) => {
+      e.preventDefault();
+      closeChatItemMenu();
+      try {
+        await fetch(`/conversations/${encodeURIComponent(id)}/reveal${projectId ? '?project_id=' + encodeURIComponent(projectId) : ''}`, { method: 'POST' });
+      } catch (e2) {}
+    });
+    $('.js-cim-delete', menu).addEventListener('click', (e) => {
+      e.preventDefault();
+      const c = findConv(id);
+      closeChatItemMenu();
+      if (!confirm(`"${c ? (c.title || 'Unbenannt') : 'Diese Konversation'}" wirklich löschen?`)) return;
+      (async () => {
+        try {
+          await fetch(`/conversations/${encodeURIComponent(id)}${projectId ? '?project_id=' + encodeURIComponent(projectId) : ''}`, { method: 'DELETE' });
+        } catch (e2) {}
+        if (id === currentConversationId) startNewConversation();
+        loadConversationList();
+      })();
+    });
+  }
+  function openRenameChatModal(id) {
+    if (!renameChatSheetEl) return;
+    const c = findConv(id);
+    renamingChatId = id;
+    renamingChatProjectId = (c && c.project_id) || null;
+    $('.js-renamechat-input', renameChatSheetEl).value = (c && c.title) || '';
+    renameChatSheetEl.style.display = 'flex';
+    $('.js-renamechat-input', renameChatSheetEl).focus();
+  }
+  function closeRenameChatModal() {
+    if (renameChatSheetEl) renameChatSheetEl.style.display = 'none';
+    renamingChatId = null;
+    renamingChatProjectId = null;
+  }
+  async function saveRenameChatModal() {
+    const title = $('.js-renamechat-input', renameChatSheetEl).value.trim();
+    if (!title || !renamingChatId) return;
+    const id = renamingChatId, pid = renamingChatProjectId;
+    closeRenameChatModal();
+    try {
+      await fetch(`/conversations/${encodeURIComponent(id)}${pid ? '?project_id=' + encodeURIComponent(pid) : ''}`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title }),
+      });
+    } catch (e) {}
+    loadConversationList();
+    if (viewingProjectId) loadProjectRecent();
+  }
+
   function wireUi() {
     $('.js-new', uiEl).addEventListener('click', () => { closeProjectsView(); closeProjectDetail(); startNewConversation(); });
     $('.js-chats-toggle', uiEl).addEventListener('click', (e) => {
@@ -1235,6 +1469,34 @@
       chatListEl.classList.add('is-collapsed');
       $('.js-chats-toggle', uiEl).classList.add('is-collapsed');
     }
+    $('.js-pinned-toggle', uiEl).addEventListener('click', (e) => {
+      e.preventDefault();
+      const collapsed = pinnedChatListEl.classList.toggle('is-collapsed');
+      $('.js-pinned-toggle', uiEl).classList.toggle('is-collapsed', collapsed);
+      localStorage.setItem('jarvis_pinned_collapsed', collapsed ? '1' : '0');
+    });
+    if (localStorage.getItem('jarvis_pinned_collapsed') === '1') {
+      pinnedChatListEl.classList.add('is-collapsed');
+      $('.js-pinned-toggle', uiEl).classList.add('is-collapsed');
+    }
+    // Drei-Punkte-Menü pro Konversation — Delegation auf beiden Listen
+    // (angeheftet + normal), da renderChatItem bei jedem loadConversationList
+    // frische Elemente baut.
+    [chatListEl, pinnedChatListEl].forEach((listEl) => {
+      listEl.addEventListener('click', (e) => {
+        const btn = e.target.closest('.js-chatitem-menu-btn');
+        if (!btn) return;
+        e.preventDefault();
+        e.stopPropagation();
+        const item = btn.closest('.js-chat-item');
+        openChatItemMenu(btn, item.dataset.id, item.dataset.projectId);
+      });
+    });
+    $('.js-renamechat-close', renameChatSheetEl).addEventListener('click', (e) => { e.preventDefault(); closeRenameChatModal(); });
+    $('.js-renamechat-cancel', renameChatSheetEl).addEventListener('click', (e) => { e.preventDefault(); closeRenameChatModal(); });
+    $('.js-renamechat-save', renameChatSheetEl).addEventListener('click', (e) => { e.preventDefault(); saveRenameChatModal(); });
+    $('.js-renamechat-input', renameChatSheetEl).addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); saveRenameChatModal(); } });
+    renameChatSheetEl.addEventListener('click', (e) => { if (e.target === renameChatSheetEl) closeRenameChatModal(); });
     $('.js-projects', uiEl).addEventListener('click', (e) => { e.preventDefault(); openProjectsView(); });
     $('.js-customize', uiEl).addEventListener('click', (e) => { e.preventDefault(); openSettings(); });
     $('.js-projects-pin-add', uiEl).addEventListener('click', (e) => { e.preventDefault(); openNewProjectModal(); });
@@ -1257,6 +1519,17 @@
       else if (projectsSearchInputEl) { projectsSearchInputEl.value = ''; renderProjectsGrid(); }
     });
     if (projectsSearchInputEl) projectsSearchInputEl.addEventListener('input', renderProjectsGrid);
+    $('.js-projects-pinned-toggle', uiEl).addEventListener('click', (e) => {
+      e.preventDefault();
+      const collapsed = projectsPinnedGridEl.classList.toggle('is-collapsed');
+      $('.js-projects-pinned-toggle', uiEl).classList.toggle('is-collapsed', collapsed);
+      localStorage.setItem('jarvis_projects_pinned_collapsed', collapsed ? '1' : '0');
+      renderProjectsGrid();
+    });
+    if (localStorage.getItem('jarvis_projects_pinned_collapsed') === '1') {
+      projectsPinnedGridEl.classList.add('is-collapsed');
+      $('.js-projects-pinned-toggle', uiEl).classList.add('is-collapsed');
+    }
     $('.js-projects-sort-btn', uiEl).addEventListener('click', (e) => {
       e.preventDefault();
       e.stopPropagation();
@@ -1277,36 +1550,54 @@
         closeProjectsSortMenu();
       });
     });
-    // Drei-Punkte-Menü pro Karte — Delegation, weil renderProjectsGrid() das
-    // Grid bei jedem Render komplett neu aufbaut (frische Buttons, keine
-    // pro-Karte-Listener nötig).
-    projectsGridEl.addEventListener('click', (e) => {
-      const btn = e.target.closest('.js-project-menu-btn');
-      if (!btn) return;
-      e.preventDefault();
-      e.stopPropagation();
-      closeProjectsSortMenu();
-      const menu = $('.js-project-card-menu', uiEl);
-      const alreadyOpenForThis = projectCardMenuTargetId === btn.dataset.id && menu.style.display !== 'none';
-      closeProjectCardMenu();
-      if (alreadyOpenForThis) return;
-      projectCardMenuTargetId = btn.dataset.id;
-      btn.classList.add('is-open');
-      menu.style.display = 'block';
-      positionFloatingMenu(btn, menu);
-    });
-    projectsGridEl.addEventListener('click', (e) => {
-      if (e.target.closest('.js-project-menu-btn')) return;
-      const card = e.target.closest('.js-project-card');
-      if (!card) return;
-      const project = projectsList.find((p) => p.id === card.dataset.id);
-      if (project) openProjectDetail(project);
+    // Drei-Punkte-Menü pro Karte — Delegation, weil renderProjectsGrid() die
+    // Grids bei jedem Render komplett neu aufbaut (frische Buttons, keine
+    // pro-Karte-Listener nötig). Auf BEIDEN Grids (angeheftet + normal),
+    // da eine Karte je nach Zustand in der einen oder anderen landet.
+    [projectsGridEl, projectsPinnedGridEl].forEach((gridEl) => {
+      gridEl.addEventListener('click', (e) => {
+        const btn = e.target.closest('.js-project-menu-btn');
+        if (!btn) return;
+        e.preventDefault();
+        e.stopPropagation();
+        closeProjectsSortMenu();
+        const menu = $('.js-project-card-menu', uiEl);
+        const alreadyOpenForThis = projectCardMenuTargetId === btn.dataset.id && menu.style.display !== 'none';
+        closeProjectCardMenu();
+        if (alreadyOpenForThis) return;
+        projectCardMenuTargetId = btn.dataset.id;
+        const project = projectsList.find((p) => p.id === btn.dataset.id);
+        $('.js-pcm-pin', menu).textContent = project && project.pinned ? 'Lösen' : 'Anheften';
+        btn.classList.add('is-open');
+        menu.style.display = 'block';
+        positionFloatingMenu(btn, menu);
+      });
+      gridEl.addEventListener('click', (e) => {
+        if (e.target.closest('.js-project-menu-btn')) return;
+        const card = e.target.closest('.js-project-card');
+        if (!card) return;
+        const project = projectsList.find((p) => p.id === card.dataset.id);
+        if (project) openProjectDetail(project);
+      });
     });
     $('.js-pcm-rename', uiEl).addEventListener('click', (e) => {
       e.preventDefault();
       const project = projectsList.find((p) => p.id === projectCardMenuTargetId);
       closeProjectCardMenu();
       if (project) openEditProjectModal(project);
+    });
+    $('.js-pcm-pin', uiEl).addEventListener('click', async (e) => {
+      e.preventDefault();
+      const id = projectCardMenuTargetId;
+      const project = projectsList.find((p) => p.id === id);
+      closeProjectCardMenu();
+      if (!id) return;
+      try {
+        await fetch(`/projects/${encodeURIComponent(id)}`, {
+          method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pinned: !(project && project.pinned) }),
+        });
+      } catch (e2) {}
+      loadProjects();
     });
     $('.js-pcm-delete', uiEl).addEventListener('click', (e) => {
       e.preventDefault();
@@ -1315,7 +1606,7 @@
       closeProjectCardMenu();
       if (id && confirm(`"${project ? project.name : 'Dieses Projekt'}" wirklich löschen?`)) deleteProject(id);
     });
-    window.addEventListener('click', () => { closeProjectCardMenu(); closeProjectsSortMenu(); });
+    window.addEventListener('click', () => { closeProjectCardMenu(); closeProjectsSortMenu(); closeChatItemMenu(); });
     $('.js-newproject-close', newProjectSheetEl).addEventListener('click', (e) => { e.preventDefault(); closeNewProjectModal(); });
     $('.js-newproject-cancel', newProjectSheetEl).addEventListener('click', (e) => { e.preventDefault(); closeNewProjectModal(); });
     $('.js-newproject-create', newProjectSheetEl).addEventListener('click', (e) => { e.preventDefault(); createProjectFromModal(); });
@@ -2310,6 +2601,11 @@
     const delta = cx - window.innerWidth / 2;
     const inner = speechBarEl.firstElementChild;
     if (inner) inner.style.transform = 'translateX(' + delta + 'px)';
+    // Gleicher Versatz für die Untertitel-Box darüber — sonst bleibt sie auf
+    // dem vollen Fenster zentriert, während die Bedienleiste (oben) schon
+    // korrekt über dem Chat-Bereich sitzt, und beide laufen auseinander.
+    const capInner = speechCaptionEl ? speechCaptionEl.firstElementChild : null;
+    if (capInner) capInner.style.transform = 'translateX(' + delta + 'px)';
   }
 
   function enterSpeech() {
@@ -2564,13 +2860,23 @@
       if (floatBtn) floatBtn.style.display = open ? 'inline-flex' : 'none';
       const comp = $('.js-composer', uiEl);
       if (comp) comp.style.left = open ? '0' : '308px';
-      if (orbCanvas) orbCanvas.style.left = open ? '0' : '308px';
+      // orbCanvas selbst bleibt IMMER auf voller Bildschirmbreite (left:0,
+      // inset:0 aus buildUi) — drawOrb() zentriert die Kugel schon selbst
+      // über chatRootEl.getBoundingClientRect() (Viewport-Koordinaten).
+      // Das Canvas hier zusätzlich zu verschieben (frühere Version) machte
+      // die eigene Box schmaler als 100vw + links versetzt, wodurch die auf
+      // Viewport-Koordinaten gezeichnete Kugel bei geöffneter Sidebar 308px
+      // zu weit rechts landete, sobald einmal umgeschaltet wurde.
       layoutSpeechBar();
     };
     const t = $('.js-side-toggle', uiEl);
     if (t) t.addEventListener('click', toggleSidebar);
     const tf = $('.js-side-toggle-float', uiEl);
     if (tf) tf.addEventListener('click', toggleSidebar);
+    const navBackBtn = $('.js-nav-back', uiEl);
+    const navForwardBtn = $('.js-nav-forward', uiEl);
+    if (navBackBtn) navBackBtn.addEventListener('click', () => navGo(-1));
+    if (navForwardBtn) navForwardBtn.addEventListener('click', () => navGo(1));
     window.addEventListener('resize', layoutSpeechBar);
     fetch('/models').then((r) => r.json()).then((j) => { applyModelCaps(j); if (j.current) setModelLabel(j.current); }).catch(() => {});
     openPanelSocket();
