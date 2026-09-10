@@ -70,6 +70,27 @@ def load_config() -> dict:
     return json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
 
 
+def _persist_env(key: str, value: str) -> None:
+    env_path = ROOT_DIR / ".env"
+    lines = env_path.read_text(encoding="utf-8").splitlines() if env_path.exists() else []
+    for i, line in enumerate(lines):
+        if line.startswith(f"{key}="):
+            lines[i] = f"{key}={value}"
+            break
+    else:
+        lines.append(f"{key}={value}")
+    env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def set_lm_studio_base_url(url: str) -> None:
+    """Switch the LM Studio endpoint at runtime (chat, embeddings, model
+    listing all read config.LM_STUDIO_BASE_URL fresh on every call) and
+    persist it to .env so it survives a restart."""
+    global LM_STUDIO_BASE_URL
+    LM_STUDIO_BASE_URL = url.rstrip("/")
+    _persist_env("LM_STUDIO_BASE_URL", LM_STUDIO_BASE_URL)
+
+
 def set_model(model: str) -> None:
     """Switch the active LM Studio model at runtime and persist it to .env
     so it survives a restart too. llm_client._request_targets() reads

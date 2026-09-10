@@ -116,10 +116,13 @@ def set_pinned(conv_id: str, pinned: bool, base_dir: Path | None = None) -> None
         _save(conv, base_dir)
 
 
-def delete(conv_id: str, base_dir: Path | None = None) -> None:
-    path = _path(conv_id, base_dir)
-    if path.exists():
+def delete(conv_id: str, base_dir: Path | None = None) -> bool:
+    with _lock:
+        path = _path(conv_id, base_dir)
+        if not path.exists():
+            return False
         path.unlink()
+        return True
 
 
 def list_conversations(base_dir: Path | None = None) -> list[dict]:
