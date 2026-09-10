@@ -353,7 +353,7 @@
 
   // Code-Tab (echte opencode-TUI in einem eingebetteten xterm.js-Terminal)
   let codeViewEl = null, codeTermEl = null, codeDirEl = null;
-  let codeStatusLabelEl = null, codeDotEl = null, codeRestartBtn = null;
+  let codeStatusLabelEl = null, codeDotEl = null, codeRestartBtn = null, codeContextWarningEl = null;
   let codeTerm = null, codeFit = null;
   let codeWs = null, codeWsOpen = false, codeReconnectTimer = null, codeExited = false;
 
@@ -494,6 +494,7 @@
             </span>
             <button class="js-code-restart" title="Terminal neu starten" style="display:none;align-items:center;gap:6px;padding:5px 10px;background:none;border:1px solid ${C.border};border-radius:9px;color:${C.textSoft};font-size:12px;cursor:pointer;font-family:${C.font};">${ICONS.restart}</button>
           </div>
+          <div class="js-code-context-warning" style="display:none;align-items:flex-start;gap:10px;margin:12px 16px 0;padding:12px 14px;border-radius:10px;background:rgba(229,165,10,.12);border:1px solid rgba(229,165,10,.35);color:#e5a50a;font-size:12.5px;line-height:1.5;flex:0 0 auto;"></div>
           <div class="js-code-terminal" style="flex:1 1 auto;min-width:0;min-height:0;overflow:hidden;background:#12121c;padding:4px 2px 6px;"></div>
         </div>
         <div class="js-projects-view" style="position:absolute;inset:0;display:none;flex-direction:column;min-width:0;min-height:0;overflow-y:auto;padding:40px 48px;">
@@ -2248,6 +2249,7 @@
     codeStatusLabelEl = $('.js-code-status-label', uiEl);
     codeDotEl = $('.js-code-dot', uiEl);
     codeRestartBtn = $('.js-code-restart', uiEl);
+    codeContextWarningEl = $('.js-code-context-warning', uiEl);
 
     if (typeof Terminal === 'undefined' || !codeTermEl) {
       if (codeTermEl) {
@@ -2312,6 +2314,24 @@
       const r = await fetch('/code/status');
       const j = await r.json();
       if (j.dir && codeDirEl) { codeDirEl.textContent = j.dir; codeDirEl.title = j.dir; }
+      // Warnt VOR dem Verbinden, statt LM Studios kryptischen "Unexpected
+      // server error" (Kontext-Overflow durch opencodes ~20k-Token-System-
+      // Prompt) einfach unerklärt im Terminal auftauchen zu lassen.
+      if (codeContextWarningEl) {
+        const models = j.models || [];
+        const minContext = j.min_context || 0;
+        const hasEnough = models.some((m) => (m.loaded_context || 0) >= minContext);
+        if (!models.length) {
+          codeContextWarningEl.style.display = 'flex';
+          codeContextWarningEl.innerHTML = `<span style="flex:0 0 auto;margin-top:1px;">${ICONS.settings}</span><span>LM Studio ist nicht erreichbar — läuft der Server? Ohne LM Studio kann JARVIS Code keine Anfragen stellen.</span>`;
+        } else if (!hasEnough) {
+          const biggest = models.reduce((a, b) => (b.max_context || 0) > (a.max_context || 0) ? b : a, models[0]);
+          codeContextWarningEl.style.display = 'flex';
+          codeContextWarningEl.innerHTML = `<span style="flex:0 0 auto;margin-top:1px;">${ICONS.settings}</span><span>Kein Modell in LM Studio ist mit mindestens ${minContext.toLocaleString('de-DE')} Kontext geladen — opencodes System-Prompt passt sonst nicht hinein und jede Anfrage bricht mit „Unexpected server error" ab. Lade z. B. <b>${escapeHtml(biggest.id)}</b> in LM Studio manuell mit einem größeren Kontextfenster (Entwickler-Tab → Modell laden → Context Length hochsetzen), bevor du hier etwas fragst.</span>`;
+        } else {
+          codeContextWarningEl.style.display = 'none';
+        }
+      }
     } catch (e) {}
   }
 
