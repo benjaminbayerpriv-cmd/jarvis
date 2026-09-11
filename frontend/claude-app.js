@@ -262,8 +262,23 @@
     return new Promise((resolve) => {
       let done = false;
       let src = null;
-      const finish = () => { if (done) return; done = true; clearTimeout(timer); teardownMeter(audio, src); resolve(); };
-      const timer = setTimeout(finish, 4000);
+      // Notbremse für den Fall, dass weder onended noch onerror je feuern
+      // (z.B. ein kaputter Blob) — MUSS die Wiedergabe selbst stoppen, sonst
+      // läuft der alte Clip im Hintergrund weiter, während der nächste Satz
+      // aus der Queue schon losgeht: beide überlagern sich hörbar, was wie
+      // ein nach einer bestimmten Wortzahl "abgehackter" Sprachmodus klingt.
+      // War vorher ein fixer 4s-Timer — jeder Satz mit spürbar mehr als
+      // ~15 Wörtern braucht bei normalem Sprechtempo schon länger als das.
+      const finish = () => { if (done) return; done = true; clearTimeout(timer); try { audio.pause(); } catch (e) {} teardownMeter(audio, src); resolve(); };
+      let timer = setTimeout(finish, 4000);
+      // Sobald die echte Länge bekannt ist, den Timer daran ausrichten statt
+      // an einer geratenen Konstante — großzügiger Puffer für Lade-/
+      // Decodier-Verzögerung.
+      audio.addEventListener('loadedmetadata', () => {
+        if (done || !isFinite(audio.duration)) return;
+        clearTimeout(timer);
+        timer = setTimeout(finish, audio.duration * 1000 + 4000);
+      });
       // Ausgabe-Pegel nur im Sprachmodus messen (dort ist die Orb sichtbar).
       try {
         if (speechMode) {
