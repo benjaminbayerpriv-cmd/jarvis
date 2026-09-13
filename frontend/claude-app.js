@@ -375,6 +375,10 @@
   let uiEl = null, sidebarEl = null, chatListEl = null, chatRootEl = null, threadEl = null;
   let composerTray = null, composerInput = null, sendBtn = null, speechBtn = null, noteBtn = null;
   let uploadBtn = null, settingsBtn = null, modelEl = null, modelBtnEl = null, modelMenuEl = null, fileInput = null;
+  // Slash-Befehle im Composer (wie bei Claude selbst): "/" am Anfang der
+  // Eingabe öffnet eine Liste ausführbarer Befehle statt eine Chat-Nachricht
+  // zu tippen.
+  let slashMenuEl = null, slashMenuMatches = [], slashMenuIndex = 0;
   let attachPreviewEl = null;
   let speechBarEl = null, spMuteBtn = null, spStopBtn = null, spSendBtn = null, spChatBtn = null;
   let speechCaptionEl = null, spcStatusEl = null, spcUserEl = null, spcReplyEl = null;
@@ -643,6 +647,7 @@
             </div>
           </div>
           <div class="js-modelmenu" style="display:none;position:absolute;width:220px;max-height:280px;overflow-y:auto;background:${C.bgSurface3};border:1px solid ${C.border};border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.4);z-index:10;"></div>
+          <div class="js-slashmenu" style="display:none;position:absolute;left:0;right:0;bottom:100%;margin-bottom:8px;max-height:280px;overflow-y:auto;background:${C.bgSurface3};border:1px solid ${C.border};border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.4);z-index:10;"></div>
         </div>
       </div>
     `;
@@ -812,6 +817,7 @@
     modelEl = $('.js-model-label', uiEl);
     modelBtnEl = $('.js-model', uiEl);
     modelMenuEl = $('.js-modelmenu', uiEl);
+    slashMenuEl = $('.js-slashmenu', uiEl);
     // Aus dem Composer-Wrapper gelöst und direkt an #jsApp gehängt, damit es
     // sich relativ zu JEDEM Modell-Button im ganzen Interface positionieren
     // lässt (siehe positionModelMenu) — nicht nur dem im Haupt-Composer.
@@ -1871,12 +1877,15 @@
     if (sendBtn) sendBtn.addEventListener('click', (e) => { e.preventDefault(); sendFromComposer(); });
     if (composerInput) {
       composerInput.addEventListener('keydown', (e) => {
+        if (handleSlashMenuKeydown(e)) return;
         if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendFromComposer(); }
       });
       composerInput.addEventListener('input', () => {
         composerInput.classList.toggle('is-empty', composerInput.innerText.trim().length === 0);
         updateSendSlot();
+        updateSlashMenu();
       });
+      composerInput.addEventListener('blur', () => setTimeout(closeSlashMenu, 150));
     }
     updateSendSlot();
     if (speechBtn) speechBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); speechMode ? exitSpeech() : enterSpeech(); });
@@ -2173,6 +2182,73 @@
   function sendFromComposer() {
     const text = composerInput ? composerInput.innerText.trim() : '';
     if (text || pendingImages.length) sendMessage(text);
+  }
+
+  // ------------------------------------------------------- Slash-Befehle
+  // Liste der verfügbaren "/"-Befehle. Jeder führt eine bereits vorhandene
+  // UI-Aktion aus (kein neuer Code-Pfad) und leert danach den Composer,
+  // statt den Text als Chat-Nachricht abzuschicken.
+  const SLASH_COMMANDS = [
+    { cmd: 'neu', label: 'Neue Unterhaltung', desc: 'Startet einen frischen Chat', run: () => startNewConversation() },
+    { cmd: 'projekte', label: 'Projekte', desc: 'Projektübersicht öffnen', run: () => openProjectsView() },
+    { cmd: 'code', label: 'Code', desc: 'In den Code-Tab wechseln', run: () => setMode('code') },
+    { cmd: 'sprachmodus', label: 'Sprachmodus', desc: 'Mit Jarvis sprechen', run: () => { if (!speechMode) enterSpeech(); } },
+    { cmd: 'diktieren', label: 'Diktieren', desc: 'Spracheingabe ins Textfeld', run: () => setDictating(true) },
+    { cmd: 'modell', label: 'Modell wechseln', desc: 'Anderes LM-Studio-Modell wählen', run: () => toggleModelMenu() },
+    { cmd: 'einstellungen', label: 'Einstellungen', desc: 'Einstellungen öffnen', run: () => openSettings() },
+  ];
+
+  function closeSlashMenu() {
+    if (slashMenuEl) slashMenuEl.style.display = 'none';
+    slashMenuMatches = [];
+  }
+
+  function renderSlashMenu() {
+    if (!slashMenuEl) return;
+    slashMenuEl.innerHTML = slashMenuMatches.map((c, i) => `
+      <div class="js-slash-item" data-i="${i}" style="padding:9px 14px;cursor:pointer;display:flex;flex-direction:column;gap:1px;background:${i === slashMenuIndex ? C.bgHover : 'transparent'};">
+        <span style="font-size:13px;color:${C.text};">/${c.cmd}</span>
+        <span style="font-size:12px;color:${C.textDim};">${c.desc}</span>
+      </div>
+    `).join('');
+    slashMenuEl.querySelectorAll('.js-slash-item').forEach((el) => {
+      el.addEventListener('mouseenter', () => { slashMenuIndex = Number(el.dataset.i); renderSlashMenu(); });
+      el.addEventListener('mousedown', (e) => { e.preventDefault(); runSlashCommand(slashMenuMatches[Number(el.dataset.i)]); });
+    });
+  }
+
+  function runSlashCommand(command) {
+    if (!command) return;
+    closeSlashMenu();
+    if (composerInput) { composerInput.innerText = ''; composerInput.classList.add('is-empty'); }
+    command.run();
+  }
+
+  // Bei jeder Eingabe geprüft: nur wenn "/" das ALLERERSTE Zeichen der
+  // Nachricht ist und noch kein Leerzeichen folgt (man tippt also gerade
+  // noch den Befehlsnamen), zeigen wir die Liste — mitten im Fließtext soll
+  // ein Slash weiterhin einfach ein Zeichen sein.
+  function updateSlashMenu() {
+    const text = composerInput ? composerInput.innerText : '';
+    const m = /^\/(\S*)$/.exec(text);
+    if (!m) { closeSlashMenu(); return; }
+    const query = m[1].toLowerCase();
+    slashMenuMatches = SLASH_COMMANDS.filter((c) => c.cmd.startsWith(query));
+    if (!slashMenuMatches.length) { closeSlashMenu(); return; }
+    slashMenuIndex = Math.min(slashMenuIndex, slashMenuMatches.length - 1);
+    if (slashMenuEl) slashMenuEl.style.display = 'block';
+    renderSlashMenu();
+  }
+
+  // true, wenn die Taste vom offenen Slash-Menü verbraucht wurde (dann darf
+  // der normale Enter-sendet/Zeilenumbruch-Handler nicht mehr greifen).
+  function handleSlashMenuKeydown(e) {
+    if (!slashMenuMatches.length) return false;
+    if (e.key === 'ArrowDown') { e.preventDefault(); slashMenuIndex = (slashMenuIndex + 1) % slashMenuMatches.length; renderSlashMenu(); return true; }
+    if (e.key === 'ArrowUp') { e.preventDefault(); slashMenuIndex = (slashMenuIndex - 1 + slashMenuMatches.length) % slashMenuMatches.length; renderSlashMenu(); return true; }
+    if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); runSlashCommand(slashMenuMatches[slashMenuIndex]); return true; }
+    if (e.key === 'Escape') { e.preventDefault(); closeSlashMenu(); return true; }
+    return false;
   }
 
   // ------------------------------------------------------ panel / Fortschritt
