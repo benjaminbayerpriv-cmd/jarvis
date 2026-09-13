@@ -33,6 +33,55 @@
     serif: 'var(--font-anthropic-serif, Georgia, serif)',
   };
 
+  // Einstellungen-Panel: jede .env-Variable aus backend/config.py, die
+  // nicht schon ihr eigenes dediziertes UI hat (LM-Studio-URL/Modell,
+  // Code-Verzeichnis — siehe buildUi()), landet datengetrieben hier. Eine
+  // Deklaration erzeugt HTML (settingsSectionHtml, in buildUi()),
+  // Vorbelegung (openSettings) und Speichern (buildUi()) gleichermaßen —
+  // ein neues Feld braucht nur einen neuen Eintrag, keinen neuen Code.
+  // Modul-Ebene (nicht in buildUi()), damit openSettings() — eine
+  // eigenständige Funktion, kein Kind von buildUi() — mitlesen kann.
+  const SETTINGS_SECTIONS = [
+    { id: 'sprachausgabe', title: 'Sprachausgabe', fields: [
+      { key: 'elevenlabs_api_key', label: 'ElevenLabs API-Key (optional, sonst lokale Stimme)', placeholder: 'sk_…', type: 'password' },
+      { key: 'elevenlabs_voice_id', label: 'ElevenLabs Voice-ID', placeholder: 'pNInz6obpgDQGcFmaJgB' },
+      { key: 'supertonic_voice', label: 'Lokale Stimme (Supertonic)', placeholder: 'M1' },
+      { key: 'supertonic_lang', label: 'Sprache (Supertonic)', placeholder: 'de' },
+    ] },
+    { id: 'spracherkennung', title: 'Spracherkennung', fields: [
+      { key: 'whisper_model', label: 'Whisper-Modell (tiny/base/small/medium/large-v3)', placeholder: 'medium' },
+    ] },
+    { id: 'cloud-llm', title: 'Cloud-LLM (optional, sonst LM Studio)', fields: [
+      { key: 'deepseek_api_key', label: 'DeepSeek API-Key', placeholder: 'sk-…', type: 'password' },
+      { key: 'deepseek_base_url', label: 'DeepSeek Endpoint', placeholder: 'https://api.deepseek.com/v1' },
+      { key: 'deepseek_model', label: 'DeepSeek Modell', placeholder: 'deepseek-chat' },
+    ] },
+    { id: 'gedaechtnis', title: 'Gedächtnis', fields: [
+      { key: 'embedding_model', label: 'Embedding-Modell (semantische Suche, in LM Studio geladen)', placeholder: 'text-embedding-nomic-embed-text-v1.5' },
+    ] },
+    { id: 'web', title: 'Web-Suche', fields: [
+      { key: 'tavily_api_key', label: 'Tavily API-Key (optional, sonst Suche im Browser öffnen)', placeholder: 'tvly-…', type: 'password' },
+    ] },
+  ];
+  function settingsSectionHtml(section, isLast) {
+    const rows = section.fields.map((f) => `
+          <div style="display:flex;flex-direction:column;gap:6px;">
+            <span style="font-size:12px;color:${C.textSoft};">${f.label}</span>
+            <input class="js-set-${f.key}" type="${f.type || 'text'}" placeholder="${f.placeholder || ''}" spellcheck="false" style="width:100%;box-sizing:border-box;padding:9px 10px;background:${C.bg};border:1px solid ${C.border};border-radius:8px;color:${C.text};font-size:13px;outline:none;font-family:${C.font};" />
+          </div>`).join('');
+    return `
+      <div style="padding:12px 6px ${isLast ? '16px' : '12px'};border-top:1px solid ${C.border};">
+        <div style="padding:6px 10px;font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:${C.textDim};">${section.title}</div>
+        <div style="padding:4px 10px;display:flex;flex-direction:column;gap:10px;">
+          ${rows}
+          <div style="display:flex;align-items:center;gap:10px;">
+            <button class="js-set-save-${section.id}" style="align-self:flex-start;padding:7px 12px;border:none;border-radius:8px;background:${C.accent};color:#fff;font-size:12px;cursor:pointer;font-family:${C.font};">Speichern</button>
+            <span class="js-set-status-${section.id}" style="font-size:11.5px;color:${C.textDim};"></span>
+          </div>
+        </div>
+      </div>`;
+  }
+
   // ------------------------------------------------ echte claude.ai-Icons (Anthropicons-Variable)
   // Aus dem eingefrorenen SSR-Snapshot extrahierte Codepoints (siehe [data-cds="Icon"]
   // im versteckten DOM) - echte Claude-Glyphen statt Lucide-Approximation, wo verifiziert.
@@ -701,7 +750,11 @@
     spcReplyEl = $('.js-spc-reply', speechCaptionEl);
     document.body.appendChild(speechCaptionEl);
 
-    // Settings-Sheet (kein Fake-Profil — echte Einstellungen hier).
+    // Settings-Sheet (kein Fake-Profil — echte Einstellungen hier). Jede
+    // .env-Variable aus backend/config.py, die nicht schon ihr eigenes UI
+    // hat (LM-Studio-URL/Modell, Code-Verzeichnis), landet datengetrieben
+    // über SETTINGS_SECTIONS (Modul-Ebene, s.u.) — HTML hier, Vorbelegung
+    // in openSettings(), Speichern weiter unten.
     settingsSheetEl = document.createElement('div');
     settingsSheetEl.id = 'jsSettingsSheet';
     settingsSheetEl.style.cssText = `position:fixed;inset:0;z-index:60;display:none;align-items:flex-start;justify-content:flex-start;padding:64px 0 24px 320px;background:rgba(0,0,0,.35);`;
@@ -727,7 +780,7 @@
             </div>
           </div>
         </div>
-        <div style="padding:12px 6px 16px;border-top:1px solid ${C.border};">
+        <div style="padding:12px 6px;border-top:1px solid ${C.border};">
           <div style="padding:6px 10px;font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:${C.textDim};">Code</div>
           <div style="padding:4px 10px;display:flex;flex-direction:column;gap:8px;">
             <span style="font-size:12px;color:${C.textSoft};">Arbeitsverzeichnis für JARVIS Code</span>
@@ -735,6 +788,7 @@
             <button class="js-code-dir-save" style="align-self:flex-start;padding:7px 12px;border:none;border-radius:8px;background:${C.accent};color:#fff;font-size:12px;cursor:pointer;font-family:${C.font};">Speichern</button>
           </div>
         </div>
+        ${SETTINGS_SECTIONS.map((s, i) => settingsSectionHtml(s, i === SETTINGS_SECTIONS.length - 1)).join('')}
         </div>
       </div>
     `;
@@ -1977,6 +2031,28 @@
       });
     }
 
+    // Restliche Einstellungen (SETTINGS_SECTIONS) — ein gemeinsamer Handler
+    // statt einem pro Feld: ein Sektions-Klick liest alle Inputs dieser
+    // Sektion aus und schickt sie zusammen an /settings.
+    for (const section of SETTINGS_SECTIONS) {
+      const saveBtn = $(`.js-set-save-${section.id}`, settingsSheetEl);
+      const statusEl = $(`.js-set-status-${section.id}`, settingsSheetEl);
+      if (!saveBtn) continue;
+      saveBtn.addEventListener('click', async () => {
+        const body = {};
+        for (const f of section.fields) {
+          const input = $(`.js-set-${f.key}`, settingsSheetEl);
+          if (input) body[f.key] = input.value.trim();
+        }
+        if (statusEl) statusEl.textContent = 'Speichert…';
+        try {
+          await fetch('/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+          if (statusEl) statusEl.textContent = 'Gespeichert';
+        } catch (e) { if (statusEl) statusEl.textContent = 'Fehlgeschlagen'; }
+        setTimeout(() => { if (statusEl) statusEl.textContent = ''; }, 2500);
+      });
+    }
+
     if (modelBtnEl) modelBtnEl.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); toggleModelMenu(modelBtnEl); });
     if (pdModelBtn) pdModelBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); toggleModelMenu(pdModelBtn); });
     window.addEventListener('click', () => { if (modelMenuEl) modelMenuEl.style.display = 'none'; modelMenuAnchor = null; });
@@ -2940,12 +3016,18 @@
       const din = $('.js-code-dir-input', settingsSheetEl);
       if (din && j.dir) din.value = j.dir;
     } catch (e) {}
-    // LM-Studio-Endpoint aus /settings vorbelegen.
+    // LM-Studio-Endpoint + alle SETTINGS_SECTIONS-Felder aus /settings vorbelegen.
     try {
       const r = await fetch('/settings');
       const j = await r.json();
       const uin = $('.js-lmstudio-url-input', settingsSheetEl);
       if (uin && j.lm_studio_base_url) uin.value = j.lm_studio_base_url;
+      for (const section of SETTINGS_SECTIONS) {
+        for (const f of section.fields) {
+          const input = $(`.js-set-${f.key}`, settingsSheetEl);
+          if (input && j[f.key] != null) input.value = j[f.key];
+        }
+      }
     } catch (e) {}
     if (settingsModelsEl) {
       settingsModelsEl.innerHTML = '';

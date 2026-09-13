@@ -311,6 +311,18 @@ def _elevenlabs(text: str) -> bytes:
     return resp.content
 
 
+def reset_supertonic_voice() -> None:
+    """Verwirft den geladenen Voice-Style, damit _get_supertonic() beim
+    nächsten Aufruf config.SUPERTONIC_VOICE frisch einliest — für die
+    Settings-UI, wenn die Stimme zur Laufzeit geändert wird. Das TTS-Modell
+    selbst (_supertonic_tts) bleibt geladen, nur der Style wird neu
+    geholt."""
+    global _supertonic_style
+    with _supertonic_lock:
+        if _supertonic_tts is not None:
+            _supertonic_style = _supertonic_tts.get_voice_style(voice_name=config.SUPERTONIC_VOICE)
+
+
 def _get_supertonic() -> tuple[TTS, object]:
     """Load the Supertonic model and voice style once, then reuse them.
     Thread-safe since FastAPI's sync endpoints run each request in a

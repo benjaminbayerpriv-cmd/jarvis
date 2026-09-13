@@ -91,6 +91,42 @@ def set_lm_studio_base_url(url: str) -> None:
     _persist_env("LM_STUDIO_BASE_URL", LM_STUDIO_BASE_URL)
 
 
+# Alle übrigen Einstellungen, die direkt 1:1 auf eine .env-Variable
+# abbilden (kein Sonderverhalten wie set_lm_studio_base_url/set_model
+# nötig) — die Settings-UI liest/schreibt sie generisch über
+# get_simple_settings()/set_simple_setting() statt für jede einen eigenen
+# Getter/Setter zu brauchen.
+_SIMPLE_SETTINGS = {
+    "elevenlabs_api_key": "ELEVENLABS_API_KEY",
+    "elevenlabs_voice_id": "ELEVENLABS_VOICE_ID",
+    "supertonic_voice": "SUPERTONIC_VOICE",
+    "supertonic_lang": "SUPERTONIC_LANG",
+    "whisper_model": "WHISPER_MODEL",
+    "embedding_model": "EMBEDDING_MODEL",
+    "deepseek_api_key": "DEEPSEEK_API_KEY",
+    "deepseek_base_url": "DEEPSEEK_BASE_URL",
+    "deepseek_model": "DEEPSEEK_MODEL",
+    "tavily_api_key": "TAVILY_API_KEY",
+}
+
+
+def get_simple_settings() -> dict:
+    return {name: globals()[env_key] for name, env_key in _SIMPLE_SETTINGS.items()}
+
+
+def set_simple_setting(name: str, value: str) -> None:
+    """Setzt eine der _SIMPLE_SETTINGS zur Laufzeit und persistiert sie in
+    .env. Modelle/Clients (tts.py, stt.py, llm_client.py, vector_memory.py),
+    die den zugehörigen Wert lesen, tun das jeweils bei jedem Aufruf frisch
+    aus diesem Modul — ein Neustart ist dafür nicht nötig, mit der einzigen
+    Ausnahme von whisper_model (siehe stt.reset_model(), von main.py nach
+    diesem Aufruf separat angestoßen, da stt.py dieses Modul importiert und
+    ein Import hier andersrum einen Zirkel wäre)."""
+    env_key = _SIMPLE_SETTINGS[name]
+    globals()[env_key] = value
+    _persist_env(env_key, value)
+
+
 def set_model(model: str) -> None:
     """Switch the active LM Studio model at runtime and persist it to .env
     so it survives a restart too. llm_client._request_targets() reads
