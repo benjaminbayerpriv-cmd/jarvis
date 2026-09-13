@@ -33,8 +33,16 @@ sounddevice==0.5.6
 numpy==2.5.2
 websockets==17.0.1
 
-# Discord-Bot (backend/discord_bot.py) — privater Voice-Channel als
-# kostenloser Anruf-Ersatz + DM-Pings. Optional: ohne DISCORD_BOT_TOKEN in
-# .env bleibt die ganze Integration ein No-Op.
+# Discord-Bot (backend/discord_bot.py) — privater Voice-Channel als echtes
+# Sprachgespräch (Whisper-Transkription + LLM-Antwort + TTS zurück) + DM-
+# Pings. Optional: ohne DISCORD_BOT_TOKEN in .env bleibt die ganze
+# Integration ein No-Op. discord-ext-voice-recv ist noch alpha (0.5.x) — das
+# ist die einzige verfügbare Bibliothek, die discord.py um Audio-Empfang
+# erweitert (discord.py selbst kann nur senden). discord.py[voice] zieht
+# `davey` (DAVE-E2EE-Voice) mit — Pflicht, da manche Server (ältere/größere)
+# DAVE inzwischen server-seitig erzwingen; ohne davey kann der Bot dort gar
+# nicht erst verbinden (RuntimeError). Auf neueren/kleineren Servern ohne
+# erzwungenes DAVE klappt der Verbindungsaufbau auch ohne davey.
 discord.py[voice]==2.7.1
 PyNaCl==1.5.0
+discord-ext-voice-recv==0.5.2a179
