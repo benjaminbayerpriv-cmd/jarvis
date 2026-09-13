@@ -26,8 +26,10 @@ import os
 import pathlib
 import re
 import signal
+import sqlite3
 import struct
 import subprocess
+import time
 
 try:
     # POSIX-only — the real OpenCode TUI needs an actual PTY (openpty,
@@ -79,6 +81,93 @@ DEFAULT_CODE_DIR = os.path.expanduser("~/Developer")
 
 # opencode's bundled provider id for our custom OpenAI-compatible provider.
 PROVIDER_ID = "lmstudio"
+
+# opencode's own SQLite session store (separate from JARVIS's own conversations
+# under backend/conversations/) - lets the Code-Tab sidebar show opencode's
+# real sessions instead of JARVIS chat conversations that were never meant for it.
+if WIN:
+    OPENCODE_DB = pathlib.Path(os.environ.get("LOCALAPPDATA", str(pathlib.Path.home()))) / "opencode" / "opencode.db"
+else:
+    OPENCODE_DB = pathlib.Path.home() / ".local" / "share" / "opencode" / "opencode.db"
+
+
+def list_recent_sessions(directory: str | None = None, limit: int = 40) -> list[dict]:
+    """Real opencode sessions (title, directory, last-updated) from opencode's
+    own SQLite DB — read-only, best-effort. Returns [] if opencode has never
+    run or its storage format changed rather than raising, since this only
+    feeds an optional sidebar list."""
+    if not OPENCODE_DB.exists():
+        return []
+    try:
+        uri = f"file:{OPENCODE_DB}?mode=ro"
+        con = sqlite3.connect(uri, uri=True, timeout=2)
+        try:
+            con.row_factory = sqlite3.Row
+            if directory:
+                rows = con.execute(
+                    "SELECT id, title, directory, time_created, time_updated FROM session "
+                    "WHERE directory = ? AND parent_id IS NULL ORDER BY time_updated DESC LIMIT ?",
+                    (directory, limit),
+                ).fetchall()
+                if not rows:
+                    rows = con.execute(
+                        "SELECT id, title, directory, time_created, time_updated FROM session "
+                        "WHERE parent_id IS NULL ORDER BY time_updated DESC LIMIT ?",
+                        (limit,),
+                    ).fetchall()
+            else:
+                rows = con.execute(
+                    "SELECT id, title, directory, time_created, time_updated FROM session "
+                    "WHERE parent_id IS NULL ORDER BY time_updated DESC LIMIT ?",
+                    (limit,),
+                ).fetchall()
+            return [dict(r) for r in rows]
+        finally:
+            con.close()
+    except Exception:
+        return []
+
+
+def delete_session(session_id: str) -> bool:
+    """Delete a real opencode session via opencode's own CLI (``opencode session
+    delete <id>``) rather than touching its SQLite store directly, so opencode's
+    own cleanup (messages, snapshots, session_diff) runs correctly."""
+    if not session_id:
+        return False
+    try:
+        result = subprocess.run(
+            [OPENCODE_BIN, "session", "delete", session_id],
+            capture_output=True,
+            timeout=15,
+            text=True,
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
+def rename_session(session_id: str, title: str) -> bool:
+    """Rename a real opencode session. opencode's CLI has no ``session rename``
+    subcommand, so this updates the ``title`` column directly in opencode's
+    own SQLite store (WAL mode, so this is safe alongside a running opencode
+    process — it just won't see the new title until its next query)."""
+    if not session_id or not title:
+        return False
+    if not OPENCODE_DB.exists():
+        return False
+    try:
+        con = sqlite3.connect(str(OPENCODE_DB), timeout=5)
+        try:
+            cur = con.execute(
+                "UPDATE session SET title = ?, time_updated = ? WHERE id = ?",
+                (title, int(time.time() * 1000), session_id),
+            )
+            con.commit()
+            return cur.rowcount > 0
+        finally:
+            con.close()
+    except Exception:
+        return False
 
 
 def _lmstudio_host() -> str:
@@ -322,7 +411,7 @@ class TtyHandle:
         return self.proc.poll()
 
 
-def start_tty(workdir: str) -> TtyHandle:
+def start_tty(workdir: str, session_id: str | None = None) -> TtyHandle:
     """Starte die echte opencode-TUI in einem PTY/ConPTY; gib einen TtyHandle.
 
     Aktualisiert zuerst die opencode-Provider-Konfiguration, damit die TUI die
@@ -331,6 +420,10 @@ def start_tty(workdir: str) -> TtyHandle:
     Session (Prozessgruppe → per SIGTERM/SIGWINCH steuerbar); auf Windows
     übernimmt eine pywinpty-PtyProcess (ConPTY). Der Aufrufer besitzt das
     Handle und erklärt sich bereit, es am Ende zu schließen/abzuräumen.
+
+    session_id: wenn gesetzt, wird die TUI mit ``--session <id>`` gestartet und
+    setzt damit eine echte, zuvor per list_recent_sessions() gefundene opencode-
+    Session fort, statt eine neue zu beginnen.
     """
     models = list_models()
     if models:
@@ -339,11 +432,15 @@ def start_tty(workdir: str) -> TtyHandle:
     env = dict(os.environ)
     env["TERM"] = "xterm-256color"
 
+    cmd = [OPENCODE_BIN, workdir]
+    if session_id:
+        cmd += ["--session", session_id]
+
     if WIN:
         if PtyProcess is None:
             raise RuntimeError("pywinpty ist nicht installiert – bitte `pip install pywinpty` ausführen, um den Code-Tab auf Windows zu nutzen.")
         wp = PtyProcess.spawn(
-            [OPENCODE_BIN, workdir],
+            cmd,
             cwd=workdir or None,
             env=env,
             dimensions=(24, 120),  # rows, cols
@@ -355,7 +452,7 @@ def start_tty(workdir: str) -> TtyHandle:
 
     master, slave = pty.openpty()
     proc = subprocess.Popen(
-        [OPENCODE_BIN, workdir],
+        cmd,
         stdin=slave,
         stdout=slave,
         stderr=slave,
