@@ -24,5 +24,14 @@ PLIST="launcher/dist/Jarvis.app/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Add :NSMicrophoneUsageDescription string 'Jarvis braucht Mikrofonzugriff, um dir zuzuhoeren.'" "$PLIST" 2>/dev/null \
   || /usr/libexec/PlistBuddy -c "Set :NSMicrophoneUsageDescription 'Jarvis braucht Mikrofonzugriff, um dir zuzuhoeren.'" "$PLIST"
 
+# PyInstaller signiert das Bundle beim BUNDLE-Schritt bereits ad-hoc; das
+# nachtraegliche Patchen der Info.plist hier macht diese Signatur ungueltig
+# (Info.plist ist danach nicht mehr an die Signatur gebunden). Ohne erneutes
+# Signieren startet die App zwar per direktem Programmaufruf im Terminal
+# (das umgeht Gatekeeper/LaunchServices), aber ein Doppelklick im Finder
+# oder `open Jarvis.app` schlaegt dann fehl, ohne dass eine Fehlermeldung
+# erscheint.
+codesign --force --deep --sign - "launcher/dist/Jarvis.app"
+
 echo
 echo "Fertig: launcher/dist/Jarvis.app"
