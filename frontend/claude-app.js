@@ -907,7 +907,7 @@
     const s = document.createElement('style');
     s.id = 'jsAppCss';
     s.textContent = `
-      body.js-app-active > :not(#jsApp):not(#jarvisOrb):not(#jsSpeechbar):not(#jsSpeechCaption):not(#jsSettingsSheet):not(#jsNewProjectSheet):not(#jsRenameChatSheet):not(#jsBtwWindow):not(script):not(style) { display:none !important; }
+      body.js-app-active > :not(#jsApp):not(#jarvisOrb):not(#jarvisOrbHit):not(#jsSpeechbar):not(#jsSpeechCaption):not(#jsSettingsSheet):not(#jsNewProjectSheet):not(#jsRenameChatSheet):not(#jsBtwWindow):not(script):not(style) { display:none !important; }
       body.js-app-active { overflow:hidden; }
       /* Echter claude.ai "Squish"-Press-Effekt (aus --cds-btn-spring extrahiert): schnelles
          Einschrumpfen beim Klicken, dann sanftes Zurueckfedern. NUR auf echten Action-Icon-
