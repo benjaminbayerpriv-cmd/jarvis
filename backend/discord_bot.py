@@ -1,15 +1,29 @@
-"""Discord-Bot: privater Voice-Channel als echtes Sprachgespräch + DM-Pings.
+"""Discord-Bot: privater Voice-Channel als "Anruf" + DM-Pings.
 
 Echte Telefonie (WhatsApp/Signal/Snapchat/Telegram) bietet keine Bot-APIs für
 Sprachanrufe. Als kostenloser Ersatz tritt dieser Bot automatisch dem
 konfigurierten Voice-Channel auf einem privaten Server bei, sobald der
-Besitzer selbst reingeht ("Anruf annehmen"), hört dort mit (discord-ext-
-voice-recv — discord.py selbst kann nur senden, nicht empfangen), lässt
-jede Sprechpause von Whisper (backend/stt.py) transkribieren, holt eine
-Antwort vom normalen LLM-Pfad (backend/llm_client.py) und spricht sie mit
-Supertonic (backend/tts.py) zurück in den Channel. Zusätzlich kann JARVIS
-über `notify()` eine DM schicken, wenn eine Hintergrundaufgabe fertig ist
-(siehe panel.push("notify", ...)).
+Besitzer selbst reingeht ("Anruf annehmen"), und kann über `notify()` eine
+DM schicken, wenn eine Hintergrundaufgabe fertig ist (siehe
+panel.push("notify", ...)).
+
+Echtes Zuhören (Whisper-Transkription der eigenen Stimme -> LLM-Antwort ->
+TTS zurück in den Channel) ist im Code vorhanden (_ConversationSink,
+_process_utterance_sync, _listen_loop), aber DERZEIT NICHT ZUVERLÄSSIG
+NUTZBAR: Discord verhandelt inzwischen auf praktisch jedem Voice-Channel
+DAVE (Ende-zu-Ende-Verschlüsselung für Voice) hoch, sobald der Client sie
+unterstützt (Paket `davey`, Pflicht-Abhängigkeit von discord.py[voice] seit
+2.6+ — ohne sie verweigert discord.py auf DAVE-pflichtigen Servern die
+Verbindung komplett). discord-ext-voice-recv (Alpha, 0.5.x) kennt das
+DAVE-Framing aber nicht und versucht, die weiterhin verschlüsselten
+Rohbytes direkt als Opus zu decodieren — das crasht mit
+`discord.opus.OpusError: corrupted stream` und tötet den internen
+Empfangs-Thread der Bibliothek endgültig (kein Absturz von JARVIS selbst,
+aber ab dann kommt nie wieder Audio an, auch nicht nach Rejoin, bis der
+ganze Bot-Prozess neu startet). Sprechen (TTS-Ausgabe über speak_wav_bytes)
+und DM-Pings sind davon nicht betroffen — nur der Audio-Empfang.
+Sollte discord-ext-voice-recv irgendwann DAVE unterstützen, braucht es hier
+vermutlich keine Änderung, nur ein `pip install -U discord-ext-voice-recv`.
 
 Läuft in einem eigenen Thread mit eigenem asyncio-Event-Loop, weil panel.py
 (coder.py, tools.py, ...) aus synchronen Worker-Threads heraus aufgerufen
@@ -33,8 +47,10 @@ import wave
 
 from . import config
 
-# discord.py loggt selbst auf dem Root-Logger — ohne eigenes Level bleibt es
-# bei dessen Default (WARNING), sodass nur echte Verbindungsprobleme auftauchen.
+# discord.py und discord.ext.voice_recv (dessen Module ausnahmslos
+# getLogger(__name__) unter dem "discord"-Namespace benutzen) loggen selbst —
+# WARNING statt DEBUG hält das im Normalbetrieb ruhig, zeigt aber echte
+# Verbindungs-/Decrypt-Fehler (siehe Docstring oben) weiterhin an.
 logging.getLogger("discord").setLevel(logging.WARNING)
 
 try:
@@ -172,7 +188,6 @@ class _ConversationSink(voice_recv.AudioSink if voice_recv else object):
         return False
 
     def write(self, user, data) -> None:  # noqa: D401 - Basisklassen-Signatur
-        print(f"[discord] write() user={getattr(user, 'id', None)} owner={self._owner_id} pcm_len={len(data.pcm)}")
         if user is None or user.id != self._owner_id:
             return
         vc = self.voice_client
@@ -195,25 +210,15 @@ class _ConversationSink(voice_recv.AudioSink if voice_recv else object):
 
 
 async def _listen_loop(sink: "_ConversationSink", vc) -> None:
-    print(f"[discord] listen_loop gestartet für sink={id(sink)}")
     loop = asyncio.get_running_loop()
-    n = 0
     try:
         while True:
             await asyncio.sleep(0.25)
-            n += 1
             pcm = sink.pop_if_silent(SILENCE_SECONDS)
-            if n % 8 == 0:
-                print(f"[discord] listen_loop tick sink={id(sink)} buffer_bytes={len(sink._buffer)}")
             if pcm:
-                print(f"[discord] Äußerung erkannt: {len(pcm)} bytes PCM")
                 await loop.run_in_executor(None, _process_utterance_sync, _pcm_to_wav(pcm), vc)
     except asyncio.CancelledError:
-        print(f"[discord] listen_loop beendet (cancelled) sink={id(sink)}")
-        raise
-    except Exception as exc:
-        print(f"[discord] listen_loop Fehler: {exc!r}")
-        raise
+        pass
 
 
 async def _join_and_listen(channel, owner_id: int) -> None:
