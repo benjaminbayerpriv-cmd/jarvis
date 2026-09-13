@@ -483,6 +483,13 @@
 
   // Graues Punktnetz (Sprachmodus)
   let orbCtx = null, orbCanvas = null, orbLevel = 0, orbRaf = 0, orbVisible = false;
+  // Der Orb lässt sich innerhalb des Gitter-Hintergrunds per Drag&Drop
+  // verschieben — orbOffsetX/Y ist der Versatz vom Mittelpunkt, den der
+  // Nutzer per Maus gesetzt hat; bleibt bis zum nächsten Ziehen fest.
+  let orbHitEl = null, orbDragging = false;
+  let orbOffsetX = 0, orbOffsetY = 0;
+  let orbDragStartX = 0, orbDragStartY = 0, orbDragBaseX = 0, orbDragBaseY = 0;
+  let orbBoundsRect = null; // vom letzten drawOrb()-Aufruf, fürs Clamping beim Ziehen
   const DOT_COLOR = '#8b8b8f';
 
   // Persisted conversation id; ?conv=<id>-Deep-Link priorisiert (siehe unten).
@@ -3670,10 +3677,11 @@
     if (orbCanvas.width !== cw * dpr || orbCanvas.height !== ch * dpr) { orbCanvas.width = cw * dpr; orbCanvas.height = ch * dpr; }
     orbCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
     orbCtx.clearRect(0, 0, cw, ch);
-    // Zentrum über dem Chat-Bereich (rechts der Sidebar)
+    // Zentrum über dem Chat-Bereich (rechts der Sidebar), plus per Drag&Drop
+    // gesetzter Versatz (bleibt fest, bis der Nutzer erneut zieht).
     const rect = chatRootEl ? chatRootEl.getBoundingClientRect() : { left: 0, top: 0, width: cw, height: ch };
-    const cx = rect.left + rect.width / 2;
-    const cy = rect.top + rect.height / 2;
+    const cx = rect.left + rect.width / 2 + orbOffsetX;
+    const cy = rect.top + rect.height / 2 + orbOffsetY;
     // R1: weißer Ring direkt um die Schrift, mit Innenabstand links/rechts.
     // Wuchs bisher unbegrenzt mit dem Fenster mit — ab ORB_REF_DIM (gleiche
     // Referenz wie layoutSpeechBar's REF_WIDTH) wird die Größe gedeckelt, und
@@ -3688,6 +3696,17 @@
     drawSpeechBackdrop(rect);
     drawOrbRings(cx, cy, R1, color, lvl, t);
     drawOrbLabel(cx, cy, R1, 0.95);
+
+    // Ziehbare Fläche (unsichtbar) genau über dem äußersten Ring nachführen,
+    // und die Grenzen für das Clamping beim Ziehen aktuell halten.
+    const hitR = R1 * 2;
+    if (orbHitEl) {
+      orbHitEl.style.left = (cx - hitR) + 'px';
+      orbHitEl.style.top = (cy - hitR) + 'px';
+      orbHitEl.style.width = (hitR * 2) + 'px';
+      orbHitEl.style.height = (hitR * 2) + 'px';
+    }
+    orbBoundsRect = { width: rect.width, height: rect.height, margin: hitR };
   }
 
   // Pegel der gesprochenen Stimme aus dem TTS-Ausgangsanalysator — die Orb
@@ -3715,6 +3734,7 @@
   function showOrb() {
     orbVisible = true;
     if (orbCanvas) orbCanvas.style.display = 'block';
+    if (orbHitEl) orbHitEl.style.display = 'block';
     if (!orbRaf) orbRaf = requestAnimationFrame(orbLoop);
   }
   function hideOrb() {
@@ -3732,6 +3752,8 @@
     // ausblenden — sonst bleibt der letzte Frame als "Geister-Kugel" stehen.
     if (orbCanvas) { orbCanvas.style.display = 'none'; }
     if (orbCtx && orbCanvas) { const w = orbCanvas.clientWidth, h = orbCanvas.clientHeight; if (w && h) { orbCtx.setTransform(1,0,0,1,0,0); orbCtx.clearRect(0,0,w,h); } }
+    if (orbHitEl) { orbHitEl.style.display = 'none'; }
+    orbDragging = false;
   }
 
   // ---------------------------------------------------------------- boot
@@ -3750,6 +3772,42 @@
     orbCanvas.style.cssText = 'position:fixed;inset:0;width:100vw;height:100vh;z-index:40;pointer-events:none;background:transparent;';
     document.body.appendChild(orbCanvas);
     orbCtx = orbCanvas.getContext('2d');
+
+    // Unsichtbares Kreis-Element genau über dem aktuell gezeichneten Orb
+    // (Position/Größe wird in drawOrb() jeden Frame nachgeführt) — orbCanvas
+    // selbst bleibt pointer-events:none (sonst blockiert die Vollbild-Fläche
+    // Klicks überall im Sprachmodus), nur dieser Kreis fängt die Maus ab.
+    orbHitEl = document.createElement('div');
+    orbHitEl.id = 'jarvisOrbHit';
+    orbHitEl.style.cssText = 'position:fixed;z-index:41;border-radius:50%;display:none;cursor:grab;pointer-events:auto;';
+    document.body.appendChild(orbHitEl);
+    orbHitEl.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      orbDragging = true;
+      orbHitEl.style.cursor = 'grabbing';
+      orbDragStartX = e.clientX; orbDragStartY = e.clientY;
+      orbDragBaseX = orbOffsetX; orbDragBaseY = orbOffsetY;
+    });
+    document.addEventListener('mousemove', (e) => {
+      if (!orbDragging) return;
+      let ox = orbDragBaseX + (e.clientX - orbDragStartX);
+      let oy = orbDragBaseY + (e.clientY - orbDragStartY);
+      // Innerhalb des quadratischen Gitter-Hintergrunds halten — der Orb darf
+      // nicht über dessen Rand hinausgezogen werden.
+      if (orbBoundsRect) {
+        const r = orbBoundsRect;
+        const maxX = Math.max(0, r.width / 2 - r.margin);
+        const maxY = Math.max(0, r.height / 2 - r.margin);
+        ox = Math.min(maxX, Math.max(-maxX, ox));
+        oy = Math.min(maxY, Math.max(-maxY, oy));
+      }
+      orbOffsetX = ox; orbOffsetY = oy;
+    });
+    document.addEventListener('mouseup', () => {
+      if (!orbDragging) return;
+      orbDragging = false;
+      orbHitEl.style.cursor = 'grab';
+    });
     const toggleSidebar = () => {
       const aside = $('.js-sidebar', uiEl);
       const floatBtn = $('.js-side-toggle-float', uiEl);
