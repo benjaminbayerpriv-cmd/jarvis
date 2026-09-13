@@ -563,7 +563,7 @@
           </h1>
         </div>
         <div class="js-thread" style="flex:1;overflow-y:auto;scrollbar-width:thin;position:relative;"></div>
-        <div class="js-codeview" style="position:absolute;inset:0;display:none;flex-direction:column;min-width:0;min-height:0;background-color:#0a0d12;background-image:linear-gradient(rgba(150,190,210,.07) 1px,transparent 1px),linear-gradient(90deg,rgba(150,190,210,.07) 1px,transparent 1px);background-size:34px 34px;">
+        <div class="js-codeview" style="position:absolute;inset:0;display:none;flex-direction:column;min-width:0;min-height:0;">
           <div class="js-code-header" style="display:flex;align-items:center;gap:10px;padding:12px 18px;border-bottom:1px solid ${C.border};flex:0 0 auto;">
             <span class="js-code-title" style="font-size:14px;font-weight:600;color:${C.text};">Code</span>
             <span class="js-code-dir" style="flex:1;font-size:12px;color:${C.textDim};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:left;cursor:pointer;" title="Arbeitsverzeichnis — klicken zum Ändern"></span>
@@ -574,7 +574,7 @@
             <button class="js-code-restart" title="Terminal neu starten" style="display:none;align-items:center;gap:6px;padding:5px 10px;background:none;border:1px solid ${C.border};border-radius:9px;color:${C.textSoft};font-size:12px;cursor:pointer;font-family:${C.font};">${ICONS.restart}</button>
           </div>
           <div class="js-code-context-warning" style="display:none;align-items:flex-start;gap:10px;margin:12px 16px 0;padding:12px 14px;border-radius:10px;background:rgba(229,165,10,.12);border:1px solid rgba(229,165,10,.35);color:#e5a50a;font-size:12.5px;line-height:1.5;flex:0 0 auto;"></div>
-          <div class="js-code-terminal" style="position:relative;flex:1 1 auto;min-width:0;min-height:0;overflow:hidden;padding:4px 2px 6px;"></div>
+          <div class="js-code-terminal" style="flex:1 1 auto;min-width:0;min-height:0;overflow:hidden;background:#12121c;padding:4px 2px 6px;"></div>
         </div>
         <div class="js-projects-view" style="position:absolute;inset:0;display:none;flex-direction:column;min-width:0;min-height:0;overflow-y:auto;padding:40px 48px;">
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:28px;">
@@ -846,11 +846,6 @@
     s.id = 'jsAppCss';
     s.textContent = `
       body.js-app-active > :not(#jsApp):not(#jarvisOrb):not(#jsSpeechbar):not(#jsSpeechCaption):not(#jsSettingsSheet):not(#jsNewProjectSheet):not(#jsRenameChatSheet):not(#jsBtwWindow):not(script):not(style) { display:none !important; }
-      /* xterm.css setzt .xterm-viewport fest auf schwarz, unabhängig vom
-         Terminal-Theme — überschreibt sonst das Gitter-Muster von
-         .js-codeview komplett, obwohl das Terminal-Theme selbst schon auf
-         transparent steht (siehe initCodeTerminal). */
-      .js-code-terminal .xterm-viewport { background-color:transparent !important; }
       body.js-app-active { overflow:hidden; }
       /* Echter claude.ai "Squish"-Press-Effekt (aus --cds-btn-spring extrahiert): schnelles
          Einschrumpfen beim Klicken, dann sanftes Zurueckfedern. NUR auf echten Action-Icon-
@@ -2851,13 +2846,8 @@
       fontSize: 13,
       lineHeight: 1.0,
       scrollback: 5000,
-      // Transparent statt eines deckenden Vollfarb-Hintergrunds: lässt das
-      // Gitter-Muster von .js-codeview durchscheinen, überall dort, wo
-      // opencode selbst keine eigene Zellfarbe gesetzt hat — dasselbe
-      // Gitter wie im Sprechmodus-Hintergrund.
-      allowTransparency: true,
       theme: {
-        background: 'transparent', foreground: '#d8dee9', cursor: '#6aa6ff',
+        background: '#12121c', foreground: '#d8dee9', cursor: '#6aa6ff',
         cursorAccent: '#12121c', selectionBackground: '#3b4261',
         black: '#1b1b27', red: '#e5534b', green: '#3dbd7d', yellow: '#e5a50a',
         blue: '#6aa6ff', magenta: '#c586c0', cyan: '#56b6c2', white: '#d8dee9',
@@ -2869,20 +2859,6 @@
     codeFit = new window.FitAddon.FitAddon();
     codeTerm.loadAddon(codeFit);
     codeTerm.open(codeTermEl);
-    // opencode selbst füllt bei realistischer Fenstergröße jede Terminal-
-    // zelle mit einer eigenen Hintergrundfarbe — "durchscheinen lassen"
-    // (transparentes Theme + .xterm-viewport-Override oben) zeigt das
-    // Gitter dadurch nur in echten Lücken, die bei einem gefüllten
-    // Vollbild-TUI praktisch nie vorkommen (beobachtet: im kleinen
-    // Test-Fenster sichtbar, im echten großen Fenster komplett weg — nur
-    // die Kopfzeile darüber, die xterm gar nicht erst anfasst, zeigte es
-    // noch). Deshalb zusätzlich eine eigene, nicht interaktive Gitter-
-    // Ebene ÜBER dem Terminal, im Blend-Modus "screen": auf den ohnehin
-    // fast schwarzen Hintergrundzellen wird sie sichtbar, während auf
-    // hellem Text (bereits nahe Weiß) so gut wie nichts mehr verändert.
-    const codeGridEl = document.createElement('div');
-    codeGridEl.style.cssText = 'position:absolute;inset:0;pointer-events:none;mix-blend-mode:screen;background-image:linear-gradient(rgba(150,190,210,.16) 1px,transparent 1px),linear-gradient(90deg,rgba(150,190,210,.16) 1px,transparent 1px);background-size:34px 34px;';
-    codeTermEl.appendChild(codeGridEl);
     codeTerm.onData((data) => sendCodeInput(data));
     if (codeRestartBtn) codeRestartBtn.addEventListener('click', (e) => { e.preventDefault(); restartCodeTerminal(); });
     if (codeDirEl) codeDirEl.addEventListener('click', (e) => { e.preventDefault(); openSettings(); });
