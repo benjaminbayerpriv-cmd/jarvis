@@ -375,7 +375,18 @@
   let uiEl = null, sidebarEl = null, chatListEl = null, chatRootEl = null, threadEl = null;
   let composerTray = null, composerInput = null, sendBtn = null, speechBtn = null, noteBtn = null;
   let uploadBtn = null, settingsBtn = null, modelEl = null, modelBtnEl = null, modelMenuEl = null, fileInput = null;
+  // Slash-Befehle im Composer (wie bei Claude selbst): "/" am Anfang der
+  // Eingabe öffnet eine Liste ausführbarer Befehle statt eine Chat-Nachricht
+  // zu tippen.
+  let slashMenuEl = null, slashMenuMatches = [], slashMenuIndex = 0;
   let attachPreviewEl = null;
+  // "/btw"-Nebenfrage-Fenster: ein kleines, frei verschiebbares Extra-
+  // Fenster für eine Zwischenfrage, während der Hauptchat noch an einer
+  // Antwort arbeitet — komplett eigener Request/eigene History, rührt
+  // NICHT an `busy`/`history`/`currentTurnId` des Hauptchats.
+  let btwEl = null, btwIntroEl = null, btwBodyEl = null, btwInputEl = null, btwSendBtn = null;
+  let btwBusy = false, btwConversationId = null, btwTurnCounter = 0;
+  let btwDragging = false, btwDragStartX = 0, btwDragStartY = 0, btwDragBaseX = 0, btwDragBaseY = 0;
   let speechBarEl = null, spMuteBtn = null, spStopBtn = null, spSendBtn = null, spChatBtn = null;
   let speechCaptionEl = null, spcStatusEl = null, spcUserEl = null, spcReplyEl = null;
   let settingsSheetEl = null, settingsModelsEl = null, newProjectSheetEl = null, renameChatSheetEl = null;
@@ -643,6 +654,7 @@
             </div>
           </div>
           <div class="js-modelmenu" style="display:none;position:absolute;width:220px;max-height:280px;overflow-y:auto;background:${C.bgSurface3};border:1px solid ${C.border};border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.4);z-index:10;"></div>
+          <div class="js-slashmenu" style="display:none;position:absolute;left:0;right:0;bottom:100%;margin-bottom:8px;max-height:280px;overflow-y:auto;background:${C.bgSurface3};border:1px solid ${C.border};border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.4);z-index:10;"></div>
         </div>
       </div>
     `;
@@ -812,6 +824,7 @@
     modelEl = $('.js-model-label', uiEl);
     modelBtnEl = $('.js-model', uiEl);
     modelMenuEl = $('.js-modelmenu', uiEl);
+    slashMenuEl = $('.js-slashmenu', uiEl);
     // Aus dem Composer-Wrapper gelöst und direkt an #jsApp gehängt, damit es
     // sich relativ zu JEDEM Modell-Button im ganzen Interface positionieren
     // lässt (siehe positionModelMenu) — nicht nur dem im Haupt-Composer.
@@ -832,7 +845,7 @@
     const s = document.createElement('style');
     s.id = 'jsAppCss';
     s.textContent = `
-      body.js-app-active > :not(#jsApp):not(#jarvisOrb):not(#jsSpeechbar):not(#jsSpeechCaption):not(#jsSettingsSheet):not(#jsNewProjectSheet):not(#jsRenameChatSheet):not(script):not(style) { display:none !important; }
+      body.js-app-active > :not(#jsApp):not(#jarvisOrb):not(#jsSpeechbar):not(#jsSpeechCaption):not(#jsSettingsSheet):not(#jsNewProjectSheet):not(#jsRenameChatSheet):not(#jsBtwWindow):not(script):not(style) { display:none !important; }
       body.js-app-active { overflow:hidden; }
       /* Echter claude.ai "Squish"-Press-Effekt (aus --cds-btn-spring extrahiert): schnelles
          Einschrumpfen beim Klicken, dann sanftes Zurueckfedern. NUR auf echten Action-Icon-
@@ -1871,12 +1884,15 @@
     if (sendBtn) sendBtn.addEventListener('click', (e) => { e.preventDefault(); sendFromComposer(); });
     if (composerInput) {
       composerInput.addEventListener('keydown', (e) => {
+        if (handleSlashMenuKeydown(e)) return;
         if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendFromComposer(); }
       });
       composerInput.addEventListener('input', () => {
         composerInput.classList.toggle('is-empty', composerInput.innerText.trim().length === 0);
         updateSendSlot();
+        updateSlashMenu();
       });
+      composerInput.addEventListener('blur', () => setTimeout(closeSlashMenu, 150));
     }
     updateSendSlot();
     if (speechBtn) speechBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); speechMode ? exitSpeech() : enterSpeech(); });
@@ -2172,7 +2188,262 @@
 
   function sendFromComposer() {
     const text = composerInput ? composerInput.innerText.trim() : '';
+    const command = matchSlashCommand(text);
+    if (command) {
+      if (composerInput) { composerInput.innerText = ''; composerInput.classList.add('is-empty'); }
+      command.run();
+      return;
+    }
     if (text || pendingImages.length) sendMessage(text);
+  }
+
+  // ------------------------------------------------------- Slash-Befehle
+  // Liste der verfügbaren "/"-Befehle. Auswahl aus dem Menü (Klick, Enter
+  // oder Tab) trägt den Befehl nur ins Composer-Feld ein — ausgeführt wird
+  // er erst beim tatsächlichen Absenden (sendFromComposer()), damit man ihn
+  // nicht selbst zu Ende tippen muss, aber trotzdem noch sieht/anpassen
+  // kann, was gleich passiert, bevor es losgeht.
+  const SLASH_COMMANDS = [
+    { cmd: 'neu', label: 'Neue Unterhaltung', desc: 'Startet einen frischen Chat', run: () => startNewConversation() },
+    { cmd: 'projekte', label: 'Projekte', desc: 'Projektübersicht öffnen', run: () => openProjectsView() },
+    { cmd: 'code', label: 'Code', desc: 'In den Code-Tab wechseln', run: () => setMode('code') },
+    { cmd: 'sprachmodus', label: 'Sprachmodus', desc: 'Mit Jarvis sprechen', run: () => { if (!speechMode) enterSpeech(); } },
+    { cmd: 'diktieren', label: 'Diktieren', desc: 'Spracheingabe ins Textfeld', run: () => setDictating(true) },
+    { cmd: 'modell', label: 'Modell wechseln', desc: 'Anderes LM-Studio-Modell wählen', run: () => toggleModelMenu() },
+    { cmd: 'einstellungen', label: 'Einstellungen', desc: 'Einstellungen öffnen', run: () => openSettings() },
+    { cmd: 'btw', label: 'Nebenfrage', desc: 'Kurz was anderes fragen, ohne den Hauptchat zu unterbrechen', run: () => openBtwWindow() },
+  ];
+
+  function closeSlashMenu() {
+    if (slashMenuEl) slashMenuEl.style.display = 'none';
+    slashMenuMatches = [];
+  }
+
+  function renderSlashMenu() {
+    if (!slashMenuEl) return;
+    slashMenuEl.innerHTML = slashMenuMatches.map((c, i) => `
+      <div class="js-slash-item" data-i="${i}" style="padding:9px 14px;cursor:pointer;display:flex;flex-direction:column;gap:1px;background:${i === slashMenuIndex ? C.bgHover : 'transparent'};">
+        <span style="font-size:13px;color:${C.text};">/${c.cmd}</span>
+        <span style="font-size:12px;color:${C.textDim};">${c.desc}</span>
+      </div>
+    `).join('');
+    slashMenuEl.querySelectorAll('.js-slash-item').forEach((el) => {
+      el.addEventListener('mouseenter', () => { slashMenuIndex = Number(el.dataset.i); renderSlashMenu(); });
+      el.addEventListener('mousedown', (e) => { e.preventDefault(); insertSlashCommand(slashMenuMatches[Number(el.dataset.i)]); });
+    });
+  }
+
+  // Exakter Treffer (nicht nur ein Präfix) — genau der Befehlsname, sonst
+  // nichts außenrum. Wird beim tatsächlichen Absenden geprüft, siehe
+  // sendFromComposer().
+  function matchSlashCommand(text) {
+    const m = /^\/(\S+)$/.exec((text || '').trim());
+    if (!m) return null;
+    return SLASH_COMMANDS.find((c) => c.cmd === m[1].toLowerCase()) || null;
+  }
+
+  // Schreibt den vollen Befehl ins Composer-Feld, statt ihn selbst
+  // abzutippen — ausgeführt wird er erst beim eigentlichen Absenden
+  // (Enter/Senden-Button, siehe sendFromComposer()), nicht schon hier.
+  function insertSlashCommand(command) {
+    if (!command || !composerInput) return;
+    closeSlashMenu();
+    composerInput.innerText = '/' + command.cmd + ' ';
+    composerInput.classList.remove('is-empty');
+    composerInput.focus();
+    const range = document.createRange();
+    range.selectNodeContents(composerInput);
+    range.collapse(false);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+    updateSendSlot();
+  }
+
+  // Bei jeder Eingabe geprüft: nur wenn "/" das ALLERERSTE Zeichen der
+  // Nachricht ist und noch kein Leerzeichen folgt (man tippt also gerade
+  // noch den Befehlsnamen), zeigen wir die Liste — mitten im Fließtext soll
+  // ein Slash weiterhin einfach ein Zeichen sein.
+  function updateSlashMenu() {
+    const text = composerInput ? composerInput.innerText : '';
+    const m = /^\/(\S*)$/.exec(text);
+    if (!m) { closeSlashMenu(); return; }
+    const query = m[1].toLowerCase();
+    slashMenuMatches = SLASH_COMMANDS.filter((c) => c.cmd.startsWith(query));
+    if (!slashMenuMatches.length) { closeSlashMenu(); return; }
+    slashMenuIndex = Math.min(slashMenuIndex, slashMenuMatches.length - 1);
+    if (slashMenuEl) slashMenuEl.style.display = 'block';
+    renderSlashMenu();
+  }
+
+  // true, wenn die Taste vom offenen Slash-Menü verbraucht wurde (dann darf
+  // der normale Enter-sendet/Zeilenumbruch-Handler nicht mehr greifen).
+  function handleSlashMenuKeydown(e) {
+    if (!slashMenuMatches.length) return false;
+    if (e.key === 'ArrowDown') { e.preventDefault(); slashMenuIndex = (slashMenuIndex + 1) % slashMenuMatches.length; renderSlashMenu(); return true; }
+    if (e.key === 'ArrowUp') { e.preventDefault(); slashMenuIndex = (slashMenuIndex - 1 + slashMenuMatches.length) % slashMenuMatches.length; renderSlashMenu(); return true; }
+    if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); insertSlashCommand(slashMenuMatches[slashMenuIndex]); return true; }
+    if (e.key === 'Escape') { e.preventDefault(); closeSlashMenu(); return true; }
+    return false;
+  }
+
+  // -------------------------------------------------- "/btw"-Nebenfrage
+  // Eigenständiges, frei verschiebbares Mini-Chatfenster für eine Zwischen-
+  // frage, während der Hauptchat noch an einer Antwort arbeitet. Läuft über
+  // denselben /chat/stream-Endpunkt, aber mit komplett eigenem Turn/eigener
+  // History/eigener conversation_id — teilt sich NICHTS mit dem Hauptchat
+  // (kein gemeinsames `busy`, kein Abbrechen der Hauptantwort, keine
+  // Vermischung der Gesprächshistorie).
+  function ensureBtwWindow() {
+    if (btwEl) return;
+    btwEl = document.createElement('div');
+    btwEl.id = 'jsBtwWindow';
+    btwEl.style.cssText = `display:none;position:fixed;top:96px;right:32px;width:320px;z-index:55;background:${C.bgSurface3};border:1px solid ${C.border};border-radius:14px;box-shadow:0 20px 60px rgba(0,0,0,.5);overflow:hidden;`;
+    btwEl.innerHTML = `
+      <div class="js-btw-header" style="cursor:grab;padding:12px 14px;display:flex;align-items:center;justify-content:space-between;user-select:none;">
+        <span style="font-size:14px;font-weight:600;color:${C.text};">Seiten-Chat</span>
+        <div style="display:flex;align-items:center;gap:2px;">
+          <button class="js-btw-expand" title="Größe umschalten" style="background:none;border:none;color:${C.textSoft};cursor:pointer;width:26px;height:26px;border-radius:6px;display:inline-flex;align-items:center;justify-content:center;">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M9 4v16"/></svg>
+          </button>
+          <button class="js-btw-close" title="Schließen" style="background:none;border:none;color:${C.textSoft};cursor:pointer;width:26px;height:26px;border-radius:6px;display:inline-flex;align-items:center;justify-content:center;">${ICONS.close}</button>
+        </div>
+      </div>
+      <div class="js-btw-intro" style="padding:0 14px 14px;font-size:13px;line-height:1.5;color:${C.textDim};">
+        Chatte über diese Sitzung, ohne den Haupt-Thread zu verändern. Jarvis sieht den vollständigen Kontext, und nichts davon wird der Sitzung hinzugefügt.
+      </div>
+      <div class="js-btw-body" style="display:none;flex-direction:column;gap:10px;max-height:280px;overflow-y:auto;padding:0 14px 12px;font-size:13px;color:${C.text};white-space:pre-wrap;word-break:break-word;"></div>
+      <div style="padding:0 12px 12px;">
+        <div class="js-btw-inputwrap" style="display:flex;align-items:center;gap:6px;background:${C.bg};border:1px solid ${C.border};border-radius:22px;padding:9px 8px 9px 14px;">
+          <input class="js-btw-input" placeholder="Stelle eine schnelle Frage…" style="flex:1;min-width:0;background:none;border:none;color:${C.text};font-size:13px;outline:none;">
+          <button class="js-btw-send" title="Senden" style="background:none;border:none;color:${C.textDim};cursor:pointer;width:26px;height:26px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 10 4 15l5 5"/><path d="M20 4v7a4 4 0 0 1-4 4H4"/></svg>
+          </button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(btwEl);
+    btwIntroEl = $('.js-btw-intro', btwEl);
+    btwBodyEl = $('.js-btw-body', btwEl);
+    btwInputEl = $('.js-btw-input', btwEl);
+    btwSendBtn = $('.js-btw-send', btwEl);
+
+    let expanded = false;
+    $('.js-btw-expand', btwEl).addEventListener('click', () => {
+      expanded = !expanded;
+      btwEl.style.width = expanded ? '440px' : '320px';
+      btwBodyEl.style.maxHeight = expanded ? '440px' : '280px';
+    });
+
+    const header = $('.js-btw-header', btwEl);
+    header.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      btwDragging = true;
+      header.style.cursor = 'grabbing';
+      const rect = btwEl.getBoundingClientRect();
+      btwDragStartX = e.clientX; btwDragStartY = e.clientY;
+      btwDragBaseX = rect.left; btwDragBaseY = rect.top;
+    });
+    document.addEventListener('mousemove', (e) => {
+      if (!btwDragging) return;
+      const rect = btwEl.getBoundingClientRect();
+      let x = btwDragBaseX + (e.clientX - btwDragStartX);
+      let y = btwDragBaseY + (e.clientY - btwDragStartY);
+      x = Math.min(window.innerWidth - rect.width, Math.max(0, x));
+      y = Math.min(window.innerHeight - rect.height, Math.max(0, y));
+      btwEl.style.left = x + 'px';
+      btwEl.style.top = y + 'px';
+      btwEl.style.right = 'auto';
+    });
+    document.addEventListener('mouseup', () => {
+      if (!btwDragging) return;
+      btwDragging = false;
+      header.style.cursor = 'grab';
+    });
+
+    $('.js-btw-close', btwEl).addEventListener('click', () => closeBtwWindow());
+    btwSendBtn.addEventListener('click', () => sendBtwMessage());
+    btwInputEl.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); sendBtwMessage(); }
+    });
+  }
+
+  function openBtwWindow() {
+    ensureBtwWindow();
+    btwEl.style.display = 'block';
+    btwInputEl.focus();
+  }
+  function closeBtwWindow() {
+    if (btwEl) btwEl.style.display = 'none';
+  }
+
+  function addBtwLine(who, text) {
+    // Erklärtext nur zeigen, solange noch nichts gefragt wurde — sobald der
+    // erste Verlauf entsteht, weicht er dem eigentlichen Gespräch.
+    if (btwIntroEl) btwIntroEl.style.display = 'none';
+    if (btwBodyEl) btwBodyEl.style.display = 'flex';
+    const line = document.createElement('div');
+    line.innerHTML = `<div style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:${C.textDim};margin-bottom:2px;">${who}</div>`;
+    const body = document.createElement('div');
+    body.textContent = text;
+    line.appendChild(body);
+    btwBodyEl.appendChild(line);
+    btwBodyEl.scrollTop = btwBodyEl.scrollHeight;
+    return body;
+  }
+
+  async function sendBtwMessage() {
+    const text = btwInputEl.value.trim();
+    if (!text || btwBusy) return;
+    if (!btwConversationId) btwConversationId = 'btw-' + (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()));
+    btwInputEl.value = '';
+    btwBusy = true;
+    btwSendBtn.disabled = true;
+    addBtwLine('Du', text);
+    const replyEl = addBtwLine('Jarvis', '');
+    let full = '';
+    try {
+      const resp = await fetch('/chat/stream', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message: text,
+          history: [],
+          turn_id: 'btw-' + (++btwTurnCounter),
+          mode: 'chat',
+          conversation_id: btwConversationId,
+          images: [],
+        }),
+      });
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = '';
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        let nl;
+        while ((nl = buf.indexOf('\n')) >= 0) {
+          const line = buf.slice(0, nl).trim();
+          buf = buf.slice(nl + 1);
+          if (!line) continue;
+          let evt;
+          try { evt = JSON.parse(line); } catch (e) { continue; }
+          // Nur Text — die Nebenfrage bekommt bewusst keine eigene
+          // Sprachausgabe, die sich mit einer laufenden Hauptantwort
+          // überlagern könnte.
+          if (evt.type === 'partial') { replyEl.textContent = evt.text || ''; btwBodyEl.scrollTop = btwBodyEl.scrollHeight; }
+          else if (evt.type === 'done') { full = evt.full_text || full; }
+        }
+      }
+      replyEl.textContent = full || replyEl.textContent;
+    } catch (e) {
+      replyEl.textContent = 'Konnte gerade nicht antworten.';
+    } finally {
+      btwBusy = false;
+      btwSendBtn.disabled = false;
+      btwBodyEl.scrollTop = btwBodyEl.scrollHeight;
+    }
   }
 
   // ------------------------------------------------------ panel / Fortschritt
