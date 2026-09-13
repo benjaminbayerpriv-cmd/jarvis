@@ -3448,8 +3448,18 @@
     // Gleicher Versatz für die Untertitel-Box darüber — sonst bleibt sie auf
     // dem vollen Fenster zentriert, während die Bedienleiste (oben) schon
     // korrekt über dem Chat-Bereich sitzt, und beide laufen auseinander.
+    // Zusätzlich skaliert: die Box selbst hatte bisher feste Schriftgrößen/
+    // Innenabstände und blieb bei jeder Fenstergröße gleich groß — beim
+    // Verkleinern des ganzen Jarvis-Fensters sollte sie sichtbar mit
+    // schrumpfen statt starr zu bleiben.
     const capInner = speechCaptionEl ? speechCaptionEl.firstElementChild : null;
-    if (capInner) capInner.style.transform = 'translateX(' + delta + 'px)';
+    if (capInner) {
+      const REF_WIDTH = 900;   // Breite, ab der die Box ihre volle Größe zeigt
+      const MIN_SCALE = 0.6;   // nie kleiner als das, sonst wird der Text unlesbar
+      const scale = Math.min(1, Math.max(MIN_SCALE, rect.width / REF_WIDTH));
+      capInner.style.transformOrigin = 'center bottom';
+      capInner.style.transform = 'translateX(' + delta + 'px) scale(' + scale + ')';
+    }
   }
 
   function enterSpeech() {
