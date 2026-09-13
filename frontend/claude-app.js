@@ -33,13 +33,29 @@
     serif: 'var(--font-anthropic-serif, Georgia, serif)',
   };
 
+  // ------------------------------------------------ echte claude.ai-Icons (Anthropicons-Variable)
+  // Aus dem eingefrorenen SSR-Snapshot extrahierte Codepoints (siehe [data-cds="Icon"]
+  // im versteckten DOM) - echte Claude-Glyphen statt Lucide-Approximation, wo verifiziert.
+  // sizePx MUSS zur bestehenden ".xyz svg{width;height}"-Regel des jeweiligen Aufrufkontexts
+  // passen, da diese Regeln nur auf <svg>-Kindelemente greifen, nicht auf dieses <span>.
+  // Echte claude.ai-Icon-Hover-Animation: das Anthropicons-Variable-Font hat eine EIGENE
+  // "ANIM"-Achse (0 -> 100 beim Hover, mit Ueberschwing-Easing) - das Icon-Glyph selbst
+  // morpht leicht, komplett ueber font-variation-settings, kein Transform/Scale.
+  // Direkt am echten DOM verifiziert: font-variation-settings geht von
+  // '"ANIM" 0, "ANM2" 0, "opsz" N, "wght" W' auf '"ANIM" 100, ...' ueber 0.3s.
+  // slotPx: fixer Icon-"Slot" (Original: df-leading-slot, immer 28x28 unabhaengig von der
+  // tatsaechlichen Icon-Groesse) - damit Text nach unterschiedlich grossen Icons (z.B. Neu=16px
+  // neben Projekte=20px) trotzdem in einer Spalte startet. Default = sizePx (kein Slot-Effekt).
+  const jsIcon = (hex, sizePx, weight = 433.3, slotPx = sizePx) =>
+    `<span class="jsi-slot" style="display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;width:${slotPx}px;height:${slotPx}px;"><span class="jsi" aria-hidden="true" style="font-family:'Anthropicons-Variable',sans-serif;font-feature-settings:'liga' 0;font-style:normal;line-height:1;display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;font-size:${sizePx}px;width:${sizePx}px;height:${sizePx}px;--jsi-opsz:${sizePx};--jsi-wght:${weight};font-variation-settings:'ANIM' var(--jsi-anim, 0), 'ANM2' 0, 'opsz' var(--jsi-opsz), 'wght' var(--jsi-wght);transition:font-variation-settings .3s cubic-bezier(.34,1.3,.64,1);">&#x${hex.replace('0x', '')};</span></span>`;
+
   // ------------------------------------------------ lucide-icons (24x24 stroke)
   // Echte Lucide-Ikonen, 1:1 aus dem Internet (lucide-static), stroke=currentColor.
   const ICONS = {
     menu: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><line x1="4" x2="20" y1="6" y2="6"/><line x1="4" x2="20" y1="12" y2="12"/><line x1="4" x2="20" y1="18" y2="18"/></svg>',
     plus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" aria-hidden="true"><line x1="12" x2="12" y1="5" y2="19"/><line x1="5" x2="19" y1="12" y2="12"/></svg>',
-    chat: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z"/></svg>',
-    code: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m18 16 4-4-4-4"/><path d="m6 8-4 4 4 4"/><path d="m14.5 4-5 16"/></svg>',
+    chat: jsIcon('0xe08a', 20),
+    code: jsIcon('0xe048', 20),
     mic: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/></svg>',
     micOff: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="2" x2="22" y1="2" y2="22"/><path d="M18.89 13.23A7.12 7.12 0 0 0 19 12v-2"/><path d="M5 10v2a7 7 0 0 0 12 5"/><path d="M15 9.34V5a3 3 0 0 0-5.68-1.33"/><path d="M9 9v3a3 3 0 0 0 5.12 2.12"/><line x1="12" x2="12" y1="19" y2="22"/></svg>',
     audio: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M2 10v3"/><path d="M6 6v11"/><path d="M10 3v18"/><path d="M14 8v7"/><path d="M18 5v13"/><path d="M22 10v3"/></svg>',
@@ -59,12 +75,13 @@
     bullet: '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="12" cy="12" r="5"/></svg>',
     arrowLeft: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></svg>',
     arrowRight: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>',
-    layers: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"/><path d="M2 12a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 12"/><path d="M2 17a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 17"/></svg>',
+    layers: jsIcon('0xe017', 24),
     clock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>',
-    sliders: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="21" x2="14" y1="4" y2="4"/><line x1="10" x2="3" y1="4" y2="4"/><line x1="21" x2="12" y1="12" y2="12"/><line x1="8" x2="3" y1="12" y2="12"/><line x1="21" x2="16" y1="20" y2="20"/><line x1="12" x2="3" y1="20" y2="20"/><line x1="14" x2="14" y1="2" y2="6"/><line x1="8" x2="8" y1="10" y2="14"/><line x1="16" x2="16" y1="18" y2="22"/></svg>',
+    sliders: jsIcon('0xe100', 24),
     palette: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22a1 1 0 0 1 0-20 10 9 0 0 1 10 9 5 5 0 0 1-5 5h-2.25a1.75 1.75 0 0 0-1.4 2.8l.3.4a1.75 1.75 0 0 1-1.4 2.8z"/><circle cx="13.5" cy="6.5" r=".5" fill="currentColor"/><circle cx="17.5" cy="10.5" r=".5" fill="currentColor"/><circle cx="6.5" cy="12.5" r=".5" fill="currentColor"/><circle cx="8.5" cy="7.5" r=".5" fill="currentColor"/></svg>',
     copy: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>',
     trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>',
+    pencil: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/></svg>',
     pin: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V17a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a1 1 0 0 0 0-2H8a1 1 0 0 0 0 2h1z"/></svg>',
     pinFilled: '<svg viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true"><path d="M12 17v5h-1v-5z"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V17a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a1 1 0 0 0 0-2H8a1 1 0 0 0 0 2h1z"/></svg>',
     spark: '<svg viewBox="0 0 100 100" fill="currentColor" aria-hidden="true"><path d="m19.6 66.5 19.7-11 .3-1-.3-.5h-1l-3.3-.2-11.2-.3L14 53l-9.5-.5-2.4-.5L0 49l.2-1.5 2-1.3 2.9.2 6.3.5 9.5.6 6.9.4L38 49.1h1.6l.2-.7-.5-.4-.4-.4L29 41l-10.6-7-5.6-4.1-3-2-1.5-2-.6-4.2 2.7-3 3.7.3.9.2 3.7 2.9 8 6.1L37 36l1.5 1.2.6-.4.1-.3-.7-1.1L33 25l-6-10.4-2.7-4.3-.7-2.6c-.3-1-.4-2-.4-3l3-4.2L28 0l4.2.6L33.8 2l2.6 6 4.1 9.3L47 29.9l2 3.8 1 3.4.3 1h.7v-.5l.5-7.2 1-8.7 1-11.2.3-3.2 1.6-3.8 3-2L61 2.6l2 2.9-.3 1.8-1.1 7.7L59 27.1l-1.5 8.2h.9l1-1.1 4.1-5.4 6.9-8.6 3-3.5L77 13l2.3-1.8h4.3l3.1 4.7-1.4 4.9-4.4 5.6-3.7 4.7-5.3 7.1-3.2 5.7.3.4h.7l12-2.6 6.4-1.1 7.6-1.3 3.5 1.6.4 1.6-1.4 3.4-8.2 2-9.6 2-14.3 3.3-.2.1.2.3 6.4.6 2.8.2h6.8l12.6 1 3.3 2 1.9 2.7-.3 2-5.1 2.6-6.8-1.6-16-3.8-5.4-1.3h-.8v.4l4.6 4.5 8.3 7.5L89 80.1l.5 2.4-1.3 2-1.4-.2-9.2-7-3.6-3-8-6.8h-.5v.7l1.8 2.7 9.8 14.7.5 4.5-.7 1.4-2.6 1-2.7-.6-5.8-8-6-9-4.7-8.2-.5.4-2.9 30.2-1.3 1.5-3 1.2-2.5-2-1.4-3 1.4-6.2 1.6-8 1.3-6.4 1.2-7.9.7-2.6v-.2H49L43 72l-9 12.3-7.2 7.6-1.7.7-3-1.5.3-2.8L24 86l10-12.8 6-7.9 4-4.6-.1-.5h-.3L17.2 77.4l-4.7.6-2-2 .2-3 1-1 8-5.5Z"/></svg>',
@@ -363,7 +380,7 @@
   let speechCaptionEl = null, spcStatusEl = null, spcUserEl = null, spcReplyEl = null;
   let settingsSheetEl = null, settingsModelsEl = null, newProjectSheetEl = null, renameChatSheetEl = null;
   let pinnedChatListEl = null;
-  let chatItemMenuTargetId = null, chatItemMenuTargetProjectId = null, renamingChatId = null, renamingChatProjectId = null;
+  let chatItemMenuTargetId = null, chatItemMenuTargetProjectId = null, renamingChatId = null, renamingChatProjectId = null, renamingIsCodeSession = false;
   let allConversations = [];  // letzte /conversations-Antwort — für Umbenennen/Anheften/Löschen ohne erneuten Fetch
 
   // Code-Tab (echte opencode-TUI in einem eingebetteten xterm.js-Terminal)
@@ -371,6 +388,10 @@
   let codeStatusLabelEl = null, codeDotEl = null, codeRestartBtn = null, codeContextWarningEl = null;
   let codeTerm = null, codeFit = null;
   let codeWs = null, codeWsOpen = false, codeReconnectTimer = null, codeExited = false;
+  // Welche echte opencode-Session (aus opencode.db, siehe /code/sessions) beim naechsten
+  // (Re-)Connect fortgesetzt werden soll - null = neue Session. Getrennt von JARVIS' eigenen
+  // Chat-Konversationen, siehe loadCodeSessions().
+  let codeSessionId = null;
 
   // Projects-Ansicht Anker
   let projectsViewEl = null, projectsGridEl = null, projectsPinnedGridEl = null, projectsSearchRowEl = null, projectsSearchInputEl = null;
@@ -425,13 +446,44 @@
     return currentConversationId;
   }
 
-  // Uhrzeit-Begrüßung (bewusst deutsch, vom Nutzer so gewünscht).
+  // Begrüßungen auf der Startseite (bewusst deutsch, vom Nutzer so gewünscht).
+  // Pool nach echtem claude.ai-Vorbild nachgebaut: eine große Sammlung aus
+  // zeit-/wochentagsabhängigen und generischen Sprüchen, bei jedem Aufruf
+  // wird zufällig einer aus den gerade passenden ausgewählt.
+  const GREETINGS_ANY = [
+    'Willkommen', 'Willkommen, Chef', 'Hey', 'Hey, Chef',
+    'Hi, wie geht\'s?', 'Hi Chef, wie geht\'s?',
+    'Wie läuft\'s?', 'Wie läuft\'s, Chef?',
+    'Was gibt\'s Neues?', 'Was gibt\'s Neues, Chef?',
+    'Woran denkst du?', 'Woran denkst du, Chef?',
+    'Was brodelt bei dir?', 'Was brodelt bei dir, Chef?',
+    'Wie war dein Tag?', 'Wie war dein Tag, Chef?',
+    'Grüß dich, wer auch immer du bist',
+    'Zurück am Start, Chef', 'Wieder da, Chef', 'Wieder da!',
+    'Lass uns inkognito chatten', 'Du bist inkognito',
+  ];
+  const GREETINGS_MORNING = ['Guten Morgen', 'Guten Morgen, Chef', 'Kaffee und Jarvis-Zeit?'];
+  const GREETINGS_AFTERNOON = ['Guten Tag', 'Guten Tag, Chef'];
+  const GREETINGS_EVENING = ['Guten Abend', 'Guten Abend, Chef', 'Abend', 'Abend, Chef'];
+  const GREETINGS_NIGHT = ['Hallo, Nachteule', 'Mondscheingespräch', 'Was geht dir heute Nacht durch den Kopf?'];
+  const GREETINGS_WEEKDAY = {
+    1: ['Schönen Montag', 'Schönen Montag, Chef'],
+    2: ['Schönen Dienstag', 'Schönen Dienstag, Chef'],
+    3: ['Schönen Mittwoch', 'Schönen Mittwoch, Chef'],
+    4: ['Schönen Donnerstag', 'Schönen Donnerstag, Chef'],
+    5: ['Schönen Freitag', 'Schönen Freitag, Chef', 'Dieses Freitagsgefühl', 'Dieses Freitagsgefühl, Chef'],
+    6: ['Schönen Samstag!', 'Schönen Samstag, Chef', 'Willkommen zum Wochenende', 'Willkommen zum Wochenende, Chef'],
+    0: ['Schönen Sonntag', 'Schönen Sonntag, Chef', 'Sonntagssession?', 'Sonntagssession, Chef?', 'Willkommen zum Wochenende', 'Willkommen zum Wochenende, Chef'],
+  };
   function timeGreeting() {
-    const h = new Date().getHours();
-    if (h >= 5 && h < 11) return 'Guten Morgen, Chef';
-    if (h >= 11 && h < 15) return 'Guten Tag, Chef';
-    if (h >= 15 && h < 22) return 'Guten Abend, Chef';
-    return 'Mondscheingespräch';
+    const now = new Date();
+    const h = now.getHours();
+    const timePool = h >= 5 && h < 11 ? GREETINGS_MORNING
+      : h >= 11 && h < 17 ? GREETINGS_AFTERNOON
+      : h >= 17 && h < 22 ? GREETINGS_EVENING
+      : GREETINGS_NIGHT;
+    const pool = [...GREETINGS_ANY, ...timePool, ...(GREETINGS_WEEKDAY[now.getDay()] || [])];
+    return pool[Math.floor(Math.random() * pool.length)];
   }
 
   // --------------------------------------------------------- UI: buildUi()
@@ -442,48 +494,49 @@
     uiEl.innerHTML = `
       <button class="js-side-toggle-float" title="Sidebar einblenden" style="display:none;position:absolute;top:15px;left:12px;z-index:31;background:none;border:none;color:${C.textSoft};cursor:pointer;align-items:center;justify-content:center;width:30px;height:30px;border-radius:8px;">${ICONS.menu}</button>
       <aside class="js-sidebar" style="width:308px;flex:0 0 308px;height:100%;display:flex;flex-direction:column;background:${C.bgSoft};border-right:1px solid ${C.border};position:relative;">
-        <div class="js-sidebar-top" style="padding:16px 12px 6px;display:flex;flex-direction:column;gap:12px;">
-          <div class="js-sidebar-header" style="display:flex;align-items:center;justify-content:space-between;">
-            <span style="font-family:${C.serif};font-size:15px;font-weight:500;color:${C.text};">Jarvis</span>
+        <div class="js-sidebar-top" style="padding:16px 8px 6px;display:flex;flex-direction:column;gap:12px;">
+          <div class="js-sidebar-header" style="display:flex;align-items:center;justify-content:space-between;padding-left:8px;">
+            <span style="font-family:${C.serif};font-size:21px;font-weight:700;color:${C.text};">Jarvis</span>
             <div style="display:flex;align-items:center;gap:2px;">
               <button class="js-nav-back" title="Zurück" disabled style="background:none;border:none;color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:7px;">${ICONS.arrowLeft}</button>
               <button class="js-nav-forward" title="Vorwärts" disabled style="background:none;border:none;color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:7px;">${ICONS.arrowRight}</button>
-              <button class="js-side-toggle" title="Sidebar ausblenden" style="background:none;border:none;color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:7px;">${ICONS.menu}</button>
-              <button class="js-search-toggle" title="Bald verfügbar" disabled style="background:none;border:none;color:${C.textDim};cursor:default;display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:7px;opacity:.5;">${ICONS.search}</button>
+              <button class="js-side-toggle" title="Sidebar ausblenden" style="background:none;border:none;color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:7px;">${jsIcon('0xe0dd', 20)}</button>
+              <button class="js-search-toggle" title="Bald verfügbar" disabled style="background:none;border:none;color:${C.textDim};cursor:default;display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:7px;opacity:.5;">${jsIcon('0xe0d3', 20)}</button>
             </div>
           </div>
           <div class="js-search-row" style="display:none;">
             <input class="js-search-input" type="text" placeholder="Chats durchsuchen…" style="width:100%;padding:7px 10px;background:${C.bgHover};border:1px solid ${C.border};border-radius:9px;color:${C.text};font-size:13px;font-family:${C.font};outline:none;" />
           </div>
-          <div class="js-mode" style="display:flex;padding:3px;gap:3px;background:${C.bgHover};border-radius:11px;">
-            <button class="js-pill active" data-mode="chat" style="flex:1;display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:7px 10px;border-radius:8px;border:none;background:transparent;color:${C.textSoft};font-size:13px;font-weight:500;cursor:pointer;transition:background .15s,color .15s;">${ICONS.chat}<span>Startseite</span></button>
-            <button class="js-pill" data-mode="code" title="Code mit JARVIS Code" style="flex:1;display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:7px 10px;border-radius:8px;border:none;background:transparent;color:${C.textSoft};font-size:13px;font-weight:500;cursor:pointer;transition:background .15s,color .15s;">${ICONS.code}<span>Code</span></button>
+          <div class="js-mode" style="position:relative;display:flex;padding:1px;gap:0;background:rgba(255,255,255,.06);border-radius:8px;">
+            <div class="js-mode-indicator" style="position:absolute;top:1px;bottom:1px;left:1px;width:0;border-radius:7px;background:rgba(255,255,255,.1);box-shadow:inset 0 0 0 .5px rgba(255,255,255,.08),0 1px 2px rgba(0,0,0,.3),0 2px 6px -1px rgba(0,0,0,.25);transition:left .3s cubic-bezier(.32,.72,0,1),width .3s cubic-bezier(.32,.72,0,1);pointer-events:none;"></div>
+            <button class="js-pill active" data-mode="chat" style="position:relative;z-index:1;flex:1;display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:7px 10px;border-radius:8px;border:none;background:transparent;color:${C.textSoft};font-size:14px;font-weight:500;cursor:pointer;transition:color .15s;">${jsIcon('0xe08a', 20)}<span>Startseite</span></button>
+            <button class="js-pill" data-mode="code" title="Code mit JARVIS Code" style="position:relative;z-index:1;flex:1;display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:7px 10px;border-radius:8px;border:none;background:transparent;color:${C.textSoft};font-size:14px;font-weight:500;cursor:pointer;transition:color .15s;">${jsIcon('0xe048', 20)}<span>Code</span></button>
           </div>
-          <button class="js-new" style="display:flex;align-items:center;gap:8px;padding:9px 12px;background:${C.bgHover};border:none;border-radius:11px;color:${C.text};font-size:13px;font-weight:500;cursor:pointer;transition:background .15s;">${ICONS.plus}<span>Neu</span></button>
-          <div class="js-nav-list" style="display:flex;flex-direction:column;gap:1px;">
-            <button class="js-projects js-navrow" style="display:flex;align-items:center;gap:10px;padding:8px 10px;background:none;border:none;border-radius:9px;color:${C.textSoft};font-size:13px;cursor:pointer;transition:background .15s,color .15s;text-align:left;">${ICONS.folder}<span>Projekte</span></button>
-            <button class="js-artifacts js-navrow" title="Bald verfügbar" style="display:flex;align-items:center;gap:10px;padding:8px 10px;background:none;border:none;border-radius:9px;color:${C.textDim};font-size:13px;cursor:default;text-align:left;opacity:.55;">${ICONS.layers}<span>Artefakte</span></button>
-            <button class="js-customize js-navrow" style="display:flex;align-items:center;gap:10px;padding:8px 10px;background:none;border:none;border-radius:9px;color:${C.textSoft};font-size:13px;cursor:pointer;transition:background .15s,color .15s;text-align:left;">${ICONS.sliders}<span>Anpassen</span></button>
+          <div class="js-nav-list" style="display:flex;flex-direction:column;gap:4px;">
+            <button class="js-new js-navrow" style="display:flex;align-items:center;gap:8px;height:40px;padding:0 8px;border:none;border-radius:8px;color:${C.textSoft};font-size:14px;cursor:pointer;transition:background .15s,color .15s;text-align:left;">${jsIcon('0xe001', 20, 700, 24)}<span>Neu</span></button>
+            <button class="js-projects js-navrow" style="display:flex;align-items:center;gap:8px;height:40px;padding:0 8px;border:none;border-radius:8px;color:${C.textSoft};font-size:14px;cursor:pointer;transition:background .15s,color .15s;text-align:left;">${jsIcon('0xe0c9', 24)}<span>Projekte</span></button>
+            <button class="js-artifacts js-navrow" title="Bald verfügbar" style="display:flex;align-items:center;gap:8px;height:40px;padding:0 8px;background:none;border:none;border-radius:8px;color:${C.textDim};font-size:14px;cursor:default;text-align:left;opacity:.55;">${jsIcon('0xe017', 24)}<span>Artefakte</span></button>
+            <button class="js-customize js-navrow" title="Bald verfügbar" style="display:flex;align-items:center;gap:8px;height:40px;padding:0 8px;background:none;border:none;border-radius:8px;color:${C.textDim};font-size:14px;cursor:default;text-align:left;opacity:.55;">${jsIcon('0xe100', 24)}<span>Anpassen</span></button>
           </div>
           <div class="js-projects-pin-section">
             <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 8px 4px;">
-              <span style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:${C.textDim};">Projekte</span>
+              <span class="js-projects-pin-title" style="font-size:14px;color:${C.textSoft};cursor:pointer;">Projekte</span>
               <button class="js-projects-pin-add" title="Projekt erstellen" style="background:none;border:none;color:${C.textDim};cursor:pointer;display:inline-flex;padding:3px;">${ICONS.plus}</button>
             </div>
-            <div class="js-projects-pin-hint" style="display:flex;align-items:center;gap:10px;padding:7px 10px;color:${C.textDim};font-size:12.5px;line-height:1.3;">${ICONS.folder}<span>Projekte anheften, um sie hier zu behalten</span></div>
+            <div class="js-projects-pin-hint" style="display:flex;align-items:center;gap:10px;padding:7px 10px;color:${C.textDim};font-size:14px;line-height:1.3;">${jsIcon('0xe0bd', 20)}<span>Projekte anheften, um sie hier zu behalten</span></div>
           </div>
-          <button class="js-pinned-toggle" style="display:none;align-items:center;gap:4px;padding:2px 8px 4px;background:none;border:none;font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:${C.textDim};cursor:pointer;font-family:${C.font};">
-            <span class="js-pinned-chevron" style="display:inline-flex;transition:transform .15s;">${ICONS.chevronDown}</span>
+          <button class="js-pinned-toggle" style="display:none;align-items:center;gap:4px;padding:2px 8px 4px;background:none;border:none;font-size:13px;color:${C.textDim};cursor:pointer;font-family:${C.font};">
             <span>Angeheftet</span>
+            <span class="js-pinned-chevron" style="display:inline-flex;transition:transform .15s;">${ICONS.chevronDown}</span>
           </button>
         </div>
         <div class="js-pinned-chats" style="flex:0 0 auto;overflow-y:auto;padding:2px 8px 0;max-height:40%;"></div>
-        <div class="js-chats-toggle-row" style="display:flex;align-items:center;justify-content:space-between;margin-top:6px;padding:0 4px;">
-          <button class="js-chats-toggle" style="display:flex;align-items:center;gap:4px;padding:8px 8px 4px;background:none;border:none;font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:${C.textDim};cursor:pointer;font-family:${C.font};">
-            <span class="js-chats-chevron" style="display:inline-flex;transition:transform .15s;">${ICONS.chevronDown}</span>
+        <div class="js-chats-toggle-row" style="display:flex;align-items:center;justify-content:space-between;margin-top:6px;padding:0 8px;">
+          <button class="js-chats-toggle" style="display:flex;align-items:center;gap:4px;padding:8px 8px 4px;background:none;border:none;font-size:13px;color:${C.textDim};cursor:pointer;font-family:${C.font};">
             <span>Chats und Aufgaben</span>
+            <span class="js-chats-chevron" style="display:inline-flex;transition:transform .15s;">${ICONS.chevronDown}</span>
           </button>
-          <button class="js-chats-sort" title="Filtern und gruppieren" style="background:none;border:none;color:${C.textDim};cursor:pointer;display:inline-flex;padding:5px;">${ICONS.sort}</button>
+          <button class="js-chats-sort" title="Filtern und gruppieren" style="background:none;border:none;color:${C.textDim};cursor:pointer;display:inline-flex;padding:5px;">${jsIcon('0xe070', 20)}</button>
         </div>
         <div class="js-chats" style="flex:1 1 auto;overflow-y:auto;padding:2px 8px 10px;position:relative;"></div>
         <div class="js-chatitem-menu" style="display:none;position:absolute;width:180px;background:${C.bgSoft};border:1px solid ${C.border};border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.4);overflow:hidden;z-index:35;"></div>
@@ -516,17 +569,17 @@
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:28px;">
             <h1 style="font-family:${C.serif};font-size:28px;font-weight:600;color:${C.text};margin:0;">Projekte</h1>
             <div style="display:flex;align-items:center;gap:14px;">
-              <button class="js-projects-search-btn" title="Suchen" style="background:none;border:none;color:${C.textSoft};cursor:pointer;display:inline-flex;padding:6px;">${ICONS.search}</button>
-              <button class="js-projects-sort-btn" title="Sortieren" style="background:none;border:none;color:${C.textSoft};cursor:pointer;display:inline-flex;padding:6px;">${ICONS.sort}</button>
+              <button class="js-projects-search-btn" title="Suchen" style="background:none;border:none;color:${C.textSoft};cursor:pointer;display:inline-flex;padding:6px;">${jsIcon('0xe0d3', 22)}</button>
+              <button class="js-projects-sort-btn" title="Sortieren" style="background:none;border:none;color:${C.textSoft};cursor:pointer;display:inline-flex;padding:6px;">${jsIcon('0xe070', 22)}</button>
               <button class="js-projects-new" style="padding:9px 18px;background:${C.text};border:none;border-radius:20px;color:${C.bg};font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap;">Neues Projekt</button>
             </div>
           </div>
           <div class="js-projects-search-row" style="display:none;margin-bottom:20px;">
             <input class="js-projects-search-input" type="text" placeholder="Projekte durchsuchen…" style="width:100%;max-width:360px;padding:9px 14px;background:${C.bgHover};border:1px solid ${C.border};border-radius:10px;color:${C.text};font-size:13px;font-family:${C.font};outline:none;" />
           </div>
-          <button class="js-projects-pinned-toggle" style="display:none;align-items:center;gap:4px;padding:0 0 10px;background:none;border:none;font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:${C.textDim};cursor:pointer;font-family:${C.font};">
-            <span class="js-projects-pinned-chevron" style="display:inline-flex;transition:transform .15s;">${ICONS.chevronDown}</span>
+          <button class="js-projects-pinned-toggle" style="display:none;align-items:center;gap:4px;padding:0 0 10px;background:none;border:none;font-size:13px;color:${C.textDim};cursor:pointer;font-family:${C.font};">
             <span>Angeheftet</span>
+            <span class="js-projects-pinned-chevron" style="display:inline-flex;transition:transform .15s;">${ICONS.chevronDown}</span>
           </button>
           <div class="js-projects-pinned-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:16px;margin-bottom:24px;"></div>
           <div class="js-projects-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:16px;"></div>
@@ -560,9 +613,9 @@
                   <span class="js-pd-model-label">Modell…</span>
                   <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
                 </button>
-                <button class="js-pd-note" title="Diktieren" style="width:34px;height:34px;border-radius:9px;background:none;border:none;color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;">${ICONS.mic}</button>
+                <button class="js-pd-note" title="Diktieren" style="width:34px;height:34px;border-radius:9px;background:none;border:none;color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;">${jsIcon('0xe0ab', 20)}</button>
                 <button class="js-pd-speech" title="Sprachmodus" style="width:38px;height:38px;border-radius:50%;background:${C.bgHover};border:1px solid ${C.border};color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;">${ICONS.audio}</button>
-                <button class="js-pd-send" title="Senden" style="width:38px;height:38px;border-radius:50%;background:${C.accent};border:none;color:#fff;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;">${ICONS.send}</button>
+                <button class="js-pd-send" title="Senden" style="width:38px;height:38px;border-radius:50%;background:${C.accent};border:none;color:#fff;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;">${jsIcon('0xe013', 22)}</button>
               </div>
             </div>
           </div>
@@ -583,9 +636,9 @@
                   <span class="js-model-label">Modell…</span>
                   <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
                 </button>
-                <button class="js-note" title="Diktieren" style="width:32px;height:32px;border-radius:8px;background:none;border:none;color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;transition:background .15s;flex:0 0 auto;">${ICONS.mic}</button>
-                <button class="js-speech" title="Sprachmodus" style="width:32px;height:32px;border-radius:8px;background:none;border:none;color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;transition:background .15s;flex:0 0 auto;">${ICONS.audio}</button>
-                <button class="js-send" title="Senden" style="width:32px;height:32px;border-radius:8px;background:${C.accent};border:none;color:#fff;cursor:pointer;display:none;align-items:center;justify-content:center;flex:0 0 auto;">${ICONS.send}</button>
+                <button class="js-note" title="Diktieren" style="width:32px;height:32px;border-radius:8px;background:none;border:none;color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;transition:background .15s;flex:0 0 auto;">${jsIcon('0xe0ab', 24)}</button>
+                <button class="js-speech" title="Sprachmodus" style="width:32px;height:32px;border-radius:8px;background:none;border:none;color:${C.textDim};opacity:.55;cursor:default;pointer-events:none;display:inline-flex;align-items:center;justify-content:center;transition:background .15s;flex:0 0 auto;">${ICONS.audio}</button>
+                <button class="js-send" title="Senden" style="width:32px;height:32px;border-radius:8px;background:${C.accent};border:none;color:#fff;cursor:pointer;display:none;align-items:center;justify-content:center;flex:0 0 auto;">${jsIcon('0xe013', 24)}</button>
               </div>
             </div>
           </div>
@@ -602,9 +655,9 @@
     speechBarEl.style.cssText = 'position:fixed;left:0;right:0;bottom:24px;z-index:50;display:none;justify-content:center;pointer-events:none;';
     speechBarEl.innerHTML = `
       <div style="pointer-events:auto;display:flex;align-items:center;gap:10px;padding:8px 12px;background:${C.bgSurface3};border:1px solid ${C.border};border-radius:16px;box-shadow:0 12px 40px rgba(0,0,0,.5);">
-        <button class="js-sp-mute" title="Mikrofon aus" style="width:44px;height:44px;border-radius:14px;background:${C.bgHover};border:1px solid ${C.border};color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;">${ICONS.mic}</button>
+        <button class="js-sp-mute" title="Mikrofon aus" style="width:44px;height:44px;border-radius:14px;background:${C.bgHover};border:1px solid ${C.border};color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;">${jsIcon('0xe0ab', 24)}</button>
         <button class="js-sp-stop" title="Stopp" style="width:44px;height:44px;border-radius:14px;background:${C.bgHover};border:1px solid ${C.border};color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;">${ICONS.stop}</button>
-        <button class="js-sp-send" title="Senden" style="width:44px;height:44px;border-radius:14px;background:${C.bgHover};border:1px solid ${C.border};color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;">${ICONS.send}</button>
+        <button class="js-sp-send" title="Senden" style="width:44px;height:44px;border-radius:14px;background:${C.bgHover};border:1px solid ${C.border};color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;">${jsIcon('0xe013', 24)}</button>
         <button class="js-sp-chat" title="Chat-Modus" style="width:44px;height:44px;border-radius:14px;background:${C.bgHover};border:1px solid ${C.border};color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;">${ICONS.close}</button>
       </div>
     `;
@@ -781,6 +834,24 @@
     s.textContent = `
       body.js-app-active > :not(#jsApp):not(#jarvisOrb):not(#jsSpeechbar):not(#jsSpeechCaption):not(#jsSettingsSheet):not(#jsNewProjectSheet):not(#jsRenameChatSheet):not(script):not(style) { display:none !important; }
       body.js-app-active { overflow:hidden; }
+      /* Echter claude.ai "Squish"-Press-Effekt (aus --cds-btn-spring extrahiert): schnelles
+         Einschrumpfen beim Klicken, dann sanftes Zurueckfedern. NUR auf echten Action-Icon-
+         Buttons (data-cds="Button" im Original: Suchen, Sortieren, Mehr-Optionen, Senden,
+         Sidebar-Toggle) - im Original haben Tabs/Nav-Links (Startseite, Code, Neu, Projekte,
+         Artefakte, Anpassen, Mikrofon-Diktieren) explizit KEINEN Squish, nur einen normalen
+         Auswahl-/Hover-Zustand ohne Groessenaenderung. Direkt am echten DOM verifiziert. */
+      a:hover > .jsi, button:hover > .jsi, a:hover .jsi, button:hover .jsi { --jsi-anim: 100; }
+      .js-side-toggle, .js-side-toggle-float, .js-search-toggle, .js-projects-search-btn,
+      .js-chats-sort, .js-projects-sort-btn, .js-chatitem-menu-btn, .js-project-menu-btn,
+      .js-send, .js-pd-send, .js-sp-send, .js-upload, .js-pd-upload {
+        transform:scale(1); transform-origin:50% center;
+        transition:transform .45s linear(0, .2459, .6526, .9468, 1.0764, 1.0915, 1.0585, 1.0219, .9993, .9914, .9921, .9957, .9988, 1.0004, 1);
+      }
+      .js-side-toggle:active, .js-side-toggle-float:active, .js-search-toggle:active, .js-projects-search-btn:active,
+      .js-chats-sort:active, .js-projects-sort-btn:active, .js-chatitem-menu-btn:active, .js-project-menu-btn:active,
+      .js-send:active, .js-pd-send:active, .js-sp-send:active, .js-upload:active, .js-pd-upload:active {
+        transform:scale(.975); transition:transform 60ms ease-out;
+      }
       .js-sidebar button:focus-visible, .js-main button:focus-visible { outline:2px solid ${C.accent}; outline-offset:2px; }
       .js-editor:empty::before, .js-editor.is-empty::before { content:attr(data-placeholder); color:${C.textDim}; pointer-events:none; }
       .js-editor:focus::before { opacity:.7; }
@@ -798,28 +869,36 @@
       .js-sp-mute svg, .js-sp-stop svg, .js-sp-chat svg, .js-sp-send svg { width:20px; height:20px; display:block; }
       .js-pill svg { width:16px; height:16px; display:block; }
       .js-side-toggle:hover, .js-new:hover, .js-projects:hover, .js-upload:hover, .js-note:hover, .js-speech:hover, .js-model:hover, .js-settings-row:hover, .js-sp-mute:hover, .js-sp-stop:hover, .js-sp-chat:hover { background:${C.bgHover}; color:${C.text}; }
-      .js-navrow:not([disabled]):not(.js-artifacts):not(.js-scheduled):hover { background:${C.bgHover}; color:${C.text}; }
-      .js-pill.active { background:${C.bgHover} !important; color:${C.text} !important; box-shadow:inset 0 0 0 1px ${C.border}; }
-      .js-pill:not(.active):hover { background:${C.bgHover}; color:${C.text}; }
+      .js-navrow:not([disabled]):not(.js-artifacts):not(.js-customize):hover { background:${C.bgHover}; color:${C.text}; }
+      .js-pill.active { color:${C.text} !important; }
+      .js-pill:not(.active):hover { color:${C.text}; }
       .js-note.on { color:${C.accent} !important; background:rgba(217,119,87,.12) !important; }
       .js-note.on svg { animation:js-note-pulse 1.4s ease-in-out infinite; }
       @keyframes js-note-pulse { 0%,100% { opacity:1; } 50% { opacity:.45; } }
       .js-speech.on { background:${C.accent} !important; border-color:${C.accent} !important; color:#fff !important; }
       .js-speech.on svg { animation:js-speech-pulse 1.3s ease-in-out infinite; }
       @keyframes js-speech-pulse { 0%,100% { transform:scale(1); } 50% { transform:scale(1.14); } }
-      .js-chat-item { position:relative; display:flex; align-items:center; gap:9px; padding:7px 32px 7px 10px; border-radius:10px; cursor:pointer; font-size:13px; color:${C.textSoft}; }
+      .js-chat-item { position:relative; display:flex; align-items:center; gap:9px; padding:7px 54px 7px 10px; border-radius:8px; cursor:pointer; font-size:14px; color:${C.textSoft}; }
       .js-chat-item:hover { background:${C.bgHover}; color:${C.text}; }
       .js-chat-item.selected { background:${C.bgHover}; color:${C.text}; }
+      .js-navrow { background:transparent; }
+      .js-navrow.active { background:${C.bgHover}; color:${C.text}; }
       .js-chat-item .js-ico { flex:0 0 auto; display:inline-flex; align-items:center; justify-content:center; width:15px; height:15px; color:${C.textDim}; }
       .js-chat-item .js-ico svg { width:15px; height:15px; display:block; }
       .js-chats-toggle .js-chats-chevron svg, .js-pinned-toggle .js-pinned-chevron svg, .js-projects-pinned-toggle .js-projects-pinned-chevron svg { width:13px; height:13px; display:block; }
       .js-chats-toggle.is-collapsed .js-chats-chevron, .js-pinned-toggle.is-collapsed .js-pinned-chevron, .js-projects-pinned-toggle.is-collapsed .js-projects-pinned-chevron { transform:rotate(-90deg); }
-      .js-chats.is-collapsed, .js-pinned-chats.is-collapsed { display:none !important; }
+      .js-pinned-chats.is-collapsed { display:none !important; }
+      /* .js-chats behaelt sein flex:1 (bleibt als leerer Platzhalter bestehen), damit
+         .js-settings-row weiterhin unten bleibt statt beim Zuklappen nach oben zu rutschen -
+         nur der Inhalt wird versteckt. */
+      .js-chats.is-collapsed > * { display:none !important; }
       .js-chat-item .js-txt { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; flex:1; }
-      .js-chatitem-menu-btn { opacity:0; transition:opacity .1s; flex:0 0 auto; background:none; border:none; color:${C.textSoft}; cursor:pointer; padding:2px; display:inline-flex; border-radius:6px; }
-      .js-chat-item:hover .js-chatitem-menu-btn, .js-chatitem-menu-btn.is-open { opacity:1; }
-      .js-chatitem-menu-btn:hover { background:${C.border}; }
-      .js-chatitem-menu-btn svg { width:14px; height:14px; display:block; }
+      .js-chatitem-menu-btn { position:absolute; right:6px; top:50%; transform:translateY(-50%); opacity:0; transition:opacity .1s; background:none; border:none; color:${C.textSoft}; cursor:pointer; padding:2px; display:inline-flex; border-radius:6px; }
+      .js-chatitem-rename-btn { position:absolute; right:28px; top:50%; transform:translateY(-50%); opacity:0; transition:opacity .1s; background:none; border:none; color:${C.textSoft}; cursor:pointer; padding:2px; display:inline-flex; border-radius:6px; }
+      .js-chat-item:hover .js-chatitem-menu-btn, .js-chatitem-menu-btn.is-open,
+      .js-chat-item:hover .js-chatitem-rename-btn { opacity:1; }
+      .js-chatitem-menu-btn:hover, .js-chatitem-rename-btn:hover { background:${C.border}; }
+      .js-chatitem-menu-btn svg, .js-chatitem-rename-btn svg { width:14px; height:14px; display:block; }
       .js-chatitem-menu button:hover { background:${C.bgHover}; }
       .js-turn { max-width:768px; margin:0 auto 24px; font-family:${C.font}; line-height:1.6; display:flex; flex-direction:column; }
       .js-you { align-items:flex-end; }
@@ -934,6 +1013,18 @@
     updateNavButtons();
   }
 
+  // Echter claude.ai Segmented-Control-Effekt: ein gleitendes Hintergrund-"Kissen" (statt
+  // dass beide Pills unabhaengig ihren Hintergrund ein-/ausblenden) bewegt sich zwischen
+  // Startseite/Code. Direkt am echten DOM gemessen: 0.3s cubic-bezier(.32,.72,0,1).
+  function moveModeIndicator(mode) {
+    if (!uiEl) return;
+    const indicator = uiEl.querySelector('.js-mode-indicator');
+    const activePill = uiEl.querySelector(`.js-pill[data-mode="${mode}"]`);
+    if (!indicator || !activePill) return;
+    indicator.style.left = activePill.offsetLeft + 'px';
+    indicator.style.width = activePill.offsetWidth + 'px';
+  }
+
   function setMode(mode) {
     if (mode !== 'chat' && mode !== 'code') return;
     closeProjectsView();
@@ -941,13 +1032,17 @@
     const isCode = mode === 'code';
     const pills = uiEl ? uiEl.querySelectorAll('.js-pill') : [];
     pills.forEach((p) => p.classList.toggle('active', p.dataset.mode === mode));
+    moveModeIndicator(mode);
     if (uiEl) uiEl.classList.toggle('js-code-active', isCode);
     if (isCode) {
       // Code-Tab führt keine Chat-Konversationen; eigener Zustand + Socket.
+      activeMode = mode;
       buildCodeView();
       loadCodeStatus();
+      loadCodeSessions();
       ensureCodeSocket();
       navRecord();
+      updateNavActive();
       return;
     }
     // Code-Tab verlassen: den Terminal-Socket schließen (der Server beendet die
@@ -996,10 +1091,26 @@
     syncWelcome();
   }
 
+  // Genau EIN Nav-Eintrag (Neu / Projekte / Anpassen) ist "aktiv" (graue Flaeche) - je
+  // nachdem, welche Ansicht gerade offen ist. Original-Aequivalent: aria-current="page".
+  function updateNavActive() {
+    if (!uiEl) return;
+    let active = null;
+    if (uiEl.classList.contains('js-projects-active') || uiEl.classList.contains('js-project-detail-active')) {
+      active = 'js-projects';
+    } else if (activeMode === 'chat' && threadEl && threadEl.children.length === 0) {
+      active = 'js-new';
+    }
+    uiEl.querySelectorAll('.js-navrow').forEach((el) => {
+      el.classList.toggle('active', active !== null && el.classList.contains(active));
+    });
+  }
+
   function syncWelcome() {
     if (!threadEl) return;
     const hasContent = threadEl.children.length > 0;
     chatRootEl.classList.toggle('has-content', hasContent);
+    updateNavActive();
     // Solange kein Gespräch läuft, sitzt der Composer direkt unter der
     // Begrüßung (mittig, wie auf claude.ais /new-Seite) statt permanent am
     // unteren Bildschirmrand — er wandert erst nach unten, sobald der erste
@@ -1025,7 +1136,7 @@
     const menuBtn = document.createElement('button');
     menuBtn.className = 'js-chatitem-menu-btn';
     menuBtn.title = 'Optionen';
-    menuBtn.innerHTML = ICONS.dots;
+    menuBtn.innerHTML = jsIcon('0xe062', 20);
     el.appendChild(ico);
     el.appendChild(txt);
     el.appendChild(menuBtn);
@@ -1078,6 +1189,100 @@
     unpinned.forEach((c) => chatListEl.appendChild(renderChatItem(c)));
   }
 
+  // Echte opencode-Sessions (aus opencode's eigener SQLite-DB, siehe backend
+  // /code/sessions) statt JARVIS-Chat-Konversationen - die beiden Systeme sind
+  // komplett getrennt, der Code-Tab hat mit "Chats und Aufgaben" nichts zu tun.
+  async function loadCodeSessions() {
+    if (!chatListEl) return;
+    if (pinnedChatListEl) pinnedChatListEl.innerHTML = '';
+    const pinnedToggle = uiEl ? $('.js-pinned-toggle', uiEl) : null;
+    if (pinnedToggle) pinnedToggle.style.display = 'none';
+    let sessions = [];
+    try {
+      const r = await fetch('/code/sessions');
+      const j = await r.json();
+      sessions = j.sessions || [];
+    } catch (e) { sessions = []; }
+    chatListEl.innerHTML = '';
+    if (!sessions.length) {
+      const d = document.createElement('div');
+      d.className = 'js-chat-item';
+      d.style.color = C.textDim;
+      d.style.cursor = 'default';
+      d.textContent = 'Noch keine opencode-Sessions';
+      chatListEl.appendChild(d);
+      return;
+    }
+    sessions.forEach((s) => chatListEl.appendChild(renderCodeSessionItem(s)));
+  }
+
+  function renderCodeSessionItem(session) {
+    const el = document.createElement('div');
+    el.className = 'js-chat-item';
+    el.dataset.id = session.id;
+    if (session.id === codeSessionId) el.classList.add('selected');
+    const ico = document.createElement('span');
+    ico.className = 'js-ico';
+    ico.innerHTML = ICONS.bullet;
+    const txt = document.createElement('span');
+    txt.className = 'js-txt';
+    txt.textContent = session.title || 'Session';
+    txt.title = session.directory ? `${session.title || 'Session'} — ${session.directory}` : txt.textContent;
+    const renameBtn = document.createElement('button');
+    renameBtn.className = 'js-chatitem-rename-btn';
+    renameBtn.title = 'Umbenennen';
+    renameBtn.innerHTML = ICONS.pencil;
+    renameBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      openRenameCodeSessionModal(session);
+    });
+    const delBtn = document.createElement('button');
+    delBtn.className = 'js-chatitem-menu-btn';
+    delBtn.title = 'Session löschen';
+    delBtn.innerHTML = ICONS.trash;
+    delBtn.addEventListener('click', async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      delBtn.disabled = true;
+      try {
+        const r = await fetch(`/code/sessions/${encodeURIComponent(session.id)}`, { method: 'DELETE' });
+        const j = await r.json().catch(() => ({}));
+        if (j.ok) {
+          if (session.id === codeSessionId) { codeSessionId = null; restartCodeTerminal(); }
+          loadCodeSessions();
+        } else {
+          delBtn.disabled = false;
+        }
+      } catch (err) { delBtn.disabled = false; }
+    });
+    el.appendChild(ico);
+    el.appendChild(txt);
+    el.appendChild(renameBtn);
+    el.appendChild(delBtn);
+    el.addEventListener('click', (e) => {
+      if (e.target.closest('.js-chatitem-menu-btn') || e.target.closest('.js-chatitem-rename-btn')) return;
+      resumeCodeSession(session.id);
+    });
+    return el;
+  }
+  function openRenameCodeSessionModal(session) {
+    if (!renameChatSheetEl) return;
+    renamingChatId = session.id;
+    renamingChatProjectId = null;
+    renamingIsCodeSession = true;
+    $('.js-renamechat-input', renameChatSheetEl).value = session.title || '';
+    renameChatSheetEl.style.display = 'flex';
+    $('.js-renamechat-input', renameChatSheetEl).focus();
+  }
+
+  function resumeCodeSession(id) {
+    if (id === codeSessionId && codeWsOpen) return;
+    codeSessionId = id;
+    chatListEl.querySelectorAll('.js-chat-item').forEach((el) => el.classList.toggle('selected', el.dataset.id === id));
+    restartCodeTerminal();
+  }
+
   function filterChatList(query) {
     if (!chatListEl) return;
     const q = query.trim().toLowerCase();
@@ -1127,9 +1332,11 @@
     if (uiEl) uiEl.classList.add('js-projects-active');
     loadProjects();
     navRecord();
+    updateNavActive();
   }
   function closeProjectsView() {
     if (uiEl) uiEl.classList.remove('js-projects-active');
+    updateNavActive();
   }
   function openProjectDetail(project) {
     closeProjectsView();
@@ -1140,10 +1347,12 @@
     if (pdEditorEl) { pdEditorEl.innerText = ''; }
     loadProjectRecent();
     navRecord();
+    updateNavActive();
   }
   function closeProjectDetail() {
     if (uiEl) uiEl.classList.remove('js-project-detail-active');
     viewingProjectId = null;
+    updateNavActive();
   }
   async function loadProjectRecent() {
     if (!pdRecentEl || !viewingProjectId) return;
@@ -1209,7 +1418,7 @@
           ${p.tag ? `<span style="font-size:11px;padding:2px 8px;border-radius:10px;background:${C.bgHover};color:${C.textSoft};">${escapeHtml(p.tag)}</span>` : ''}
         </div>
         <button class="js-project-pin-btn" data-id="${p.id}" title="${p.pinned ? 'Lösen' : 'Anheften'}" style="position:absolute;top:12px;right:32px;background:none;border:none;color:${p.pinned ? C.accent : C.textSoft};cursor:pointer;padding:4px;display:inline-flex;">${p.pinned ? ICONS.pinFilled : ICONS.pin}</button>
-        <button class="js-project-menu-btn" data-id="${p.id}" title="Optionen" style="position:absolute;top:12px;right:10px;background:none;border:none;color:${C.textSoft};cursor:pointer;padding:4px;display:inline-flex;">${ICONS.dots}</button>
+        <button class="js-project-menu-btn" data-id="${p.id}" title="Optionen" style="position:absolute;top:12px;right:10px;background:none;border:none;color:${C.textSoft};cursor:pointer;padding:4px;display:inline-flex;">${jsIcon('0xe062', 20)}</button>
         ${p.dir ? `<div style="font-size:11px;color:${C.textDim};font-family:monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-bottom:8px;" title="${escapeHtml(p.dir)}">${escapeHtml(p.dir)}</div>` : ''}
         ${p.description ? `<div style="font-size:13px;color:${C.textSoft};line-height:1.45;flex:1;">${escapeHtml(p.description)}</div>` : '<div style="flex:1;"></div>'}
         <div style="font-size:12px;color:${C.textDim};margin-top:10px;">${formatProjectDate(p.created_at)}</div>
@@ -1450,6 +1659,7 @@
     const c = findConv(id);
     renamingChatId = id;
     renamingChatProjectId = (c && c.project_id) || null;
+    renamingIsCodeSession = false;
     $('.js-renamechat-input', renameChatSheetEl).value = (c && c.title) || '';
     renameChatSheetEl.style.display = 'flex';
     $('.js-renamechat-input', renameChatSheetEl).focus();
@@ -1458,12 +1668,22 @@
     if (renameChatSheetEl) renameChatSheetEl.style.display = 'none';
     renamingChatId = null;
     renamingChatProjectId = null;
+    renamingIsCodeSession = false;
   }
   async function saveRenameChatModal() {
     const title = $('.js-renamechat-input', renameChatSheetEl).value.trim();
     if (!title || !renamingChatId) return;
-    const id = renamingChatId, pid = renamingChatProjectId;
+    const id = renamingChatId, pid = renamingChatProjectId, isCode = renamingIsCodeSession;
     closeRenameChatModal();
+    if (isCode) {
+      try {
+        await fetch(`/code/sessions/${encodeURIComponent(id)}`, {
+          method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title }),
+        });
+      } catch (e) {}
+      loadCodeSessions();
+      return;
+    }
     try {
       await fetch(`/conversations/${encodeURIComponent(id)}${pid ? '?project_id=' + encodeURIComponent(pid) : ''}`, {
         method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title }),
@@ -1474,7 +1694,19 @@
   }
 
   function wireUi() {
-    $('.js-new', uiEl).addEventListener('click', () => { closeProjectsView(); closeProjectDetail(); startNewConversation(); });
+    $('.js-new', uiEl).addEventListener('click', () => {
+      closeProjectsView();
+      closeProjectDetail();
+      if (activeMode === 'code') {
+        // Im Code-Tab hat "Neu" nichts mit JARVIS-Chat-Konversationen zu tun
+        // (siehe loadCodeSessions) - startet stattdessen eine frische opencode-Session.
+        codeSessionId = null;
+        chatListEl?.querySelectorAll('.js-chat-item').forEach((el) => el.classList.remove('selected'));
+        restartCodeTerminal();
+        return;
+      }
+      startNewConversation();
+    });
     $('.js-chats-toggle', uiEl).addEventListener('click', (e) => {
       e.preventDefault();
       const collapsed = chatListEl.classList.toggle('is-collapsed');
@@ -1514,7 +1746,7 @@
     $('.js-renamechat-input', renameChatSheetEl).addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); saveRenameChatModal(); } });
     renameChatSheetEl.addEventListener('click', (e) => { if (e.target === renameChatSheetEl) closeRenameChatModal(); });
     $('.js-projects', uiEl).addEventListener('click', (e) => { e.preventDefault(); openProjectsView(); });
-    $('.js-customize', uiEl).addEventListener('click', (e) => { e.preventDefault(); openSettings(); });
+    $('.js-projects-pin-title', uiEl).addEventListener('click', (e) => { e.preventDefault(); openProjectsView(); });
     $('.js-projects-pin-add', uiEl).addEventListener('click', (e) => { e.preventDefault(); openNewProjectModal(); });
     $('.js-search-toggle', uiEl).addEventListener('click', (e) => {
       e.preventDefault();
@@ -2359,7 +2591,8 @@
   function openCodeSocket() {
     if (codeWsOpen || codeWs) return;
     try {
-      codeWs = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/code/tty/ws');
+      const wsUrl = '/code/tty/ws' + (codeSessionId ? ('?session_id=' + encodeURIComponent(codeSessionId)) : '');
+      codeWs = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + wsUrl);
     } catch (e) { codeWs = null; scheduleCodeReconnect(); return; }
     codeWs.binaryType = 'arraybuffer';
     codeWs.onopen = () => {
@@ -2420,6 +2653,7 @@
   async function openSettings() {
     if (!settingsSheetEl) return;
     settingsSheetEl.style.display = 'flex';
+    updateNavActive();
     // Code-Verzeichnis aus /code/status vorbelegen.
     try {
       const r = await fetch('/code/status');
@@ -2482,6 +2716,7 @@
   }
   function closeSettings() {
     if (settingsSheetEl) settingsSheetEl.style.display = 'none';
+    updateNavActive();
   }
 
   // ---------------------------------------------------------------- sprache
@@ -2879,7 +3114,12 @@
   // ---------------------------------------------------------------- boot
   function boot() {
     buildUi();
+    // Erstplatzierung des Slider-Kissens ohne Anim-Einflug (sonst huepft es beim Laden rein).
+    const indicator = uiEl.querySelector('.js-mode-indicator');
+    const indicatorTransition = indicator ? indicator.style.transition : '';
+    if (indicator) indicator.style.transition = 'none';
     setMode(activeMode); // Sidebar befüllen + aktive Konversation des Modus laden
+    if (indicator) requestAnimationFrame(() => { indicator.style.transition = indicatorTransition; });
     recognition = initRecognition();
     document.title = 'Jarvis';
     orbCanvas = document.createElement('canvas');

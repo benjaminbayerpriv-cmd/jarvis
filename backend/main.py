@@ -18,7 +18,7 @@ from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import browser_agent, config, conversations, fillers, llm_client, memory, opencode_agent, panel, projects, stt, transcript_log, tts, vector_memory
+from . import browser_agent, config, conversations, discord_bot, fillers, llm_client, memory, opencode_agent, panel, projects, stt, transcript_log, tts, vector_memory
 
 app = FastAPI(title="Jarvis")
 app.add_middleware(
@@ -95,6 +95,7 @@ async def on_startup():
     cached on disk) and start the panel pump."""
     global filler_urls
     memory.initialize()
+    discord_bot.start()
     healthy, detail = llm_client.model_health()
     print(f"[model] {detail}")
     if not healthy:
@@ -163,6 +164,10 @@ class UpdateProjectRequest(BaseModel):
 class UpdateConversationRequest(BaseModel):
     title: str | None = None
     pinned: bool | None = None
+
+
+class RenameCodeSessionRequest(BaseModel):
+    title: str
 
 
 class ChatResponse(BaseModel):
@@ -682,6 +687,32 @@ def code_set_config(body: dict):
     return {"dir": opencode_agent.get_code_dir()}
 
 
+@app.get("/code/sessions")
+def code_sessions():
+    """Real opencode sessions (from opencode's own SQLite store), most recent
+    first — the Code-Tab sidebar shows these instead of JARVIS chat
+    conversations, since the two are unrelated (see opencode_agent.list_recent_sessions)."""
+    wdir = opencode_agent.get_code_dir()
+    return {"sessions": opencode_agent.list_recent_sessions(directory=wdir)}
+
+
+@app.delete("/code/sessions/{session_id}")
+def code_session_delete(session_id: str):
+    """Delete a real opencode session (via `opencode session delete`)."""
+    ok = opencode_agent.delete_session(session_id)
+    return {"ok": ok}
+
+
+@app.patch("/code/sessions/{session_id}")
+def code_session_rename(session_id: str, req: RenameCodeSessionRequest):
+    """Rename a real opencode session (updates its title in opencode's own store)."""
+    title = req.title.strip()
+    if not title:
+        raise HTTPException(status_code=422, detail="Titel darf nicht leer sein")
+    ok = opencode_agent.rename_session(session_id, title)
+    return {"ok": ok}
+
+
 @app.websocket("/code/tty/ws")
 async def code_tty_ws(websocket: WebSocket):
     """Pipe the real OpenCode TUI into an embedded xterm.js terminal.
@@ -698,8 +729,9 @@ async def code_tty_ws(websocket: WebSocket):
     """
     await websocket.accept()
     wdir = opencode_agent.get_code_dir()
+    session_id = websocket.query_params.get("session_id") or None
     try:
-        tty = opencode_agent.start_tty(wdir)
+        tty = opencode_agent.start_tty(wdir, session_id=session_id)
     except RuntimeError as exc:
         # e.g. no PTY on this OS (Windows) — tell the client plainly instead
         # of letting the exception surface as a raw traceback in the log.
