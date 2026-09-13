@@ -2212,7 +2212,54 @@
     { cmd: 'modell', label: 'Modell wechseln', desc: 'Anderes LM-Studio-Modell wählen', run: () => toggleModelMenu() },
     { cmd: 'einstellungen', label: 'Einstellungen', desc: 'Einstellungen öffnen', run: () => openSettings() },
     { cmd: 'btw', label: 'Nebenfrage', desc: 'Kurz was anderes fragen, ohne den Hauptchat zu unterbrechen', run: () => openBtwWindow() },
+    { cmd: 'umbenennen', label: 'Umbenennen', desc: 'Aktuelle Unterhaltung umbenennen', run: () => openRenameChatModal(ensureConversationId()) },
+    { cmd: 'anheften', label: 'Anheften', desc: 'Aktuelle Unterhaltung an-/loslösen', run: () => togglePinCurrentConversation() },
+    { cmd: 'ordner', label: 'Im Ordner anzeigen', desc: 'Unterhaltungsdatei im Explorer/Finder zeigen', run: () => revealCurrentConversation() },
+    { cmd: 'löschen', label: 'Löschen', desc: 'Aktuelle Unterhaltung löschen', run: () => deleteCurrentConversation() },
+    { cmd: 'hilfe', label: 'Hilfe', desc: 'Alle Slash-Befehle auflisten', run: () => showSlashHelp() },
   ];
+
+  // Die drei Konversations-Aktionen unten sind dieselben, die das Drei-
+  // Punkte-Menü im Verlauf pro Eintrag anbietet — hier nur ohne Umweg über
+  // die Sidebar, direkt auf die gerade offene Unterhaltung angewendet.
+  async function togglePinCurrentConversation() {
+    const id = currentConversationId;
+    if (!id) return;
+    const c = findConv(id);
+    const pid = c && c.project_id;
+    try {
+      await fetch(`/conversations/${encodeURIComponent(id)}${pid ? '?project_id=' + encodeURIComponent(pid) : ''}`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pinned: !(c && c.pinned) }),
+      });
+    } catch (e) {}
+    loadConversationList();
+  }
+  async function revealCurrentConversation() {
+    const id = currentConversationId;
+    if (!id) return;
+    const c = findConv(id);
+    const pid = c && c.project_id;
+    try {
+      await fetch(`/conversations/${encodeURIComponent(id)}/reveal${pid ? '?project_id=' + encodeURIComponent(pid) : ''}`, { method: 'POST' });
+    } catch (e) {}
+  }
+  async function deleteCurrentConversation() {
+    const id = currentConversationId;
+    if (!id) return;
+    const c = findConv(id);
+    if (!confirm(`"${c ? (c.title || 'Unbenannt') : 'Diese Konversation'}" wirklich löschen?`)) return;
+    const pid = c && c.project_id;
+    try {
+      await fetch(`/conversations/${encodeURIComponent(id)}${pid ? '?project_id=' + encodeURIComponent(pid) : ''}`, { method: 'DELETE' });
+    } catch (e) {}
+    startNewConversation();
+    loadConversationList();
+  }
+  function showSlashHelp() {
+    showThread();
+    const lines = SLASH_COMMANDS.map((c) => `/${c.cmd} — ${c.desc}`).join('\n');
+    addThreadTurn('jarvis', 'Verfügbare Befehle:\n' + lines);
+  }
 
   function closeSlashMenu() {
     if (slashMenuEl) slashMenuEl.style.display = 'none';
