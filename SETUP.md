@@ -141,16 +141,15 @@ Dateien mit YAML-Metadaten und Wikilinks.
 **macOS** — LaunchAgents:
 
 ```bash
-cp launcher/com.jarvis.server.plist ~/Library/LaunchAgents/
-cp launcher/com.jarvis.hotkey.plist ~/Library/LaunchAgents/
-launchctl load ~/Library/LaunchAgents/com.jarvis.server.plist
-launchctl load ~/Library/LaunchAgents/com.jarvis.hotkey.plist
+./launcher/install_macos_autostart.sh
 ```
 
-Zum Deaktivieren: `launchctl unload ~/Library/LaunchAgents/com.jarvis.*.plist`
+Trägt den echten Projektpfad in die beiden Plists ein (sie liegen als
+Vorlagen im Repo, ohne festen Pfad) und lädt sie. Zum Deaktivieren:
+`launchctl unload ~/Library/LaunchAgents/com.jarvis.*.plist`
 
-Die Plists verweisen auf `.venv/bin/python3` — Schritt 2 muss also vorher
-durchgelaufen sein.
+Setzt voraus, dass Schritt 2 (`.venv` + `pip install`) schon durchgelaufen
+ist.
 
 **Windows** — geplante Aufgaben (Task Scheduler), starten die mitgelieferten
 `launcher\start_server.bat` / `launcher\start_hotkey.bat` bei jeder Anmeldung:
