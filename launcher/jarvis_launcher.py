@@ -92,6 +92,34 @@ def _wait_until_up(timeout_s: float = 60) -> bool:
     return False
 
 
+def _allow_microphone_macos() -> None:
+    """pywebview 6.x's Cocoa-Backend implementiert den WKUIDelegate-Callback
+    für Medien-Berechtigungen nicht (`requestMediaCapturePermissionFor...`).
+    Ohne ihn lehnt WKWebView jede getUserMedia()-Anfrage automatisch ab —
+    unabhängig von NSMicrophoneUsageDescription in der Info.plist, ohne
+    Dialog, ohne Fehler im JS-Code sichtbar. Der Browser-Tab (echtes Safari/
+    Chrome) ist davon nicht betroffen, nur dieses eingebettete Fenster.
+    Patcht deshalb hier per PyObjC nachträglich einen Handler in
+    pywebview's BrowserDelegate-Klasse, der Mikrofon-/Kamerazugriff für die
+    eigene, lokal laufende App immer erlaubt."""
+    if not sys.platform.startswith("darwin"):
+        return
+    try:
+        import WebKit
+        from webview.platforms.cocoa import BrowserDelegate
+
+        def webView_requestMediaCapturePermissionForOrigin_initiatedByFrame_type_decisionHandler_(
+            self, _webview, _origin, _frame, _media_type, decision_handler
+        ):
+            decision_handler(WebKit.WKPermissionDecisionGrant)
+
+        BrowserDelegate.webView_requestMediaCapturePermissionForOrigin_initiatedByFrame_type_decisionHandler_ = (
+            webView_requestMediaCapturePermissionForOrigin_initiatedByFrame_type_decisionHandler_
+        )
+    except Exception as exc:
+        print(f"[launcher] Mikrofon-Patch fehlgeschlagen (Spracheingabe im App-Fenster bleibt ggf. stumm): {exc!r}")
+
+
 def main() -> None:
     try:
         root_dir = _find_root_dir()
@@ -144,6 +172,8 @@ def main() -> None:
         # init is the slow/fragile part, no reason to pay for it if the
         # server never came up in the first place.
         import webview
+
+        _allow_microphone_macos()
 
         webview.create_window(
             "Jarvis",

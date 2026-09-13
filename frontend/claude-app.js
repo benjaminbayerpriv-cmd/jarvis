@@ -422,6 +422,14 @@
   let speechMode = false, dictating = false, micReady = false, micStream = null, muted = false;
   let vadAnalyser = null, vadData = null, vadNoiseFloor = 0.01, vadAbove = 0;
   const SpeechRecognitionImpl = window.SpeechRecognition || window.webkitSpeechRecognition;
+  // Web Speech API gibt es nur in Chrome/Chromium — im gepackten Desktop-App-
+  // Fenster (pywebview -> WKWebView, Safaris Engine) und in Safari/Firefox
+  // selbst fehlt sie komplett (window.SpeechRecognition/webkitSpeechRecognition
+  // sind dort undefined). Fällt dort auf lokales Whisper zurück (Backend
+  // /stt, siehe backend/stt.py) statt stumm nichts zu tun.
+  const useLocalWhisper = !SpeechRecognitionImpl;
+  let pcmNode = null, pcmSampleRate = 48000, pcmRing = [], utterancePCM = null, utteranceStartedAt = 0, fallbackSilenceStreak = 0;
+  const PCM_BUFFER_SIZE = 4096, PREROLL_MS = 1500, RECORD_SILENCE_SUSTAIN = 28, RECORD_MIN_MS = 300;
   let recognition = null;
 
   // Graues Punktnetz (Sprachmodus)
@@ -3074,6 +3082,7 @@
     micStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
     micReady = true;
     setupVad(micStream);
+    if (useLocalWhisper) startContinuousRecording();
     return micStream;
   }
   function setupVad(stream) {
@@ -3102,6 +3111,138 @@
     if (spcReplyEl) { spcReplyEl.textContent = t || ''; spcReplyEl.style.minHeight = t ? '' : '0'; }
   }
 
+  // ------------------------------------- lokales Whisper (Fallback ohne Chrome)
+  // Rohes PCM via ScriptProcessor statt MediaRecorder — ein WebM/Opus-Stream
+  // trägt seinen Container-Header nur im allerersten Chunk; ein dauerhaft
+  // laufender MediaRecorder mit rotierendem Pre-Roll-Puffer würde diesen
+  // Header irgendwann rausrotieren und jede spätere Äußerung zu einem
+  // kopflosen, nicht dekodierbaren Fragment machen. Ein selbstgebautes WAV
+  // aus rohen Samples umgeht das: jede Äußerung ist eine vollständige,
+  // in sich geschlossene Datei, Pre-Roll inklusive. (Portiert aus dem
+  // gleichwertigen, bewährten Mechanismus in frontend/app.js.)
+  function startContinuousRecording() {
+    if (pcmNode || !micStream) return;
+    const ctx = ensureCtx();
+    pcmSampleRate = ctx.sampleRate;
+    const source = ctx.createMediaStreamSource(micStream);
+    pcmNode = ctx.createScriptProcessor(PCM_BUFFER_SIZE, 1, 1);
+    const preRollChunks = Math.ceil((PREROLL_MS / 1000) * pcmSampleRate / PCM_BUFFER_SIZE);
+    pcmNode.onaudioprocess = (e) => {
+      const data = new Float32Array(e.inputBuffer.getChannelData(0));
+      if (utterancePCM) {
+        utterancePCM.push(data);
+      } else {
+        pcmRing.push(data);
+        if (pcmRing.length > preRollChunks) pcmRing.shift();
+      }
+    };
+    // ScriptProcessor feuert nur, wenn er bis zu einem Destination-Node
+    // durchverbunden ist — über einen stummen Gain routen, nichts hörbar.
+    const silentGain = ctx.createGain();
+    silentGain.gain.value = 0;
+    source.connect(pcmNode);
+    pcmNode.connect(silentGain);
+    silentGain.connect(ctx.destination);
+  }
+  function beginUtterance() {
+    if (utterancePCM) return;
+    utterancePCM = pcmRing.slice();
+    utteranceStartedAt = Date.now();
+  }
+  function stopRecording() {
+    if (!utterancePCM) return;
+    const chunks = utterancePCM;
+    const startedAt = utteranceStartedAt;
+    utterancePCM = null;
+    pcmRing = [];
+    sendUtterance(chunks, startedAt);
+  }
+  function cancelRecording() {
+    if (!utterancePCM) return;
+    utterancePCM = null;
+    pcmRing = [];
+  }
+  const isRecording = () => utterancePCM !== null;
+  function concatFloat32(chunks) {
+    const total = chunks.reduce((n, c) => n + c.length, 0);
+    const out = new Float32Array(total);
+    let offset = 0;
+    for (const c of chunks) { out.set(c, offset); offset += c.length; }
+    return out;
+  }
+  function encodeWav(samples, sampleRate) {
+    const buffer = new ArrayBuffer(44 + samples.length * 2);
+    const view = new DataView(buffer);
+    const writeString = (offset, str) => { for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i)); };
+    writeString(0, 'RIFF');
+    view.setUint32(4, 36 + samples.length * 2, true);
+    writeString(8, 'WAVE');
+    writeString(12, 'fmt ');
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true);
+    view.setUint16(22, 1, true);
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, sampleRate * 2, true);
+    view.setUint16(32, 2, true);
+    view.setUint16(34, 16, true);
+    writeString(36, 'data');
+    view.setUint32(40, samples.length * 2, true);
+    let offset = 44;
+    for (let i = 0; i < samples.length; i++) {
+      const s = Math.max(-1, Math.min(1, samples[i]));
+      view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+      offset += 2;
+    }
+    return new Blob([view], { type: 'audio/wav' });
+  }
+  async function sendUtterance(chunks, startedAt) {
+    if (!chunks.length || Date.now() - startedAt < RECORD_MIN_MS) return;
+    const samples = concatFloat32(chunks);
+    if (samples.length < pcmSampleRate * 0.2) return;
+    const blob = encodeWav(samples, pcmSampleRate);
+    try {
+      const form = new FormData();
+      form.append('audio', blob, 'speech.wav');
+      const resp = await fetch('/stt', { method: 'POST', body: form });
+      if (!resp.ok) return;
+      const data = await resp.json();
+      const text = (data.text || '').trim();
+      if (!text) return;
+      if (speechMode) {
+        noteSpeechWords(text);
+        setSpeechStatus('Denke');
+        sendMessage(text);
+      } else if (dictating && composerInput) {
+        const base = dictBase || (composerInput.innerText || '').trim();
+        const composed = base ? base + ' ' + text : text;
+        composerInput.innerText = composed;
+        composerInput.classList.remove('is-empty');
+        updateSendSlot();
+        dictBase = composed;
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  }
+  // VAD-Ableger: startet/beendet eine Äußerung anhand des Pegels, statt auf
+  // Web-Speech-Events zu reagieren. Läuft aus vadTick() heraus, wenn dort
+  // gerade nichts anderes (Barge-in) zu tun ist.
+  function fallbackVadTick(rms) {
+    if (!(speechMode || dictating)) { if (isRecording()) cancelRecording(); return; }
+    const threshold = Math.max(vadNoiseFloor * 2.4, 0.025);
+    if (!isRecording()) {
+      if (rms > threshold) beginUtterance();
+    } else if (rms > threshold) {
+      fallbackSilenceStreak = 0;
+    } else {
+      fallbackSilenceStreak++;
+      if (fallbackSilenceStreak >= RECORD_SILENCE_SUSTAIN) {
+        fallbackSilenceStreak = 0;
+        stopRecording();
+      }
+    }
+  }
+
   // ------------------------------------------- Web-Speech-Erkennung
   // Zurück zur alten, eingebauten Browser-Erkennung statt lokalem Whisper:
   // Chrome transkribiert selbst (de-DE, kontinuierlich, Zwischenergebnisse),
@@ -3110,10 +3251,10 @@
   // sollen (Sprachmodus/Diktat aktiv, nicht stumm, nicht mitten in einer
   // Antwort).
   function initRecognition() {
-    if (!SpeechRecognitionImpl) {
-      if (speechBtn) speechBtn.title = 'Spracherkennung braucht Chrome';
-      return null;
-    }
+    // Kein Chrome/Chromium: startListening()/stopListening() unten fallen in
+    // diesem Fall auf lokales Whisper zurück (siehe fallbackVadTick/
+    // sendUtterance oben) statt hier einfach nichts zu tun.
+    if (!SpeechRecognitionImpl) return null;
     const rec = new SpeechRecognitionImpl();
     rec.lang = 'de-DE';
     rec.continuous = true;
@@ -3158,10 +3299,15 @@
   }
 
   function startListening() {
-    if (!recognition || muted || busy || !(speechMode || dictating)) return;
+    if (muted || busy || !(speechMode || dictating)) return;
+    // Lokales Whisper hört über fallbackVadTick() dauerhaft (pegelgesteuert)
+    // zu — kein Web-Speech-Objekt, das hier explizit gestartet werden müsste.
+    if (useLocalWhisper) return;
+    if (!recognition) return;
     try { recognition.start(); } catch (_) {}
   }
   function stopListening() {
+    if (useLocalWhisper) { cancelRecording(); return; }
     if (recognition) { try { recognition.stop(); } catch (_) {} }
   }
   function resumeListening() {
@@ -3175,6 +3321,7 @@
     if (!busy) {
       vadNoiseFloor = vadNoiseFloor * 0.98 + rms * 0.02;
       vadAbove = 0;
+      if (useLocalWhisper) fallbackVadTick(rms);
       return;
     }
 
