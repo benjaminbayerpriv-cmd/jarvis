@@ -61,13 +61,15 @@ except ImportError:
 
 from . import config
 
-# JARVIS Code: eigene opencode-Binary (Rebrand) mit plattformabhängigem Pfad.
+# JARVIS Code: eigene opencode-Binary (Rebrand), gebaut aus dem
+# `opencode`-Submodule (siehe .gitmodules) unter releases/ im Repo-Root.
 # Per Env überschreibbar: OPENCODE_BIN=/pfad/zum/binary
+_RELEASES_DIR = config.ROOT_DIR / "opencode" / "releases"
 if os.name == "nt":
-    # Windows: lokale JARVIS-Code-Binary (Build-Output unter ~/src/opencode/releases).
-    _JARVIS_CODE_BIN = str(pathlib.Path.home() / "src" / "opencode" / "releases" / "jarvis-code-windows-x64.exe")
+    _JARVIS_CODE_BIN = str(_RELEASES_DIR / "jarvis-code-windows-x64.exe")
 else:
-    _JARVIS_CODE_BIN = "/Users/benjaminbayer/src/opencode/releases/jarvis-code-darwin-arm64"
+    _arch = "arm64" if os.uname().machine == "arm64" else "x64"
+    _JARVIS_CODE_BIN = str(_RELEASES_DIR / f"jarvis-code-darwin-{_arch}")
 OPENCODE_BIN = os.environ.get("OPENCODE_BIN", _JARVIS_CODE_BIN)
 
 # Where opencode reads its provider config. We MERGE into it, never overwrite.

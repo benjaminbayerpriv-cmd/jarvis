@@ -27,10 +27,16 @@ unten unterschiedlich sind, ist es gekennzeichnet.
 
 ```bash
 cd /pfad/zu/jarvis
+git submodule update --init --recursive
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 ```
+
+`git submodule update --init --recursive` holt den `opencode`-Ordner
+(eigener Fork, als Submodule eingebunden — siehe `.gitmodules`) mit dem
+Quellcode für den Code-Tab. Wer `git clone` mit `--recurse-submodules`
+ausgeführt hat, braucht diesen Schritt nicht extra.
 
 **Windows (PowerShell oder cmd):**
 
@@ -163,6 +169,25 @@ schtasks /delete /tn "Jarvis Hotkey" /f
 
 Die `.bat`-Dateien aktivieren `.venv` selbst — Schritt 2 muss vorher
 durchgelaufen sein, und der Ordnername `.venv` darf nicht verändert werden.
+
+## 8. Code-Tab (JARVIS Code) bauen (optional)
+
+Der Code-Tab öffnet ein eigenes, umbenanntes CLI (Fork von opencode) in
+einem eingebetteten Terminal. Der Quellcode liegt im `opencode`-Submodule
+(Schritt 2), die fertige Binary wird daraus lokal gebaut und muss unter
+`opencode/releases/` liegen (per `OPENCODE_BIN` in `.env` überschreibbar):
+
+```bash
+cd opencode
+bun install
+bun build --compile packages/opencode/src/index.ts --outfile releases/jarvis-code-darwin-arm64
+```
+
+Unter Windows entsprechend mit `--outfile releases\jarvis-code-windows-x64.exe`.
+`releases/` ist absichtlich nicht Teil des Git-Repos (zu groß) — jede*r
+baut sich die Binary einmal selbst. Ohne sie bleibt der Rest von Jarvis
+(Sprache, Chat, Tools) unverändert nutzbar; nur der Code-Tab meldet dann
+"Binary nicht gefunden".
 
 ## Was Jarvis kann
 
