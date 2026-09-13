@@ -574,7 +574,7 @@
             <button class="js-code-restart" title="Terminal neu starten" style="display:none;align-items:center;gap:6px;padding:5px 10px;background:none;border:1px solid ${C.border};border-radius:9px;color:${C.textSoft};font-size:12px;cursor:pointer;font-family:${C.font};">${ICONS.restart}</button>
           </div>
           <div class="js-code-context-warning" style="display:none;align-items:flex-start;gap:10px;margin:12px 16px 0;padding:12px 14px;border-radius:10px;background:rgba(229,165,10,.12);border:1px solid rgba(229,165,10,.35);color:#e5a50a;font-size:12.5px;line-height:1.5;flex:0 0 auto;"></div>
-          <div class="js-code-terminal" style="flex:1 1 auto;min-width:0;min-height:0;overflow:hidden;padding:4px 2px 6px;"></div>
+          <div class="js-code-terminal" style="position:relative;flex:1 1 auto;min-width:0;min-height:0;overflow:hidden;padding:4px 2px 6px;"></div>
         </div>
         <div class="js-projects-view" style="position:absolute;inset:0;display:none;flex-direction:column;min-width:0;min-height:0;overflow-y:auto;padding:40px 48px;">
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:28px;">
@@ -2869,6 +2869,20 @@
     codeFit = new window.FitAddon.FitAddon();
     codeTerm.loadAddon(codeFit);
     codeTerm.open(codeTermEl);
+    // opencode selbst füllt bei realistischer Fenstergröße jede Terminal-
+    // zelle mit einer eigenen Hintergrundfarbe — "durchscheinen lassen"
+    // (transparentes Theme + .xterm-viewport-Override oben) zeigt das
+    // Gitter dadurch nur in echten Lücken, die bei einem gefüllten
+    // Vollbild-TUI praktisch nie vorkommen (beobachtet: im kleinen
+    // Test-Fenster sichtbar, im echten großen Fenster komplett weg — nur
+    // die Kopfzeile darüber, die xterm gar nicht erst anfasst, zeigte es
+    // noch). Deshalb zusätzlich eine eigene, nicht interaktive Gitter-
+    // Ebene ÜBER dem Terminal, im Blend-Modus "screen": auf den ohnehin
+    // fast schwarzen Hintergrundzellen wird sie sichtbar, während auf
+    // hellem Text (bereits nahe Weiß) so gut wie nichts mehr verändert.
+    const codeGridEl = document.createElement('div');
+    codeGridEl.style.cssText = 'position:absolute;inset:0;pointer-events:none;mix-blend-mode:screen;background-image:linear-gradient(rgba(150,190,210,.16) 1px,transparent 1px),linear-gradient(90deg,rgba(150,190,210,.16) 1px,transparent 1px);background-size:34px 34px;';
+    codeTermEl.appendChild(codeGridEl);
     codeTerm.onData((data) => sendCodeInput(data));
     if (codeRestartBtn) codeRestartBtn.addEventListener('click', (e) => { e.preventDefault(); restartCodeTerminal(); });
     if (codeDirEl) codeDirEl.addEventListener('click', (e) => { e.preventDefault(); openSettings(); });
