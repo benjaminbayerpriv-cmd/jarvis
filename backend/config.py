@@ -60,14 +60,6 @@ TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY", "")
 JARVIS_HOST = os.environ.get("JARVIS_HOST", "127.0.0.1")
 JARVIS_PORT = int(os.environ.get("JARVIS_PORT", "8000"))
 
-# Discord-Bot (backend/discord_bot.py) — privater Voice-Channel als
-# kostenloser "Anruf"-Ersatz + DM-Pings, wenn eine Hintergrundaufgabe fertig
-# ist. Ohne Token bleibt die Integration komplett aus (kein Zwang).
-DISCORD_BOT_TOKEN = os.environ.get("DISCORD_BOT_TOKEN", "")
-DISCORD_GUILD_ID = os.environ.get("DISCORD_GUILD_ID", "")
-DISCORD_VOICE_CHANNEL_ID = os.environ.get("DISCORD_VOICE_CHANNEL_ID", "")
-DISCORD_OWNER_USER_ID = os.environ.get("DISCORD_OWNER_USER_ID", "")
-
 NOTES_FILE = ROOT_DIR / "jarvis_notes.md"
 CONFIG_FILE = ROOT_DIR / "config.json"
 

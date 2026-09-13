@@ -18,7 +18,7 @@ from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import browser_agent, config, conversations, discord_bot, fillers, llm_client, memory, opencode_agent, panel, projects, stt, transcript_log, tts, vector_memory
+from . import browser_agent, config, conversations, fillers, llm_client, memory, opencode_agent, panel, projects, stt, transcript_log, tts, vector_memory
 
 app = FastAPI(title="Jarvis")
 app.add_middleware(
@@ -95,7 +95,6 @@ async def on_startup():
     cached on disk) and start the panel pump."""
     global filler_urls
     memory.initialize()
-    discord_bot.start()
     healthy, detail = llm_client.model_health()
     print(f"[model] {detail}")
     if not healthy:
