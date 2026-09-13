@@ -32,3 +32,10 @@ num2words==0.5.14
 sounddevice==0.5.6
 numpy==2.5.2
 websockets==17.0.1
+
+# Desktop app window (launcher/jarvis_launcher.py) — wraps the existing web
+# UI in a real OS window (WebView2 on Windows, WebKit on macOS) instead of a
+# browser tab. Was previously only pulled in ad-hoc by the build scripts;
+# listed here too so a normal `pip install -r requirements.txt` already
+# covers it and `python launcher/jarvis_launcher.py` works without a build.
+pywebview>=6.0
