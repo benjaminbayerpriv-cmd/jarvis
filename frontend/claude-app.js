@@ -384,7 +384,7 @@
   // Fenster für eine Zwischenfrage, während der Hauptchat noch an einer
   // Antwort arbeitet — komplett eigener Request/eigene History, rührt
   // NICHT an `busy`/`history`/`currentTurnId` des Hauptchats.
-  let btwEl = null, btwBodyEl = null, btwInputEl = null, btwSendBtn = null;
+  let btwEl = null, btwIntroEl = null, btwBodyEl = null, btwInputEl = null, btwSendBtn = null;
   let btwBusy = false, btwConversationId = null, btwTurnCounter = 0;
   let btwDragging = false, btwDragStartX = 0, btwDragStartY = 0, btwDragBaseX = 0, btwDragBaseY = 0;
   let speechBarEl = null, spMuteBtn = null, spStopBtn = null, spSendBtn = null, spChatBtn = null;
@@ -2272,20 +2272,40 @@
     btwEl.id = 'jsBtwWindow';
     btwEl.style.cssText = `display:none;position:fixed;top:96px;right:32px;width:320px;z-index:55;background:${C.bgSurface3};border:1px solid ${C.border};border-radius:14px;box-shadow:0 20px 60px rgba(0,0,0,.5);overflow:hidden;`;
     btwEl.innerHTML = `
-      <div class="js-btw-header" style="cursor:grab;padding:10px 12px;display:flex;align-items:center;justify-content:space-between;background:${C.bgHover};border-bottom:1px solid ${C.border};user-select:none;">
-        <span style="font-size:13px;font-weight:600;color:${C.text};">Nebenfrage</span>
-        <button class="js-btw-close" title="Schließen" style="background:none;border:none;color:${C.textSoft};cursor:pointer;width:24px;height:24px;display:inline-flex;align-items:center;justify-content:center;">${ICONS.close}</button>
+      <div class="js-btw-header" style="cursor:grab;padding:12px 14px;display:flex;align-items:center;justify-content:space-between;user-select:none;">
+        <span style="font-size:14px;font-weight:600;color:${C.text};">Seiten-Chat</span>
+        <div style="display:flex;align-items:center;gap:2px;">
+          <button class="js-btw-expand" title="Größe umschalten" style="background:none;border:none;color:${C.textSoft};cursor:pointer;width:26px;height:26px;border-radius:6px;display:inline-flex;align-items:center;justify-content:center;">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M9 4v16"/></svg>
+          </button>
+          <button class="js-btw-close" title="Schließen" style="background:none;border:none;color:${C.textSoft};cursor:pointer;width:26px;height:26px;border-radius:6px;display:inline-flex;align-items:center;justify-content:center;">${ICONS.close}</button>
+        </div>
       </div>
-      <div class="js-btw-body" style="max-height:280px;overflow-y:auto;padding:12px;font-size:13px;color:${C.text};white-space:pre-wrap;word-break:break-word;display:flex;flex-direction:column;gap:10px;"></div>
-      <div style="display:flex;gap:6px;padding:10px 12px;border-top:1px solid ${C.border};">
-        <input class="js-btw-input" placeholder="Kurze Frage…" style="flex:1;min-width:0;background:${C.bg};border:1px solid ${C.border};border-radius:8px;padding:7px 10px;color:${C.text};font-size:13px;outline:none;">
-        <button class="js-btw-send" title="Senden" style="width:32px;height:32px;border-radius:8px;background:${C.accent};border:none;color:#fff;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;">${jsIcon('0xe013', 18)}</button>
+      <div class="js-btw-intro" style="padding:0 14px 14px;font-size:13px;line-height:1.5;color:${C.textDim};">
+        Chatte über diese Sitzung, ohne den Haupt-Thread zu verändern. Jarvis sieht den vollständigen Kontext, und nichts davon wird der Sitzung hinzugefügt.
+      </div>
+      <div class="js-btw-body" style="display:none;flex-direction:column;gap:10px;max-height:280px;overflow-y:auto;padding:0 14px 12px;font-size:13px;color:${C.text};white-space:pre-wrap;word-break:break-word;"></div>
+      <div style="padding:0 12px 12px;">
+        <div class="js-btw-inputwrap" style="display:flex;align-items:center;gap:6px;background:${C.bg};border:1px solid ${C.border};border-radius:22px;padding:9px 8px 9px 14px;">
+          <input class="js-btw-input" placeholder="Stelle eine schnelle Frage…" style="flex:1;min-width:0;background:none;border:none;color:${C.text};font-size:13px;outline:none;">
+          <button class="js-btw-send" title="Senden" style="background:none;border:none;color:${C.textDim};cursor:pointer;width:26px;height:26px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 10 4 15l5 5"/><path d="M20 4v7a4 4 0 0 1-4 4H4"/></svg>
+          </button>
+        </div>
       </div>
     `;
     document.body.appendChild(btwEl);
+    btwIntroEl = $('.js-btw-intro', btwEl);
     btwBodyEl = $('.js-btw-body', btwEl);
     btwInputEl = $('.js-btw-input', btwEl);
     btwSendBtn = $('.js-btw-send', btwEl);
+
+    let expanded = false;
+    $('.js-btw-expand', btwEl).addEventListener('click', () => {
+      expanded = !expanded;
+      btwEl.style.width = expanded ? '440px' : '320px';
+      btwBodyEl.style.maxHeight = expanded ? '440px' : '280px';
+    });
 
     const header = $('.js-btw-header', btwEl);
     header.addEventListener('mousedown', (e) => {
@@ -2330,6 +2350,10 @@
   }
 
   function addBtwLine(who, text) {
+    // Erklärtext nur zeigen, solange noch nichts gefragt wurde — sobald der
+    // erste Verlauf entsteht, weicht er dem eigentlichen Gespräch.
+    if (btwIntroEl) btwIntroEl.style.display = 'none';
+    if (btwBodyEl) btwBodyEl.style.display = 'flex';
     const line = document.createElement('div');
     line.innerHTML = `<div style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:${C.textDim};margin-bottom:2px;">${who}</div>`;
     const body = document.createElement('div');
