@@ -2931,12 +2931,14 @@
   }
 
     // ------------------------------------------- Leuchtender Ring (Sprachmodus)
-  // Ersetzt die frühere Punktkugel durch einen glühenden Ring mit "JARVIS"-
-  // Schriftzug in der Mitte (Nutzer-Referenzbild). Jeder Zustand bekommt ein
-  // klar anderes Bewegungsmuster statt nur eine andere Geschwindigkeit, damit
-  // "Jarvis hört zu" und "Jarvis spricht" sich auch bei stummgeschaltetem Ton
-  // eindeutig unterscheiden lassen.
-  const ORB_COLOR = '#5ad1ff';
+  // Möglichst genaue Nachbildung des vom Nutzer geschickten Referenzbilds:
+  // dunkler Hintergrund mit feinem Gitter + Sternen, ein unregelmäßig
+  // gebrochener, glühender Ring, ein separater heller Scan-Bogen innen und
+  // der "JARVIS"-Schriftzug in der Mitte. Die Zustände (bereit/hören/
+  // denken/sprechen) erzählen sich über Tempo und Helligkeit der Bewegung,
+  // nicht über eine andere Grundform — sonst bricht das Bild bei jedem
+  // Zustandswechsel neu auf.
+  const ORB_COLOR = '#63d6f2';
   const ORB_MUTED_COLOR = '#7a8088';
   function currentOrbColor() { return muted ? ORB_MUTED_COLOR : ORB_COLOR; }
 
@@ -2952,24 +2954,115 @@
     return 'idle';
   }
 
+  // Sterne + Gitter-Phase sind fix pro Sitzung (nicht pro Frame neu
+  // gewürfelt) — sonst "funkelt" der Hintergrund unruhig statt ruhig zu
+  // stehen, wie im Referenzbild.
+  let orbStars = null;
+  function ensureOrbStars(rect) {
+    if (orbStars && orbStars.forRect === rect.width + 'x' + rect.height) return orbStars.pts;
+    const rng = mulberry32(20260913);
+    const pts = [];
+    const n = Math.round((rect.width * rect.height) / 4200);
+    for (let i = 0; i < n; i++) {
+      pts.push({ x: rng(), y: rng(), r: 0.5 + rng() * 1.1, a: 0.25 + rng() * 0.5 });
+    }
+    orbStars = { forRect: rect.width + 'x' + rect.height, pts };
+    return pts;
+  }
+  function mulberry32(seed) {
+    let a = seed >>> 0;
+    return function () {
+      a |= 0; a = (a + 0x6D2B79F5) | 0;
+      let x = Math.imul(a ^ (a >>> 15), 1 | a);
+      x = (x + Math.imul(x ^ (x >>> 7), 61 | x)) ^ x;
+      return ((x ^ (x >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  function drawSpeechBackdrop(rect) {
+    const { left, top, width, height } = rect;
+    orbCtx.fillStyle = '#0a0d12';
+    orbCtx.fillRect(left, top, width, height);
+
+    // feines Gitter
+    orbCtx.strokeStyle = 'rgba(150,190,210,0.07)';
+    orbCtx.lineWidth = 1;
+    const step = 34;
+    orbCtx.beginPath();
+    for (let x = left; x <= left + width; x += step) { orbCtx.moveTo(x + 0.5, top); orbCtx.lineTo(x + 0.5, top + height); }
+    for (let y = top; y <= top + height; y += step) { orbCtx.moveTo(left, y + 0.5); orbCtx.lineTo(left + width, y + 0.5); }
+    orbCtx.stroke();
+
+    // Sterne
+    const stars = ensureOrbStars(rect);
+    orbCtx.fillStyle = '#ffffff';
+    for (const s of stars) {
+      orbCtx.globalAlpha = s.a;
+      orbCtx.beginPath();
+      orbCtx.arc(left + s.x * width, top + s.y * height, s.r, 0, Math.PI * 2);
+      orbCtx.fill();
+    }
+    orbCtx.globalAlpha = 1;
+
+    // Vignette, damit die Ecken dunkler abfallen als die Mitte
+    const cx = left + width / 2, cy = top + height / 2;
+    const vg = orbCtx.createRadialGradient(cx, cy, Math.min(width, height) * 0.15, cx, cy, Math.max(width, height) * 0.75);
+    vg.addColorStop(0, 'rgba(10,13,18,0)');
+    vg.addColorStop(1, 'rgba(10,13,18,0.75)');
+    orbCtx.fillStyle = vg;
+    orbCtx.fillRect(left, top, width, height);
+  }
+
   function drawOrbLabel(cx, cy, R, alpha) {
     const label = 'JARVIS';
-    const fontSize = Math.max(10, R * 0.24);
-    orbCtx.font = '600 ' + fontSize + 'px "anthropic-sans", system-ui, sans-serif';
+    const fontSize = Math.max(10, R * 0.22);
+    orbCtx.font = '500 ' + fontSize + 'px system-ui, -apple-system, sans-serif';
     orbCtx.textAlign = 'left';
     orbCtx.textBaseline = 'middle';
-    const spacing = fontSize * 0.28;
+    const spacing = fontSize * 0.55;
     const chars = [...label];
     const widths = chars.map((c) => orbCtx.measureText(c).width);
     const totalW = widths.reduce((a, b) => a + b, 0) + spacing * (chars.length - 1);
     orbCtx.globalAlpha = alpha;
-    orbCtx.fillStyle = '#f2f4f6';
+    orbCtx.fillStyle = '#eef2f5';
     let x = cx - totalW / 2;
     for (let i = 0; i < chars.length; i++) {
       orbCtx.fillText(chars[i], x, cy);
       x += widths[i] + spacing;
     }
     orbCtx.globalAlpha = 1;
+  }
+
+  // Feste, unregelmäßige Lücken im Ring (Länge in Radiant) — der Ring im
+  // Referenzbild ist kein glatter Kreis, sondern an mehreren, ungleich
+  // großen Stellen unterbrochen.
+  const ORB_RING_GAPS = [
+    { at: 0.15, w: 0.10 },
+    { at: 1.55, w: 0.22 },
+    { at: 2.65, w: 0.07 },
+    { at: 4.10, w: 0.16 },
+    { at: 5.30, w: 0.09 },
+  ];
+  function strokeBrokenRing(cx, cy, R, rotation) {
+    // Bewusst OHNE `% TAU` auf die Zwischenwinkel: canvas' arc() sweept
+    // sowieso immer vorwärts vom Start- zum Endwinkel, egal wie groß die
+    // Zahlen werden — mit Modulo pro Lücke würden die fünf Lücken (jede mit
+    // eigenem `at`-Offset) bei wachsender `rotation` zu unterschiedlichen
+    // Zeitpunkten über den TAU-Rand wickeln und dadurch außer Reihenfolge
+    // geraten, was den Ring periodisch falsch (fast geschlossen statt
+    // unterbrochen) zeichnen würde.
+    const TAU = Math.PI * 2;
+    let cursor = rotation;
+    for (const gap of ORB_RING_GAPS) {
+      const gapStart = gap.at + rotation;
+      orbCtx.beginPath();
+      orbCtx.arc(cx, cy, R, cursor, gapStart);
+      orbCtx.stroke();
+      cursor = gapStart + gap.w;
+    }
+    orbCtx.beginPath();
+    orbCtx.arc(cx, cy, R, cursor, rotation + TAU);
+    orbCtx.stroke();
   }
 
   function drawOrb(now) {
@@ -2983,91 +3076,58 @@
     const rect = chatRootEl ? chatRootEl.getBoundingClientRect() : { left: 0, top: 0, width: cw, height: ch };
     const cx = rect.left + rect.width / 2;
     const cy = rect.top + rect.height / 2;
-    const R = Math.min(rect.width, rect.height) * 0.12;
+    const R = Math.min(rect.width, rect.height) * 0.16;
     const lvl = orbLevel || 0;
     const status = orbStatus();
     const t = now / 1000;
     const color = currentOrbColor();
 
-    // weicher Hintergrund-Glow — stärker, sobald wirklich etwas passiert
-    const glowAlpha = status === 'idle' ? 0.28 : 0.4 + lvl * 0.3;
-    const glow = orbCtx.createRadialGradient(cx, cy, R * 0.3, cx, cy, R * 2.1);
+    drawSpeechBackdrop(rect);
+
+    // weicher Glow hinter dem Ring — stärker, sobald wirklich etwas passiert
+    const glowAlpha = status === 'idle' ? 0.35 : 0.5 + lvl * 0.35;
+    const glow = orbCtx.createRadialGradient(cx, cy, R * 0.3, cx, cy, R * 2.3);
     glow.addColorStop(0, color + alphaHex(glowAlpha));
     glow.addColorStop(1, color + '00');
     orbCtx.fillStyle = glow;
     orbCtx.beginPath();
-    orbCtx.arc(cx, cy, R * 2.1, 0, Math.PI * 2);
+    orbCtx.arc(cx, cy, R * 2.3, 0, Math.PI * 2);
     orbCtx.fill();
 
-    // Grundring: dünne, durchgehende Kontur, immer sichtbar
+    // Haupt-Ring: unregelmäßig gebrochen, mit Leuchten (shadowBlur), dreht
+    // sich je Zustand unterschiedlich schnell und wird bei Aktivität heller.
+    let rotSpeed = 0.05, widthBoost = 0, brightness = 0.85;
+    if (status === 'listening') { rotSpeed = 0.05 + lvl * 0.25; widthBoost = lvl * 2.5; brightness = 0.75 + lvl * 0.25; }
+    else if (status === 'thinking') { rotSpeed = 0.55; brightness = 1; }
+    else if (status === 'speaking') { rotSpeed = 0.12 + lvl * 0.6; widthBoost = lvl * 3; brightness = 0.8 + lvl * 0.3; }
+    const rotation = t * rotSpeed;
+
     orbCtx.lineCap = 'round';
-    orbCtx.strokeStyle = color + '40';
-    orbCtx.lineWidth = 2;
+    orbCtx.strokeStyle = color;
+    orbCtx.lineWidth = 2.5 + widthBoost;
+    orbCtx.shadowColor = color;
+    orbCtx.shadowBlur = 14 + widthBoost * 3;
+    orbCtx.globalAlpha = brightness;
+    strokeBrokenRing(cx, cy, R, rotation);
+    orbCtx.shadowBlur = 0;
+    orbCtx.globalAlpha = 1;
+
+    // Innerer Scan-Bogen: heller, dünnerer Bogen, der schneller und
+    // gegenläufig kreist — das separate "Ladeanzeige"-Element aus dem
+    // Referenzbild. Bleibt in jedem Zustand sichtbar, wird bei Aktivität
+    // nur klarer/schneller.
+    const scanSpeed = status === 'thinking' ? -1.4 : status === 'speaking' ? -0.5 - lvl * 1.2 : -0.35 - lvl * 0.4;
+    const scanStart = t * scanSpeed;
+    const scanLen = status === 'thinking' ? 0.9 : 0.5;
+    orbCtx.strokeStyle = '#f3f6f8';
+    orbCtx.globalAlpha = 0.5 + lvl * 0.3;
+    orbCtx.lineWidth = 1.6;
     orbCtx.beginPath();
-    orbCtx.arc(cx, cy, R, 0, Math.PI * 2);
+    orbCtx.arc(cx, cy, R * 0.82, scanStart, scanStart + scanLen);
     orbCtx.stroke();
+    orbCtx.globalAlpha = 1;
 
-    if (status === 'idle') {
-      // ruhiges Atmen + ein einzelner, langsam wandernder Lichtbogen — bereit,
-      // aber nichts Aktives zu berichten (wie im Referenzbild)
-      const breathe = 0.7 + Math.sin(t * 1.2) * 0.2;
-      orbCtx.globalAlpha = breathe;
-      orbCtx.strokeStyle = color;
-      orbCtx.lineWidth = 3;
-      const start = t * 0.6;
-      orbCtx.beginPath();
-      orbCtx.arc(cx, cy, R, start, start + 0.8);
-      orbCtx.stroke();
-      orbCtx.globalAlpha = 1;
-    } else if (status === 'thinking') {
-      // deutlich schnellerer Ladebogen — klar als "verarbeitet gerade" lesbar
-      orbCtx.strokeStyle = color;
-      orbCtx.lineWidth = 3.5;
-      const start = t * 3.2;
-      orbCtx.beginPath();
-      orbCtx.arc(cx, cy, R, start, start + 1.3);
-      orbCtx.stroke();
-    } else if (status === 'listening') {
-      // Ring atmet direkt mit dem Mikrofonpegel, dazu läuft bei jedem
-      // Lautstärke-Ausschlag ein sanfter Ping nach außen — ein einzelner,
-      // glatter Puls pro Wort/Satz.
-      orbCtx.strokeStyle = color;
-      orbCtx.lineWidth = 2 + lvl * 6;
-      orbCtx.globalAlpha = 0.55 + lvl * 0.45;
-      orbCtx.beginPath();
-      orbCtx.arc(cx, cy, R, 0, Math.PI * 2);
-      orbCtx.stroke();
-      orbCtx.globalAlpha = 1;
-
-      const pingT = (t * 0.8) % 1;
-      orbCtx.strokeStyle = color;
-      orbCtx.globalAlpha = (1 - pingT) * (0.15 + lvl * 0.5);
-      orbCtx.lineWidth = 1.5;
-      orbCtx.beginPath();
-      orbCtx.arc(cx, cy, R + pingT * R * 0.6, 0, Math.PI * 2);
-      orbCtx.stroke();
-      orbCtx.globalAlpha = 1;
-    } else {
-      // speaking — der Ring zerfällt in flackernde Segmente wie ein
-      // Equalizer, angetrieben von der tatsächlichen TTS-Ausgabelautstärke:
-      // ein unruhiges, vielteiliges Muster statt des glatten Hör-Pulses.
-      const segments = 24;
-      for (let i = 0; i < segments; i++) {
-        const a0 = (i / segments) * Math.PI * 2;
-        const a1 = a0 + (Math.PI * 2 / segments) * 0.72;
-        const wobble = 0.5 + 0.5 * Math.sin(i * 1.7 + t * 9);
-        const amp = lvl * wobble;
-        orbCtx.strokeStyle = color;
-        orbCtx.globalAlpha = 0.3 + amp * 0.7;
-        orbCtx.lineWidth = 2 + amp * 4.5;
-        orbCtx.beginPath();
-        orbCtx.arc(cx, cy, R + amp * R * 0.22, a0, a1);
-        orbCtx.stroke();
-      }
-      orbCtx.globalAlpha = 1;
-    }
-
-    drawOrbLabel(cx, cy, R, status === 'idle' ? 0.85 : 0.95);
+    drawOrbLabel(cx, cy, R, 0.9);
   }
 
   // Pegel der gesprochenen Stimme aus dem TTS-Ausgangsanalysator — die Orb
