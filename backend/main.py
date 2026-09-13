@@ -731,9 +731,12 @@ async def code_tty_ws(websocket: WebSocket):
     session_id = websocket.query_params.get("session_id") or None
     try:
         tty = opencode_agent.start_tty(wdir, session_id=session_id)
-    except RuntimeError as exc:
-        # e.g. no PTY on this OS (Windows) — tell the client plainly instead
-        # of letting the exception surface as a raw traceback in the log.
+    except (RuntimeError, OSError) as exc:
+        # RuntimeError: z.B. kein PTY auf diesem OS (Windows).
+        # OSError (u.a. FileNotFoundError): OPENCODE_BIN existiert nicht,
+        # z.B. weil die JARVIS-Code-Binary nach einem frischen `git clone`
+        # noch nicht gebaut wurde (siehe SETUP.md). Ohne diesen Fang bliebe
+        # der Client bei "verbinde" hängen, statt eine Fehlermeldung zu sehen.
         await websocket.send_text(json.dumps({"type": "exit", "code": None, "error": str(exc)}))
         await websocket.close()
         return
