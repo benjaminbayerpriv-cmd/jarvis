@@ -637,7 +637,7 @@
                   <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
                 </button>
                 <button class="js-note" title="Diktieren" style="width:32px;height:32px;border-radius:8px;background:none;border:none;color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;transition:background .15s;flex:0 0 auto;">${jsIcon('0xe0ab', 24)}</button>
-                <button class="js-speech" title="Sprachmodus" style="width:32px;height:32px;border-radius:8px;background:none;border:none;color:${C.textDim};opacity:.55;cursor:default;pointer-events:none;display:inline-flex;align-items:center;justify-content:center;transition:background .15s;flex:0 0 auto;">${ICONS.audio}</button>
+                <button class="js-speech" title="Sprachmodus" style="width:32px;height:32px;border-radius:8px;background:none;border:none;color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;transition:background .15s;flex:0 0 auto;">${ICONS.audio}</button>
                 <button class="js-send" title="Senden" style="width:32px;height:32px;border-radius:8px;background:${C.accent};border:none;color:#fff;cursor:pointer;display:none;align-items:center;justify-content:center;flex:0 0 auto;">${jsIcon('0xe013', 24)}</button>
               </div>
             </div>
@@ -2930,37 +2930,152 @@
     if (should) { dictBase = null; startListening(); } else stopListening();
   }
 
-    // ------------------------------------------- 3D-Punktkugel (Sprachmodus)
-  function makeSpherePoints(n) {
-    // Fibonacci-Kugel: gleichmäßige Verteilung, ohne Pole zu klumpen.
-    const pts = [];
-    const golden = Math.PI * (3 - Math.sqrt(5));
-    for (let i = 0; i < n; i++) {
-      const t = i / n;
-      const y = 1 - t * 2;                        // +1 … -1
-      const r = Math.sqrt(Math.max(0, 1 - y * y));
-      const th = golden * i;
-      pts.push({ x: Math.cos(th) * r, y, z: Math.sin(th) * r });
-    }
-    return pts;
-  }
-  let orbPoints = makeSpherePoints(300);   // weniger Punkte → klare, ruhige Kugel
-  let orbRotY = 0, orbRotX = -0.38;
-
-  // Eine konstante Farbe für alle Zustände — die Status werden nur über die
-  // BEWEGUNG erzählt (wie in der alten JARVIS-Kugel), nicht über Farbwechsel.
-  // Ausnahme: stummgeschaltet wird ausdrücklich grau eingefärbt, als klares
-  // visuelles Signal, dass das Mikrofon gerade nichts aufnimmt.
-  const ORB_COLOR = C.accent;
-  const ORB_MUTED_COLOR = '#8c877c';
+    // ------------------------------------------- Leuchtender Ring (Sprachmodus)
+  // Konzentrisches Ring-Design nach Nutzerbeschreibung (siehe drawOrbRings):
+  // dunkler Hintergrund mit feinem Gitter, "JARVIS"-Schriftzug mittig,
+  // mehrere konzentrische Ringe drumherum. Reagiert live auf den
+  // Lautstärkepegel (Mikrofon beim Hören, TTS-Ausgabe beim Sprechen).
+  const ORB_COLOR = '#63d6f2';
+  const ORB_MUTED_COLOR = '#7a8088';
   function currentOrbColor() { return muted ? ORB_MUTED_COLOR : ORB_COLOR; }
 
-  // aktueller Orb-Zustand: jeder bekommt eine eigene Animation
-  function orbStatus() {
-    if (speaking) return 'speaking';
-    if (busy) return 'thinking';
-    if (speechMode && !muted) return 'listening';
-    return 'idle';
+  function alphaHex(a) {
+    return Math.round(Math.min(1, Math.max(0, a)) * 255).toString(16).padStart(2, '0');
+  }
+
+  function drawSpeechBackdrop(rect) {
+    const { left, top, width, height } = rect;
+    orbCtx.fillStyle = '#0a0d12';
+    orbCtx.fillRect(left, top, width, height);
+
+    // feines Gitter
+    orbCtx.strokeStyle = 'rgba(150,190,210,0.07)';
+    orbCtx.lineWidth = 1;
+    const step = 34;
+    orbCtx.beginPath();
+    for (let x = left; x <= left + width; x += step) { orbCtx.moveTo(x + 0.5, top); orbCtx.lineTo(x + 0.5, top + height); }
+    for (let y = top; y <= top + height; y += step) { orbCtx.moveTo(left, y + 0.5); orbCtx.lineTo(left + width, y + 0.5); }
+    orbCtx.stroke();
+
+    // Vignette, damit die Ecken dunkler abfallen als die Mitte
+    const cx = left + width / 2, cy = top + height / 2;
+    const vg = orbCtx.createRadialGradient(cx, cy, Math.min(width, height) * 0.15, cx, cy, Math.max(width, height) * 0.75);
+    vg.addColorStop(0, 'rgba(10,13,18,0)');
+    vg.addColorStop(1, 'rgba(10,13,18,0.75)');
+    orbCtx.fillStyle = vg;
+    orbCtx.fillRect(left, top, width, height);
+  }
+
+  function drawOrbLabel(cx, cy, R, alpha) {
+    const label = 'JARVIS';
+    const fontSize = Math.max(10, R * 0.22);
+    orbCtx.font = '500 ' + fontSize + 'px system-ui, -apple-system, sans-serif';
+    orbCtx.textAlign = 'left';
+    orbCtx.textBaseline = 'middle';
+    const spacing = fontSize * 0.55;
+    const chars = [...label];
+    const widths = chars.map((c) => orbCtx.measureText(c).width);
+    const totalW = widths.reduce((a, b) => a + b, 0) + spacing * (chars.length - 1);
+    orbCtx.globalAlpha = alpha;
+    orbCtx.fillStyle = '#eef2f5';
+    let x = cx - totalW / 2;
+    for (let i = 0; i < chars.length; i++) {
+      orbCtx.fillText(chars[i], x, cy);
+      x += widths[i] + spacing;
+    }
+    orbCtx.globalAlpha = 1;
+  }
+
+  // Feste, kleine Lücke im weißen Ring direkt um die Schrift ("kleine
+  // Aushöhlung") — oben mittig, wie ein Nahtstellen-Unterbruch.
+  const WHITE_RING_GAP = { at: -Math.PI / 2, w: 0.30 };
+
+  function strokeArc(cx, cy, r, startAngle, lengthAngle) {
+    orbCtx.beginPath();
+    orbCtx.arc(cx, cy, r, startAngle, startAngle + lengthAngle);
+    orbCtx.stroke();
+  }
+
+  // Konzentrische Ring-Schichten von innen nach außen (Nutzerbeschreibung):
+  //  1. bläulicher Nebel, der vom dunklen Kreis nach außen schwächer wird
+  //  2. dunkler, halbtransparenter Kreis hinter der Schrift (Gitter bleibt
+  //     durchscheinend sichtbar)
+  //  3. weißer Ring direkt um die Schrift, mit kleiner Aushöhlung
+  //  4. bläulicher "Meteoritenschweif"-Nebelring knapp außerhalb
+  //  5. drei leichte weiße Teilkreise (Viertel/Fünftel/Achtel), die
+  //     gegeneinander rotieren
+  //  6. äußerster Punktkreis mit Strichen an den vier Himmelsrichtungen,
+  //     wie bei einem Koordinatensystem/Kompass
+  function drawOrbRings(cx, cy, R1, color, lvl, t) {
+    const TAU = Math.PI * 2;
+    const breathe = 0.85 + Math.sin(t * 1.1) * 0.15 + lvl * 0.35;
+
+    // 1) Nebel vom Zentrum nach außen ausblassend
+    const nebula = orbCtx.createRadialGradient(cx, cy, R1 * 0.3, cx, cy, R1 * 2.8);
+    nebula.addColorStop(0, color + alphaHex(0.30 * breathe));
+    nebula.addColorStop(1, color + '00');
+    orbCtx.fillStyle = nebula;
+    orbCtx.beginPath();
+    orbCtx.arc(cx, cy, R1 * 2.8, 0, TAU);
+    orbCtx.fill();
+
+    // 2) dunkler Kreis — bewusst nur halbtransparent, damit das Gitter
+    // dahinter noch durchscheint statt komplett verdeckt zu werden
+    orbCtx.fillStyle = 'rgba(4,6,9,0.55)';
+    orbCtx.beginPath();
+    orbCtx.arc(cx, cy, R1, 0, TAU);
+    orbCtx.fill();
+
+    // 3) weißer Ring mit kleiner Aushöhlung
+    orbCtx.lineCap = 'round';
+    orbCtx.strokeStyle = 'rgba(240,244,247,0.9)';
+    orbCtx.lineWidth = 1.6;
+    strokeArc(cx, cy, R1, WHITE_RING_GAP.at + WHITE_RING_GAP.w, TAU - WHITE_RING_GAP.w);
+
+    // 4) bläulicher Meteoritenschweif-Nebelring direkt außerhalb
+    orbCtx.strokeStyle = color;
+    orbCtx.lineWidth = R1 * 0.22;
+    orbCtx.globalAlpha = 0.22 * breathe;
+    orbCtx.shadowColor = color;
+    orbCtx.shadowBlur = R1 * 0.35;
+    orbCtx.beginPath();
+    orbCtx.arc(cx, cy, R1 * 1.14, 0, TAU);
+    orbCtx.stroke();
+    orbCtx.shadowBlur = 0;
+    orbCtx.globalAlpha = 1;
+
+    // 5) drei leichte weiße Teilkreise, unterschiedlich groß/stark,
+    // gegeneinander rotierend — schneller/heller bei mehr Pegel
+    const rot1 = t * (0.06 + lvl * 0.12);
+    const rot2 = -t * (0.09 + lvl * 0.18);
+    const rot3 = t * (0.04 + lvl * 0.09);
+    orbCtx.lineWidth = 1.2;
+    orbCtx.strokeStyle = 'rgba(255,255,255,0.16)';
+    strokeArc(cx, cy, R1 * 1.35, rot1, TAU / 4);   // Viertelkreis, ganz leicht
+    orbCtx.strokeStyle = 'rgba(255,255,255,0.34)';
+    strokeArc(cx, cy, R1 * 1.55, rot2, TAU / 5);   // Fünftelkreis, stärker gesättigt
+    orbCtx.strokeStyle = 'rgba(255,255,255,0.24)';
+    strokeArc(cx, cy, R1 * 1.75, rot3, TAU / 8);   // Achtelkreis
+
+    // 6) äußerster Punktkreis + Striche an den vier Himmelsrichtungen
+    const R6 = R1 * 2.0;
+    const dotCount = 48;
+    orbCtx.fillStyle = 'rgba(255,255,255,0.4)';
+    for (let i = 0; i < dotCount; i++) {
+      const a = (i / dotCount) * TAU;
+      orbCtx.beginPath();
+      orbCtx.arc(cx + Math.cos(a) * R6, cy + Math.sin(a) * R6, 1, 0, TAU);
+      orbCtx.fill();
+    }
+    orbCtx.strokeStyle = 'rgba(255,255,255,0.6)';
+    orbCtx.lineWidth = 1.4;
+    for (let k = 0; k < 4; k++) {
+      const a = k * (TAU / 4);
+      orbCtx.beginPath();
+      orbCtx.moveTo(cx + Math.cos(a) * (R6 - 5), cy + Math.sin(a) * (R6 - 5));
+      orbCtx.lineTo(cx + Math.cos(a) * (R6 + 7), cy + Math.sin(a) * (R6 + 7));
+      orbCtx.stroke();
+    }
   }
 
   function drawOrb(now) {
@@ -2974,97 +3089,15 @@
     const rect = chatRootEl ? chatRootEl.getBoundingClientRect() : { left: 0, top: 0, width: cw, height: ch };
     const cx = rect.left + rect.width / 2;
     const cy = rect.top + rect.height / 2;
-    const R = Math.min(rect.width, rect.height) * 0.10;   // viel kleinere Kugel
+    // R1: weißer Ring direkt um die Schrift, mit Innenabstand links/rechts
+    const R1 = Math.min(rect.width, rect.height) * 0.10;
     const lvl = orbLevel || 0;
-    const status = orbStatus();
     const t = now / 1000;
+    const color = currentOrbColor();
 
-    // Rotationsgeschwindigkeit je Zustand — spürbar schneller als zuvor
-    let rotSpeed = 0.005;
-    if (status === 'listening') rotSpeed = 0.006 + lvl * 0.03;
-    else if (status === 'thinking') rotSpeed = 0.011;
-    else if (status === 'speaking') rotSpeed = 0.013;
-    orbRotY += rotSpeed;
-    orbRotX = -0.38 + Math.sin(t * 1.5) * 0.05;   // zügigeres Wanken
-
-    // Denk-Sweep: ein Band wandert von oben nach unten (0 = oben … 1 = unten).
-    // Dreieck-Welle, damit es ohne Sprung durchläuft — wie in der alten Kugel.
-    let sweepT = -1;
-    if (status === 'thinking') {
-      const period = 0.9;
-      const phase = (t % (period * 2)) / (period * 2);
-      sweepT = phase < 0.5 ? phase * 2 : 2 - phase * 2;
-    }
-
-    const cosY = Math.cos(orbRotY), sinY = Math.sin(orbRotY);
-    const cosX = Math.cos(orbRotX), sinX = Math.sin(orbRotX);
-
-    // weicher Glow hinter der Kugel (eine Farbe, keine Status-Änderung —
-    // außer stummgeschaltet, siehe currentOrbColor())
-    const orbColor = currentOrbColor();
-    const glow = orbCtx.createRadialGradient(cx, cy, 0, cx, cy, R * 1.5);
-    glow.addColorStop(0, orbColor + '22');
-    glow.addColorStop(1, orbColor + '00');
-    orbCtx.globalAlpha = 0.5;
-    orbCtx.fillStyle = glow;
-    orbCtx.beginPath();
-    orbCtx.arc(cx, cy, R * 1.5, 0, Math.PI * 2);
-    orbCtx.fill();
-
-    orbCtx.fillStyle = orbColor;
-    for (let i = 0; i < orbPoints.length; i++) {
-      const p = orbPoints[i];
-      const bx = p.x, by = p.y, bz = p.z;
-
-      // POSITIONS-Dynamik: radialer Versatz je Punkt — die Punkte bewegen sich,
-      // die Farbe bleibt gleich. Alle Wellen basieren auf der POSITION (nicht
-      // auf Zufall), damit Nachbarpunkte kohärent zusammenlaufen statt
-      // chaotisch zu zucken — wie in der alten Kugel.
-      let dr = 0;
-      if (status === 'idle') {
-        // ruhiges Atmen + langsame kohärente Welle (ohne Zufall)
-        const breathe = Math.sin(t * 1.4);
-        const wave = Math.sin(bx * 2.1 + by * 1.8 + t * 1.1);
-        dr = breathe * 0.03 + wave * 0.05;
-      } else if (status === 'listening') {
-        // Rippel: kohärente Welle über die Position, von der Lautstärke gesteuert
-        const ripple = Math.sin(bx * 4 + t * 5.0) * Math.cos(by * 4 - t * 3.6);
-        dr = lvl * 0.5 * ripple;
-      } else if (status === 'thinking') {
-        // Sweep-Band wandert von oben nach unten (Dreieck-Welle) und drückt
-        // die Punkte darin nach außen; leichte kohärente Welle dazu
-        const rowT = (1 - by) / 2;
-        const sweep = sweepT >= 0 ? Math.exp(-Math.pow((rowT - sweepT) * 6, 2)) : 0;
-        dr = 0.3 * sweep + 0.06 * Math.sin(bx * 2 + bz * 2 + t * 2.6);
-      } else { // speaking — mehrere kohärente Wellen; jeder Punkt hat seinen
-               // eigenen Wert, aber Bewegungen laufen als Wellen über die Fläche
-        const rippleA = Math.sin(bx * 3.5 + t * 6.5) * Math.cos(by * 3.3 - t * 5.2);
-        const rippleB = Math.sin(bz * 4.2 - t * 6.0);
-        const rippleC = Math.sin((bx + bz) * 2.6 + t * 7.5);
-        dr = 0.20 * rippleA + 0.15 * rippleB + 0.13 * rippleC;
-      }
-      const r = 1 + dr;
-      const x = bx * r, y = by * r, z = bz * r;
-      // Rotation um Y
-      const x1 = x * cosY + z * sinY;
-      const z1 = -x * sinY + z * cosY;
-      // Rotation um X (Kippwinkel)
-      const y1 = y * cosX - z1 * sinX;
-      const z2 = y * sinX + z1 * cosX;
-      const persp = 3.4;
-      const scale = persp / (persp - z2);
-      const sx = cx + x1 * R * scale;
-      const sy = cy + y1 * R * scale;
-      const depth = (z2 + 1) / 2;                 // 0 fern … 1 nah
-      // fettere Punkte, dicht beieinander; Alpha nur = Tiefenausblendung
-      const size = 1.4 + depth * 1.9;
-      const alpha = 0.16 + depth * 0.55;
-      orbCtx.globalAlpha = Math.min(1, Math.max(0, alpha));
-      orbCtx.beginPath();
-      orbCtx.arc(sx, sy, size, 0, Math.PI * 2);
-      orbCtx.fill();
-    }
-    orbCtx.globalAlpha = 1;
+    drawSpeechBackdrop(rect);
+    drawOrbRings(cx, cy, R1, color, lvl, t);
+    drawOrbLabel(cx, cy, R1, 0.95);
   }
 
   // Pegel der gesprochenen Stimme aus dem TTS-Ausgangsanalysator — die Orb
@@ -3153,6 +3186,14 @@
     if (navBackBtn) navBackBtn.addEventListener('click', () => navGo(-1));
     if (navForwardBtn) navForwardBtn.addEventListener('click', () => navGo(1));
     window.addEventListener('resize', layoutSpeechBar);
+    // Zusätzlich zum reinen Fenster-Resize: ein ResizeObserver direkt auf dem
+    // Chat-Bereich fängt auch Größenänderungen ab, die kein window "resize"
+    // auslösen (Sidebar-Toggle ohne Fensteränderung, oder wenn der native
+    // Desktop-App-Host das Event nicht zuverlässig weiterreicht) — damit
+    // folgen Sprechblase und Orb dem Fenster wirklich in jedem Fall.
+    if (chatRootEl && window.ResizeObserver) {
+      new ResizeObserver(layoutSpeechBar).observe(chatRootEl);
+    }
     fetch('/models').then((r) => r.json()).then((j) => { applyModelCaps(j); if (j.current) setModelLabel(j.current); }).catch(() => {});
     openPanelSocket();
   }
