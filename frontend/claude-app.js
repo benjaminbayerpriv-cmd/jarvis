@@ -2931,44 +2931,16 @@
   }
 
     // ------------------------------------------- Leuchtender Ring (Sprachmodus)
-  // Möglichst genaue Nachbildung des vom Nutzer geschickten Referenzbilds:
-  // dunkler Hintergrund mit feinem Gitter + Sternen, ein unregelmäßig
-  // gebrochener, glühender Ring, ein separater heller Scan-Bogen innen und
-  // der "JARVIS"-Schriftzug in der Mitte. Die Zustände (bereit/hören/
-  // denken/sprechen) erzählen sich über Tempo und Helligkeit der Bewegung,
-  // nicht über eine andere Grundform — sonst bricht das Bild bei jedem
-  // Zustandswechsel neu auf.
+  // Konzentrisches Ring-Design nach Nutzerbeschreibung (siehe drawOrbRings):
+  // dunkler Hintergrund mit feinem Gitter, "JARVIS"-Schriftzug mittig,
+  // mehrere konzentrische Ringe drumherum. Reagiert live auf den
+  // Lautstärkepegel (Mikrofon beim Hören, TTS-Ausgabe beim Sprechen).
   const ORB_COLOR = '#63d6f2';
   const ORB_MUTED_COLOR = '#7a8088';
   function currentOrbColor() { return muted ? ORB_MUTED_COLOR : ORB_COLOR; }
 
   function alphaHex(a) {
     return Math.round(Math.min(1, Math.max(0, a)) * 255).toString(16).padStart(2, '0');
-  }
-
-  // Sterne + Gitter-Phase sind fix pro Sitzung (nicht pro Frame neu
-  // gewürfelt) — sonst "funkelt" der Hintergrund unruhig statt ruhig zu
-  // stehen, wie im Referenzbild.
-  let orbStars = null;
-  function ensureOrbStars(rect) {
-    if (orbStars && orbStars.forRect === rect.width + 'x' + rect.height) return orbStars.pts;
-    const rng = mulberry32(20260913);
-    const pts = [];
-    const n = Math.round((rect.width * rect.height) / 4200);
-    for (let i = 0; i < n; i++) {
-      pts.push({ x: rng(), y: rng(), r: 0.5 + rng() * 1.1, a: 0.25 + rng() * 0.5 });
-    }
-    orbStars = { forRect: rect.width + 'x' + rect.height, pts };
-    return pts;
-  }
-  function mulberry32(seed) {
-    let a = seed >>> 0;
-    return function () {
-      a |= 0; a = (a + 0x6D2B79F5) | 0;
-      let x = Math.imul(a ^ (a >>> 15), 1 | a);
-      x = (x + Math.imul(x ^ (x >>> 7), 61 | x)) ^ x;
-      return ((x ^ (x >>> 14)) >>> 0) / 4294967296;
-    };
   }
 
   function drawSpeechBackdrop(rect) {
@@ -2984,17 +2956,6 @@
     for (let x = left; x <= left + width; x += step) { orbCtx.moveTo(x + 0.5, top); orbCtx.lineTo(x + 0.5, top + height); }
     for (let y = top; y <= top + height; y += step) { orbCtx.moveTo(left, y + 0.5); orbCtx.lineTo(left + width, y + 0.5); }
     orbCtx.stroke();
-
-    // Sterne
-    const stars = ensureOrbStars(rect);
-    orbCtx.fillStyle = '#ffffff';
-    for (const s of stars) {
-      orbCtx.globalAlpha = s.a;
-      orbCtx.beginPath();
-      orbCtx.arc(left + s.x * width, top + s.y * height, s.r, 0, Math.PI * 2);
-      orbCtx.fill();
-    }
-    orbCtx.globalAlpha = 1;
 
     // Vignette, damit die Ecken dunkler abfallen als die Mitte
     const cx = left + width / 2, cy = top + height / 2;
@@ -3129,7 +3090,7 @@
     const cx = rect.left + rect.width / 2;
     const cy = rect.top + rect.height / 2;
     // R1: weißer Ring direkt um die Schrift, mit Innenabstand links/rechts
-    const R1 = Math.min(rect.width, rect.height) * 0.15;
+    const R1 = Math.min(rect.width, rect.height) * 0.10;
     const lvl = orbLevel || 0;
     const t = now / 1000;
     const color = currentOrbColor();
@@ -3225,6 +3186,14 @@
     if (navBackBtn) navBackBtn.addEventListener('click', () => navGo(-1));
     if (navForwardBtn) navForwardBtn.addEventListener('click', () => navGo(1));
     window.addEventListener('resize', layoutSpeechBar);
+    // Zusätzlich zum reinen Fenster-Resize: ein ResizeObserver direkt auf dem
+    // Chat-Bereich fängt auch Größenänderungen ab, die kein window "resize"
+    // auslösen (Sidebar-Toggle ohne Fensteränderung, oder wenn der native
+    // Desktop-App-Host das Event nicht zuverlässig weiterreicht) — damit
+    // folgen Sprechblase und Orb dem Fenster wirklich in jedem Fall.
+    if (chatRootEl && window.ResizeObserver) {
+      new ResizeObserver(layoutSpeechBar).observe(chatRootEl);
+    }
     fetch('/models').then((r) => r.json()).then((j) => { applyModelCaps(j); if (j.current) setModelLabel(j.current); }).catch(() => {});
     openPanelSocket();
   }
