@@ -2212,24 +2212,88 @@
     { cmd: 'modell', label: 'Modell wechseln', desc: 'Anderes LM-Studio-Modell wählen', run: () => toggleModelMenu() },
     { cmd: 'einstellungen', label: 'Einstellungen', desc: 'Einstellungen öffnen', run: () => openSettings() },
     { cmd: 'btw', label: 'Nebenfrage', desc: 'Kurz was anderes fragen, ohne den Hauptchat zu unterbrechen', run: () => openBtwWindow() },
+    { cmd: 'umbenennen', label: 'Umbenennen', desc: 'Aktuelle Unterhaltung umbenennen', run: () => openRenameChatModal(ensureConversationId()) },
+    { cmd: 'anheften', label: 'Anheften', desc: 'Aktuelle Unterhaltung an-/loslösen', run: () => togglePinCurrentConversation() },
+    { cmd: 'ordner', label: 'Im Ordner anzeigen', desc: 'Unterhaltungsdatei im Explorer/Finder zeigen', run: () => revealCurrentConversation() },
+    { cmd: 'löschen', label: 'Löschen', desc: 'Aktuelle Unterhaltung löschen', run: () => deleteCurrentConversation() },
+    { cmd: 'hilfe', label: 'Hilfe', desc: 'Alle Slash-Befehle auflisten', run: () => showSlashHelp() },
   ];
+
+  // Die drei Konversations-Aktionen unten sind dieselben, die das Drei-
+  // Punkte-Menü im Verlauf pro Eintrag anbietet — hier nur ohne Umweg über
+  // die Sidebar, direkt auf die gerade offene Unterhaltung angewendet.
+  async function togglePinCurrentConversation() {
+    const id = currentConversationId;
+    if (!id) return;
+    const c = findConv(id);
+    const pid = c && c.project_id;
+    try {
+      await fetch(`/conversations/${encodeURIComponent(id)}${pid ? '?project_id=' + encodeURIComponent(pid) : ''}`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pinned: !(c && c.pinned) }),
+      });
+    } catch (e) {}
+    loadConversationList();
+  }
+  async function revealCurrentConversation() {
+    const id = currentConversationId;
+    if (!id) return;
+    const c = findConv(id);
+    const pid = c && c.project_id;
+    try {
+      await fetch(`/conversations/${encodeURIComponent(id)}/reveal${pid ? '?project_id=' + encodeURIComponent(pid) : ''}`, { method: 'POST' });
+    } catch (e) {}
+  }
+  async function deleteCurrentConversation() {
+    const id = currentConversationId;
+    if (!id) return;
+    const c = findConv(id);
+    if (!confirm(`"${c ? (c.title || 'Unbenannt') : 'Diese Konversation'}" wirklich löschen?`)) return;
+    const pid = c && c.project_id;
+    try {
+      await fetch(`/conversations/${encodeURIComponent(id)}${pid ? '?project_id=' + encodeURIComponent(pid) : ''}`, { method: 'DELETE' });
+    } catch (e) {}
+    startNewConversation();
+    loadConversationList();
+  }
+  function showSlashHelp() {
+    showThread();
+    const lines = SLASH_COMMANDS.map((c) => `/${c.cmd} — ${c.desc}`).join('\n');
+    addThreadTurn('jarvis', 'Verfügbare Befehle:\n' + lines);
+  }
 
   function closeSlashMenu() {
     if (slashMenuEl) slashMenuEl.style.display = 'none';
     slashMenuMatches = [];
   }
 
+  // Baut die Liste einmal komplett neu auf (nur wenn sich die Treffer
+  // ändern, siehe updateSlashMenu()). Hervorhebung beim Hovern/Pfeiltasten
+  // läuft bewusst über highlightSlashMenu() statt hier erneut das ganze
+  // innerHTML zu ersetzen — ein Rebuild GENAU während ein echter Mausklick
+  // im Gang ist (mouseenter feuert vor mousedown) tauscht das Element unter
+  // dem Cursor aus, sodass der nachfolgende mousedown am Container statt am
+  // Eintrag landet und der Klick wirkungslos verpufft. Beobachtet live: mit
+  // synthetisch dispatchten Events "funktionierte" die Auswahl, mit einem
+  // echten Mausklick nicht — genau dieser Effekt.
   function renderSlashMenu() {
     if (!slashMenuEl) return;
     slashMenuEl.innerHTML = slashMenuMatches.map((c, i) => `
-      <div class="js-slash-item" data-i="${i}" style="padding:9px 14px;cursor:pointer;display:flex;flex-direction:column;gap:1px;background:${i === slashMenuIndex ? C.bgHover : 'transparent'};">
+      <div class="js-slash-item" data-i="${i}" style="padding:9px 14px;cursor:pointer;display:flex;flex-direction:column;gap:1px;">
         <span style="font-size:13px;color:${C.text};">/${c.cmd}</span>
         <span style="font-size:12px;color:${C.textDim};">${c.desc}</span>
       </div>
     `).join('');
     slashMenuEl.querySelectorAll('.js-slash-item').forEach((el) => {
-      el.addEventListener('mouseenter', () => { slashMenuIndex = Number(el.dataset.i); renderSlashMenu(); });
+      el.addEventListener('mouseenter', () => { slashMenuIndex = Number(el.dataset.i); highlightSlashMenu(); });
       el.addEventListener('mousedown', (e) => { e.preventDefault(); insertSlashCommand(slashMenuMatches[Number(el.dataset.i)]); });
+    });
+    highlightSlashMenu();
+  }
+
+  function highlightSlashMenu() {
+    if (!slashMenuEl) return;
+    slashMenuEl.querySelectorAll('.js-slash-item').forEach((el) => {
+      el.style.background = Number(el.dataset.i) === slashMenuIndex ? C.bgHover : 'transparent';
     });
   }
 
@@ -2280,8 +2344,8 @@
   // der normale Enter-sendet/Zeilenumbruch-Handler nicht mehr greifen).
   function handleSlashMenuKeydown(e) {
     if (!slashMenuMatches.length) return false;
-    if (e.key === 'ArrowDown') { e.preventDefault(); slashMenuIndex = (slashMenuIndex + 1) % slashMenuMatches.length; renderSlashMenu(); return true; }
-    if (e.key === 'ArrowUp') { e.preventDefault(); slashMenuIndex = (slashMenuIndex - 1 + slashMenuMatches.length) % slashMenuMatches.length; renderSlashMenu(); return true; }
+    if (e.key === 'ArrowDown') { e.preventDefault(); slashMenuIndex = (slashMenuIndex + 1) % slashMenuMatches.length; highlightSlashMenu(); return true; }
+    if (e.key === 'ArrowUp') { e.preventDefault(); slashMenuIndex = (slashMenuIndex - 1 + slashMenuMatches.length) % slashMenuMatches.length; highlightSlashMenu(); return true; }
     if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); insertSlashCommand(slashMenuMatches[slashMenuIndex]); return true; }
     if (e.key === 'Escape') { e.preventDefault(); closeSlashMenu(); return true; }
     return false;
