@@ -380,6 +380,13 @@
   // zu tippen.
   let slashMenuEl = null, slashMenuMatches = [], slashMenuIndex = 0;
   let attachPreviewEl = null;
+  // "/btw"-Nebenfrage-Fenster: ein kleines, frei verschiebbares Extra-
+  // Fenster für eine Zwischenfrage, während der Hauptchat noch an einer
+  // Antwort arbeitet — komplett eigener Request/eigene History, rührt
+  // NICHT an `busy`/`history`/`currentTurnId` des Hauptchats.
+  let btwEl = null, btwBodyEl = null, btwInputEl = null, btwSendBtn = null;
+  let btwBusy = false, btwConversationId = null, btwTurnCounter = 0;
+  let btwDragging = false, btwDragStartX = 0, btwDragStartY = 0, btwDragBaseX = 0, btwDragBaseY = 0;
   let speechBarEl = null, spMuteBtn = null, spStopBtn = null, spSendBtn = null, spChatBtn = null;
   let speechCaptionEl = null, spcStatusEl = null, spcUserEl = null, spcReplyEl = null;
   let settingsSheetEl = null, settingsModelsEl = null, newProjectSheetEl = null, renameChatSheetEl = null;
@@ -838,7 +845,7 @@
     const s = document.createElement('style');
     s.id = 'jsAppCss';
     s.textContent = `
-      body.js-app-active > :not(#jsApp):not(#jarvisOrb):not(#jsSpeechbar):not(#jsSpeechCaption):not(#jsSettingsSheet):not(#jsNewProjectSheet):not(#jsRenameChatSheet):not(script):not(style) { display:none !important; }
+      body.js-app-active > :not(#jsApp):not(#jarvisOrb):not(#jsSpeechbar):not(#jsSpeechCaption):not(#jsSettingsSheet):not(#jsNewProjectSheet):not(#jsRenameChatSheet):not(#jsBtwWindow):not(script):not(style) { display:none !important; }
       body.js-app-active { overflow:hidden; }
       /* Echter claude.ai "Squish"-Press-Effekt (aus --cds-btn-spring extrahiert): schnelles
          Einschrumpfen beim Klicken, dann sanftes Zurueckfedern. NUR auf echten Action-Icon-
@@ -2196,6 +2203,7 @@
     { cmd: 'diktieren', label: 'Diktieren', desc: 'Spracheingabe ins Textfeld', run: () => setDictating(true) },
     { cmd: 'modell', label: 'Modell wechseln', desc: 'Anderes LM-Studio-Modell wählen', run: () => toggleModelMenu() },
     { cmd: 'einstellungen', label: 'Einstellungen', desc: 'Einstellungen öffnen', run: () => openSettings() },
+    { cmd: 'btw', label: 'Nebenfrage', desc: 'Kurz was anderes fragen, ohne den Hauptchat zu unterbrechen', run: () => openBtwWindow() },
   ];
 
   function closeSlashMenu() {
@@ -2249,6 +2257,141 @@
     if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); runSlashCommand(slashMenuMatches[slashMenuIndex]); return true; }
     if (e.key === 'Escape') { e.preventDefault(); closeSlashMenu(); return true; }
     return false;
+  }
+
+  // -------------------------------------------------- "/btw"-Nebenfrage
+  // Eigenständiges, frei verschiebbares Mini-Chatfenster für eine Zwischen-
+  // frage, während der Hauptchat noch an einer Antwort arbeitet. Läuft über
+  // denselben /chat/stream-Endpunkt, aber mit komplett eigenem Turn/eigener
+  // History/eigener conversation_id — teilt sich NICHTS mit dem Hauptchat
+  // (kein gemeinsames `busy`, kein Abbrechen der Hauptantwort, keine
+  // Vermischung der Gesprächshistorie).
+  function ensureBtwWindow() {
+    if (btwEl) return;
+    btwEl = document.createElement('div');
+    btwEl.id = 'jsBtwWindow';
+    btwEl.style.cssText = `display:none;position:fixed;top:96px;right:32px;width:320px;z-index:55;background:${C.bgSurface3};border:1px solid ${C.border};border-radius:14px;box-shadow:0 20px 60px rgba(0,0,0,.5);overflow:hidden;`;
+    btwEl.innerHTML = `
+      <div class="js-btw-header" style="cursor:grab;padding:10px 12px;display:flex;align-items:center;justify-content:space-between;background:${C.bgHover};border-bottom:1px solid ${C.border};user-select:none;">
+        <span style="font-size:13px;font-weight:600;color:${C.text};">Nebenfrage</span>
+        <button class="js-btw-close" title="Schließen" style="background:none;border:none;color:${C.textSoft};cursor:pointer;width:24px;height:24px;display:inline-flex;align-items:center;justify-content:center;">${ICONS.close}</button>
+      </div>
+      <div class="js-btw-body" style="max-height:280px;overflow-y:auto;padding:12px;font-size:13px;color:${C.text};white-space:pre-wrap;word-break:break-word;display:flex;flex-direction:column;gap:10px;"></div>
+      <div style="display:flex;gap:6px;padding:10px 12px;border-top:1px solid ${C.border};">
+        <input class="js-btw-input" placeholder="Kurze Frage…" style="flex:1;min-width:0;background:${C.bg};border:1px solid ${C.border};border-radius:8px;padding:7px 10px;color:${C.text};font-size:13px;outline:none;">
+        <button class="js-btw-send" title="Senden" style="width:32px;height:32px;border-radius:8px;background:${C.accent};border:none;color:#fff;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;">${jsIcon('0xe013', 18)}</button>
+      </div>
+    `;
+    document.body.appendChild(btwEl);
+    btwBodyEl = $('.js-btw-body', btwEl);
+    btwInputEl = $('.js-btw-input', btwEl);
+    btwSendBtn = $('.js-btw-send', btwEl);
+
+    const header = $('.js-btw-header', btwEl);
+    header.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      btwDragging = true;
+      header.style.cursor = 'grabbing';
+      const rect = btwEl.getBoundingClientRect();
+      btwDragStartX = e.clientX; btwDragStartY = e.clientY;
+      btwDragBaseX = rect.left; btwDragBaseY = rect.top;
+    });
+    document.addEventListener('mousemove', (e) => {
+      if (!btwDragging) return;
+      const rect = btwEl.getBoundingClientRect();
+      let x = btwDragBaseX + (e.clientX - btwDragStartX);
+      let y = btwDragBaseY + (e.clientY - btwDragStartY);
+      x = Math.min(window.innerWidth - rect.width, Math.max(0, x));
+      y = Math.min(window.innerHeight - rect.height, Math.max(0, y));
+      btwEl.style.left = x + 'px';
+      btwEl.style.top = y + 'px';
+      btwEl.style.right = 'auto';
+    });
+    document.addEventListener('mouseup', () => {
+      if (!btwDragging) return;
+      btwDragging = false;
+      header.style.cursor = 'grab';
+    });
+
+    $('.js-btw-close', btwEl).addEventListener('click', () => closeBtwWindow());
+    btwSendBtn.addEventListener('click', () => sendBtwMessage());
+    btwInputEl.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); sendBtwMessage(); }
+    });
+  }
+
+  function openBtwWindow() {
+    ensureBtwWindow();
+    btwEl.style.display = 'block';
+    btwInputEl.focus();
+  }
+  function closeBtwWindow() {
+    if (btwEl) btwEl.style.display = 'none';
+  }
+
+  function addBtwLine(who, text) {
+    const line = document.createElement('div');
+    line.innerHTML = `<div style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:${C.textDim};margin-bottom:2px;">${who}</div>`;
+    const body = document.createElement('div');
+    body.textContent = text;
+    line.appendChild(body);
+    btwBodyEl.appendChild(line);
+    btwBodyEl.scrollTop = btwBodyEl.scrollHeight;
+    return body;
+  }
+
+  async function sendBtwMessage() {
+    const text = btwInputEl.value.trim();
+    if (!text || btwBusy) return;
+    if (!btwConversationId) btwConversationId = 'btw-' + (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()));
+    btwInputEl.value = '';
+    btwBusy = true;
+    btwSendBtn.disabled = true;
+    addBtwLine('Du', text);
+    const replyEl = addBtwLine('Jarvis', '');
+    let full = '';
+    try {
+      const resp = await fetch('/chat/stream', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message: text,
+          history: [],
+          turn_id: 'btw-' + (++btwTurnCounter),
+          mode: 'chat',
+          conversation_id: btwConversationId,
+          images: [],
+        }),
+      });
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = '';
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        let nl;
+        while ((nl = buf.indexOf('\n')) >= 0) {
+          const line = buf.slice(0, nl).trim();
+          buf = buf.slice(nl + 1);
+          if (!line) continue;
+          let evt;
+          try { evt = JSON.parse(line); } catch (e) { continue; }
+          // Nur Text — die Nebenfrage bekommt bewusst keine eigene
+          // Sprachausgabe, die sich mit einer laufenden Hauptantwort
+          // überlagern könnte.
+          if (evt.type === 'partial') { replyEl.textContent = evt.text || ''; btwBodyEl.scrollTop = btwBodyEl.scrollHeight; }
+          else if (evt.type === 'done') { full = evt.full_text || full; }
+        }
+      }
+      replyEl.textContent = full || replyEl.textContent;
+    } catch (e) {
+      replyEl.textContent = 'Konnte gerade nicht antworten.';
+    } finally {
+      btwBusy = false;
+      btwSendBtn.disabled = false;
+      btwBodyEl.scrollTop = btwBodyEl.scrollHeight;
+    }
   }
 
   // ------------------------------------------------------ panel / Fortschritt
