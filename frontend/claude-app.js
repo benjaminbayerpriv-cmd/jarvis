@@ -3456,7 +3456,8 @@
     if (capInner) {
       const REF_WIDTH = 900;   // Breite, ab der die Box ihre volle Größe zeigt
       const MIN_SCALE = 0.6;   // nie kleiner als das, sonst wird der Text unlesbar
-      const scale = Math.min(1, Math.max(MIN_SCALE, rect.width / REF_WIDTH));
+      const MAX_SCALE = 0.9;   // auch bei maximiertem Fenster 10% kleiner als vorher
+      const scale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, rect.width / REF_WIDTH));
       capInner.style.transformOrigin = 'center bottom';
       capInner.style.transform = 'translateX(' + delta + 'px) scale(' + scale + ')';
     }
