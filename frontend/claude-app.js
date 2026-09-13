@@ -2946,14 +2946,6 @@
     return Math.round(Math.min(1, Math.max(0, a)) * 255).toString(16).padStart(2, '0');
   }
 
-  // aktueller Orb-Zustand: jeder bekommt eine eigene Animation
-  function orbStatus() {
-    if (speaking) return 'speaking';
-    if (busy) return 'thinking';
-    if (speechMode && !muted) return 'listening';
-    return 'idle';
-  }
-
   // Sterne + Gitter-Phase sind fix pro Sitzung (nicht pro Frame neu
   // gewürfelt) — sonst "funkelt" der Hintergrund unruhig statt ruhig zu
   // stehen, wie im Referenzbild.
@@ -3033,36 +3025,96 @@
     orbCtx.globalAlpha = 1;
   }
 
-  // Feste, unregelmäßige Lücken im Ring (Länge in Radiant) — der Ring im
-  // Referenzbild ist kein glatter Kreis, sondern an mehreren, ungleich
-  // großen Stellen unterbrochen.
-  const ORB_RING_GAPS = [
-    { at: 0.15, w: 0.10 },
-    { at: 1.55, w: 0.22 },
-    { at: 2.65, w: 0.07 },
-    { at: 4.10, w: 0.16 },
-    { at: 5.30, w: 0.09 },
-  ];
-  function strokeBrokenRing(cx, cy, R, rotation) {
-    // Bewusst OHNE `% TAU` auf die Zwischenwinkel: canvas' arc() sweept
-    // sowieso immer vorwärts vom Start- zum Endwinkel, egal wie groß die
-    // Zahlen werden — mit Modulo pro Lücke würden die fünf Lücken (jede mit
-    // eigenem `at`-Offset) bei wachsender `rotation` zu unterschiedlichen
-    // Zeitpunkten über den TAU-Rand wickeln und dadurch außer Reihenfolge
-    // geraten, was den Ring periodisch falsch (fast geschlossen statt
-    // unterbrochen) zeichnen würde.
-    const TAU = Math.PI * 2;
-    let cursor = rotation;
-    for (const gap of ORB_RING_GAPS) {
-      const gapStart = gap.at + rotation;
-      orbCtx.beginPath();
-      orbCtx.arc(cx, cy, R, cursor, gapStart);
-      orbCtx.stroke();
-      cursor = gapStart + gap.w;
-    }
+  // Feste, kleine Lücke im weißen Ring direkt um die Schrift ("kleine
+  // Aushöhlung") — oben mittig, wie ein Nahtstellen-Unterbruch.
+  const WHITE_RING_GAP = { at: -Math.PI / 2, w: 0.30 };
+
+  function strokeArc(cx, cy, r, startAngle, lengthAngle) {
     orbCtx.beginPath();
-    orbCtx.arc(cx, cy, R, cursor, rotation + TAU);
+    orbCtx.arc(cx, cy, r, startAngle, startAngle + lengthAngle);
     orbCtx.stroke();
+  }
+
+  // Konzentrische Ring-Schichten von innen nach außen (Nutzerbeschreibung):
+  //  1. bläulicher Nebel, der vom dunklen Kreis nach außen schwächer wird
+  //  2. dunkler, halbtransparenter Kreis hinter der Schrift (Gitter bleibt
+  //     durchscheinend sichtbar)
+  //  3. weißer Ring direkt um die Schrift, mit kleiner Aushöhlung
+  //  4. bläulicher "Meteoritenschweif"-Nebelring knapp außerhalb
+  //  5. drei leichte weiße Teilkreise (Viertel/Fünftel/Achtel), die
+  //     gegeneinander rotieren
+  //  6. äußerster Punktkreis mit Strichen an den vier Himmelsrichtungen,
+  //     wie bei einem Koordinatensystem/Kompass
+  function drawOrbRings(cx, cy, R1, color, lvl, t) {
+    const TAU = Math.PI * 2;
+    const breathe = 0.85 + Math.sin(t * 1.1) * 0.15 + lvl * 0.35;
+
+    // 1) Nebel vom Zentrum nach außen ausblassend
+    const nebula = orbCtx.createRadialGradient(cx, cy, R1 * 0.3, cx, cy, R1 * 2.8);
+    nebula.addColorStop(0, color + alphaHex(0.30 * breathe));
+    nebula.addColorStop(1, color + '00');
+    orbCtx.fillStyle = nebula;
+    orbCtx.beginPath();
+    orbCtx.arc(cx, cy, R1 * 2.8, 0, TAU);
+    orbCtx.fill();
+
+    // 2) dunkler Kreis — bewusst nur halbtransparent, damit das Gitter
+    // dahinter noch durchscheint statt komplett verdeckt zu werden
+    orbCtx.fillStyle = 'rgba(4,6,9,0.55)';
+    orbCtx.beginPath();
+    orbCtx.arc(cx, cy, R1, 0, TAU);
+    orbCtx.fill();
+
+    // 3) weißer Ring mit kleiner Aushöhlung
+    orbCtx.lineCap = 'round';
+    orbCtx.strokeStyle = 'rgba(240,244,247,0.9)';
+    orbCtx.lineWidth = 1.6;
+    strokeArc(cx, cy, R1, WHITE_RING_GAP.at + WHITE_RING_GAP.w, TAU - WHITE_RING_GAP.w);
+
+    // 4) bläulicher Meteoritenschweif-Nebelring direkt außerhalb
+    orbCtx.strokeStyle = color;
+    orbCtx.lineWidth = R1 * 0.22;
+    orbCtx.globalAlpha = 0.22 * breathe;
+    orbCtx.shadowColor = color;
+    orbCtx.shadowBlur = R1 * 0.35;
+    orbCtx.beginPath();
+    orbCtx.arc(cx, cy, R1 * 1.14, 0, TAU);
+    orbCtx.stroke();
+    orbCtx.shadowBlur = 0;
+    orbCtx.globalAlpha = 1;
+
+    // 5) drei leichte weiße Teilkreise, unterschiedlich groß/stark,
+    // gegeneinander rotierend — schneller/heller bei mehr Pegel
+    const rot1 = t * (0.06 + lvl * 0.12);
+    const rot2 = -t * (0.09 + lvl * 0.18);
+    const rot3 = t * (0.04 + lvl * 0.09);
+    orbCtx.lineWidth = 1.2;
+    orbCtx.strokeStyle = 'rgba(255,255,255,0.16)';
+    strokeArc(cx, cy, R1 * 1.35, rot1, TAU / 4);   // Viertelkreis, ganz leicht
+    orbCtx.strokeStyle = 'rgba(255,255,255,0.34)';
+    strokeArc(cx, cy, R1 * 1.55, rot2, TAU / 5);   // Fünftelkreis, stärker gesättigt
+    orbCtx.strokeStyle = 'rgba(255,255,255,0.24)';
+    strokeArc(cx, cy, R1 * 1.75, rot3, TAU / 8);   // Achtelkreis
+
+    // 6) äußerster Punktkreis + Striche an den vier Himmelsrichtungen
+    const R6 = R1 * 2.0;
+    const dotCount = 48;
+    orbCtx.fillStyle = 'rgba(255,255,255,0.4)';
+    for (let i = 0; i < dotCount; i++) {
+      const a = (i / dotCount) * TAU;
+      orbCtx.beginPath();
+      orbCtx.arc(cx + Math.cos(a) * R6, cy + Math.sin(a) * R6, 1, 0, TAU);
+      orbCtx.fill();
+    }
+    orbCtx.strokeStyle = 'rgba(255,255,255,0.6)';
+    orbCtx.lineWidth = 1.4;
+    for (let k = 0; k < 4; k++) {
+      const a = k * (TAU / 4);
+      orbCtx.beginPath();
+      orbCtx.moveTo(cx + Math.cos(a) * (R6 - 5), cy + Math.sin(a) * (R6 - 5));
+      orbCtx.lineTo(cx + Math.cos(a) * (R6 + 7), cy + Math.sin(a) * (R6 + 7));
+      orbCtx.stroke();
+    }
   }
 
   function drawOrb(now) {
@@ -3076,58 +3128,15 @@
     const rect = chatRootEl ? chatRootEl.getBoundingClientRect() : { left: 0, top: 0, width: cw, height: ch };
     const cx = rect.left + rect.width / 2;
     const cy = rect.top + rect.height / 2;
-    const R = Math.min(rect.width, rect.height) * 0.16;
+    // R1: weißer Ring direkt um die Schrift, mit Innenabstand links/rechts
+    const R1 = Math.min(rect.width, rect.height) * 0.15;
     const lvl = orbLevel || 0;
-    const status = orbStatus();
     const t = now / 1000;
     const color = currentOrbColor();
 
     drawSpeechBackdrop(rect);
-
-    // weicher Glow hinter dem Ring — stärker, sobald wirklich etwas passiert
-    const glowAlpha = status === 'idle' ? 0.35 : 0.5 + lvl * 0.35;
-    const glow = orbCtx.createRadialGradient(cx, cy, R * 0.3, cx, cy, R * 2.3);
-    glow.addColorStop(0, color + alphaHex(glowAlpha));
-    glow.addColorStop(1, color + '00');
-    orbCtx.fillStyle = glow;
-    orbCtx.beginPath();
-    orbCtx.arc(cx, cy, R * 2.3, 0, Math.PI * 2);
-    orbCtx.fill();
-
-    // Haupt-Ring: unregelmäßig gebrochen, mit Leuchten (shadowBlur), dreht
-    // sich je Zustand unterschiedlich schnell und wird bei Aktivität heller.
-    let rotSpeed = 0.05, widthBoost = 0, brightness = 0.85;
-    if (status === 'listening') { rotSpeed = 0.05 + lvl * 0.25; widthBoost = lvl * 2.5; brightness = 0.75 + lvl * 0.25; }
-    else if (status === 'thinking') { rotSpeed = 0.55; brightness = 1; }
-    else if (status === 'speaking') { rotSpeed = 0.12 + lvl * 0.6; widthBoost = lvl * 3; brightness = 0.8 + lvl * 0.3; }
-    const rotation = t * rotSpeed;
-
-    orbCtx.lineCap = 'round';
-    orbCtx.strokeStyle = color;
-    orbCtx.lineWidth = 2.5 + widthBoost;
-    orbCtx.shadowColor = color;
-    orbCtx.shadowBlur = 14 + widthBoost * 3;
-    orbCtx.globalAlpha = brightness;
-    strokeBrokenRing(cx, cy, R, rotation);
-    orbCtx.shadowBlur = 0;
-    orbCtx.globalAlpha = 1;
-
-    // Innerer Scan-Bogen: heller, dünnerer Bogen, der schneller und
-    // gegenläufig kreist — das separate "Ladeanzeige"-Element aus dem
-    // Referenzbild. Bleibt in jedem Zustand sichtbar, wird bei Aktivität
-    // nur klarer/schneller.
-    const scanSpeed = status === 'thinking' ? -1.4 : status === 'speaking' ? -0.5 - lvl * 1.2 : -0.35 - lvl * 0.4;
-    const scanStart = t * scanSpeed;
-    const scanLen = status === 'thinking' ? 0.9 : 0.5;
-    orbCtx.strokeStyle = '#f3f6f8';
-    orbCtx.globalAlpha = 0.5 + lvl * 0.3;
-    orbCtx.lineWidth = 1.6;
-    orbCtx.beginPath();
-    orbCtx.arc(cx, cy, R * 0.82, scanStart, scanStart + scanLen);
-    orbCtx.stroke();
-    orbCtx.globalAlpha = 1;
-
-    drawOrbLabel(cx, cy, R, 0.9);
+    drawOrbRings(cx, cy, R1, color, lvl, t);
+    drawOrbLabel(cx, cy, R1, 0.95);
   }
 
   // Pegel der gesprochenen Stimme aus dem TTS-Ausgangsanalysator — die Orb
