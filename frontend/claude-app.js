@@ -2188,13 +2188,21 @@
 
   function sendFromComposer() {
     const text = composerInput ? composerInput.innerText.trim() : '';
+    const command = matchSlashCommand(text);
+    if (command) {
+      if (composerInput) { composerInput.innerText = ''; composerInput.classList.add('is-empty'); }
+      command.run();
+      return;
+    }
     if (text || pendingImages.length) sendMessage(text);
   }
 
   // ------------------------------------------------------- Slash-Befehle
-  // Liste der verfügbaren "/"-Befehle. Jeder führt eine bereits vorhandene
-  // UI-Aktion aus (kein neuer Code-Pfad) und leert danach den Composer,
-  // statt den Text als Chat-Nachricht abzuschicken.
+  // Liste der verfügbaren "/"-Befehle. Auswahl aus dem Menü (Klick, Enter
+  // oder Tab) trägt den Befehl nur ins Composer-Feld ein — ausgeführt wird
+  // er erst beim tatsächlichen Absenden (sendFromComposer()), damit man ihn
+  // nicht selbst zu Ende tippen muss, aber trotzdem noch sieht/anpassen
+  // kann, was gleich passiert, bevor es losgeht.
   const SLASH_COMMANDS = [
     { cmd: 'neu', label: 'Neue Unterhaltung', desc: 'Startet einen frischen Chat', run: () => startNewConversation() },
     { cmd: 'projekte', label: 'Projekte', desc: 'Projektübersicht öffnen', run: () => openProjectsView() },
@@ -2221,15 +2229,35 @@
     `).join('');
     slashMenuEl.querySelectorAll('.js-slash-item').forEach((el) => {
       el.addEventListener('mouseenter', () => { slashMenuIndex = Number(el.dataset.i); renderSlashMenu(); });
-      el.addEventListener('mousedown', (e) => { e.preventDefault(); runSlashCommand(slashMenuMatches[Number(el.dataset.i)]); });
+      el.addEventListener('mousedown', (e) => { e.preventDefault(); insertSlashCommand(slashMenuMatches[Number(el.dataset.i)]); });
     });
   }
 
-  function runSlashCommand(command) {
-    if (!command) return;
+  // Exakter Treffer (nicht nur ein Präfix) — genau der Befehlsname, sonst
+  // nichts außenrum. Wird beim tatsächlichen Absenden geprüft, siehe
+  // sendFromComposer().
+  function matchSlashCommand(text) {
+    const m = /^\/(\S+)$/.exec((text || '').trim());
+    if (!m) return null;
+    return SLASH_COMMANDS.find((c) => c.cmd === m[1].toLowerCase()) || null;
+  }
+
+  // Schreibt den vollen Befehl ins Composer-Feld, statt ihn selbst
+  // abzutippen — ausgeführt wird er erst beim eigentlichen Absenden
+  // (Enter/Senden-Button, siehe sendFromComposer()), nicht schon hier.
+  function insertSlashCommand(command) {
+    if (!command || !composerInput) return;
     closeSlashMenu();
-    if (composerInput) { composerInput.innerText = ''; composerInput.classList.add('is-empty'); }
-    command.run();
+    composerInput.innerText = '/' + command.cmd + ' ';
+    composerInput.classList.remove('is-empty');
+    composerInput.focus();
+    const range = document.createRange();
+    range.selectNodeContents(composerInput);
+    range.collapse(false);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+    updateSendSlot();
   }
 
   // Bei jeder Eingabe geprüft: nur wenn "/" das ALLERERSTE Zeichen der
@@ -2254,7 +2282,7 @@
     if (!slashMenuMatches.length) return false;
     if (e.key === 'ArrowDown') { e.preventDefault(); slashMenuIndex = (slashMenuIndex + 1) % slashMenuMatches.length; renderSlashMenu(); return true; }
     if (e.key === 'ArrowUp') { e.preventDefault(); slashMenuIndex = (slashMenuIndex - 1 + slashMenuMatches.length) % slashMenuMatches.length; renderSlashMenu(); return true; }
-    if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); runSlashCommand(slashMenuMatches[slashMenuIndex]); return true; }
+    if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); insertSlashCommand(slashMenuMatches[slashMenuIndex]); return true; }
     if (e.key === 'Escape') { e.preventDefault(); closeSlashMenu(); return true; }
     return false;
   }
