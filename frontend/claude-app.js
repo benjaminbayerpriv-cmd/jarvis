@@ -2219,17 +2219,34 @@
     slashMenuMatches = [];
   }
 
+  // Baut die Liste einmal komplett neu auf (nur wenn sich die Treffer
+  // ändern, siehe updateSlashMenu()). Hervorhebung beim Hovern/Pfeiltasten
+  // läuft bewusst über highlightSlashMenu() statt hier erneut das ganze
+  // innerHTML zu ersetzen — ein Rebuild GENAU während ein echter Mausklick
+  // im Gang ist (mouseenter feuert vor mousedown) tauscht das Element unter
+  // dem Cursor aus, sodass der nachfolgende mousedown am Container statt am
+  // Eintrag landet und der Klick wirkungslos verpufft. Beobachtet live: mit
+  // synthetisch dispatchten Events "funktionierte" die Auswahl, mit einem
+  // echten Mausklick nicht — genau dieser Effekt.
   function renderSlashMenu() {
     if (!slashMenuEl) return;
     slashMenuEl.innerHTML = slashMenuMatches.map((c, i) => `
-      <div class="js-slash-item" data-i="${i}" style="padding:9px 14px;cursor:pointer;display:flex;flex-direction:column;gap:1px;background:${i === slashMenuIndex ? C.bgHover : 'transparent'};">
+      <div class="js-slash-item" data-i="${i}" style="padding:9px 14px;cursor:pointer;display:flex;flex-direction:column;gap:1px;">
         <span style="font-size:13px;color:${C.text};">/${c.cmd}</span>
         <span style="font-size:12px;color:${C.textDim};">${c.desc}</span>
       </div>
     `).join('');
     slashMenuEl.querySelectorAll('.js-slash-item').forEach((el) => {
-      el.addEventListener('mouseenter', () => { slashMenuIndex = Number(el.dataset.i); renderSlashMenu(); });
+      el.addEventListener('mouseenter', () => { slashMenuIndex = Number(el.dataset.i); highlightSlashMenu(); });
       el.addEventListener('mousedown', (e) => { e.preventDefault(); insertSlashCommand(slashMenuMatches[Number(el.dataset.i)]); });
+    });
+    highlightSlashMenu();
+  }
+
+  function highlightSlashMenu() {
+    if (!slashMenuEl) return;
+    slashMenuEl.querySelectorAll('.js-slash-item').forEach((el) => {
+      el.style.background = Number(el.dataset.i) === slashMenuIndex ? C.bgHover : 'transparent';
     });
   }
 
@@ -2280,8 +2297,8 @@
   // der normale Enter-sendet/Zeilenumbruch-Handler nicht mehr greifen).
   function handleSlashMenuKeydown(e) {
     if (!slashMenuMatches.length) return false;
-    if (e.key === 'ArrowDown') { e.preventDefault(); slashMenuIndex = (slashMenuIndex + 1) % slashMenuMatches.length; renderSlashMenu(); return true; }
-    if (e.key === 'ArrowUp') { e.preventDefault(); slashMenuIndex = (slashMenuIndex - 1 + slashMenuMatches.length) % slashMenuMatches.length; renderSlashMenu(); return true; }
+    if (e.key === 'ArrowDown') { e.preventDefault(); slashMenuIndex = (slashMenuIndex + 1) % slashMenuMatches.length; highlightSlashMenu(); return true; }
+    if (e.key === 'ArrowUp') { e.preventDefault(); slashMenuIndex = (slashMenuIndex - 1 + slashMenuMatches.length) % slashMenuMatches.length; highlightSlashMenu(); return true; }
     if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); insertSlashCommand(slashMenuMatches[slashMenuIndex]); return true; }
     if (e.key === 'Escape') { e.preventDefault(); closeSlashMenu(); return true; }
     return false;
