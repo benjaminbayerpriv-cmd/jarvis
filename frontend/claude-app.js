@@ -637,7 +637,7 @@
                   <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
                 </button>
                 <button class="js-note" title="Diktieren" style="width:32px;height:32px;border-radius:8px;background:none;border:none;color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;transition:background .15s;flex:0 0 auto;">${jsIcon('0xe0ab', 24)}</button>
-                <button class="js-speech" title="Sprachmodus" style="width:32px;height:32px;border-radius:8px;background:none;border:none;color:${C.textDim};opacity:.55;cursor:default;pointer-events:none;display:inline-flex;align-items:center;justify-content:center;transition:background .15s;flex:0 0 auto;">${ICONS.audio}</button>
+                <button class="js-speech" title="Sprachmodus" style="width:32px;height:32px;border-radius:8px;background:none;border:none;color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;transition:background .15s;flex:0 0 auto;">${ICONS.audio}</button>
                 <button class="js-send" title="Senden" style="width:32px;height:32px;border-radius:8px;background:${C.accent};border:none;color:#fff;cursor:pointer;display:none;align-items:center;justify-content:center;flex:0 0 auto;">${jsIcon('0xe013', 24)}</button>
               </div>
             </div>
@@ -2930,30 +2930,19 @@
     if (should) { dictBase = null; startListening(); } else stopListening();
   }
 
-    // ------------------------------------------- 3D-Punktkugel (Sprachmodus)
-  function makeSpherePoints(n) {
-    // Fibonacci-Kugel: gleichmäßige Verteilung, ohne Pole zu klumpen.
-    const pts = [];
-    const golden = Math.PI * (3 - Math.sqrt(5));
-    for (let i = 0; i < n; i++) {
-      const t = i / n;
-      const y = 1 - t * 2;                        // +1 … -1
-      const r = Math.sqrt(Math.max(0, 1 - y * y));
-      const th = golden * i;
-      pts.push({ x: Math.cos(th) * r, y, z: Math.sin(th) * r });
-    }
-    return pts;
-  }
-  let orbPoints = makeSpherePoints(300);   // weniger Punkte → klare, ruhige Kugel
-  let orbRotY = 0, orbRotX = -0.38;
-
-  // Eine konstante Farbe für alle Zustände — die Status werden nur über die
-  // BEWEGUNG erzählt (wie in der alten JARVIS-Kugel), nicht über Farbwechsel.
-  // Ausnahme: stummgeschaltet wird ausdrücklich grau eingefärbt, als klares
-  // visuelles Signal, dass das Mikrofon gerade nichts aufnimmt.
-  const ORB_COLOR = C.accent;
-  const ORB_MUTED_COLOR = '#8c877c';
+    // ------------------------------------------- Leuchtender Ring (Sprachmodus)
+  // Ersetzt die frühere Punktkugel durch einen glühenden Ring mit "JARVIS"-
+  // Schriftzug in der Mitte (Nutzer-Referenzbild). Jeder Zustand bekommt ein
+  // klar anderes Bewegungsmuster statt nur eine andere Geschwindigkeit, damit
+  // "Jarvis hört zu" und "Jarvis spricht" sich auch bei stummgeschaltetem Ton
+  // eindeutig unterscheiden lassen.
+  const ORB_COLOR = '#5ad1ff';
+  const ORB_MUTED_COLOR = '#7a8088';
   function currentOrbColor() { return muted ? ORB_MUTED_COLOR : ORB_COLOR; }
+
+  function alphaHex(a) {
+    return Math.round(Math.min(1, Math.max(0, a)) * 255).toString(16).padStart(2, '0');
+  }
 
   // aktueller Orb-Zustand: jeder bekommt eine eigene Animation
   function orbStatus() {
@@ -2961,6 +2950,26 @@
     if (busy) return 'thinking';
     if (speechMode && !muted) return 'listening';
     return 'idle';
+  }
+
+  function drawOrbLabel(cx, cy, R, alpha) {
+    const label = 'JARVIS';
+    const fontSize = Math.max(10, R * 0.24);
+    orbCtx.font = '600 ' + fontSize + 'px "anthropic-sans", system-ui, sans-serif';
+    orbCtx.textAlign = 'left';
+    orbCtx.textBaseline = 'middle';
+    const spacing = fontSize * 0.28;
+    const chars = [...label];
+    const widths = chars.map((c) => orbCtx.measureText(c).width);
+    const totalW = widths.reduce((a, b) => a + b, 0) + spacing * (chars.length - 1);
+    orbCtx.globalAlpha = alpha;
+    orbCtx.fillStyle = '#f2f4f6';
+    let x = cx - totalW / 2;
+    for (let i = 0; i < chars.length; i++) {
+      orbCtx.fillText(chars[i], x, cy);
+      x += widths[i] + spacing;
+    }
+    orbCtx.globalAlpha = 1;
   }
 
   function drawOrb(now) {
@@ -2974,97 +2983,91 @@
     const rect = chatRootEl ? chatRootEl.getBoundingClientRect() : { left: 0, top: 0, width: cw, height: ch };
     const cx = rect.left + rect.width / 2;
     const cy = rect.top + rect.height / 2;
-    const R = Math.min(rect.width, rect.height) * 0.10;   // viel kleinere Kugel
+    const R = Math.min(rect.width, rect.height) * 0.12;
     const lvl = orbLevel || 0;
     const status = orbStatus();
     const t = now / 1000;
+    const color = currentOrbColor();
 
-    // Rotationsgeschwindigkeit je Zustand — spürbar schneller als zuvor
-    let rotSpeed = 0.005;
-    if (status === 'listening') rotSpeed = 0.006 + lvl * 0.03;
-    else if (status === 'thinking') rotSpeed = 0.011;
-    else if (status === 'speaking') rotSpeed = 0.013;
-    orbRotY += rotSpeed;
-    orbRotX = -0.38 + Math.sin(t * 1.5) * 0.05;   // zügigeres Wanken
-
-    // Denk-Sweep: ein Band wandert von oben nach unten (0 = oben … 1 = unten).
-    // Dreieck-Welle, damit es ohne Sprung durchläuft — wie in der alten Kugel.
-    let sweepT = -1;
-    if (status === 'thinking') {
-      const period = 0.9;
-      const phase = (t % (period * 2)) / (period * 2);
-      sweepT = phase < 0.5 ? phase * 2 : 2 - phase * 2;
-    }
-
-    const cosY = Math.cos(orbRotY), sinY = Math.sin(orbRotY);
-    const cosX = Math.cos(orbRotX), sinX = Math.sin(orbRotX);
-
-    // weicher Glow hinter der Kugel (eine Farbe, keine Status-Änderung —
-    // außer stummgeschaltet, siehe currentOrbColor())
-    const orbColor = currentOrbColor();
-    const glow = orbCtx.createRadialGradient(cx, cy, 0, cx, cy, R * 1.5);
-    glow.addColorStop(0, orbColor + '22');
-    glow.addColorStop(1, orbColor + '00');
-    orbCtx.globalAlpha = 0.5;
+    // weicher Hintergrund-Glow — stärker, sobald wirklich etwas passiert
+    const glowAlpha = status === 'idle' ? 0.28 : 0.4 + lvl * 0.3;
+    const glow = orbCtx.createRadialGradient(cx, cy, R * 0.3, cx, cy, R * 2.1);
+    glow.addColorStop(0, color + alphaHex(glowAlpha));
+    glow.addColorStop(1, color + '00');
     orbCtx.fillStyle = glow;
     orbCtx.beginPath();
-    orbCtx.arc(cx, cy, R * 1.5, 0, Math.PI * 2);
+    orbCtx.arc(cx, cy, R * 2.1, 0, Math.PI * 2);
     orbCtx.fill();
 
-    orbCtx.fillStyle = orbColor;
-    for (let i = 0; i < orbPoints.length; i++) {
-      const p = orbPoints[i];
-      const bx = p.x, by = p.y, bz = p.z;
+    // Grundring: dünne, durchgehende Kontur, immer sichtbar
+    orbCtx.lineCap = 'round';
+    orbCtx.strokeStyle = color + '40';
+    orbCtx.lineWidth = 2;
+    orbCtx.beginPath();
+    orbCtx.arc(cx, cy, R, 0, Math.PI * 2);
+    orbCtx.stroke();
 
-      // POSITIONS-Dynamik: radialer Versatz je Punkt — die Punkte bewegen sich,
-      // die Farbe bleibt gleich. Alle Wellen basieren auf der POSITION (nicht
-      // auf Zufall), damit Nachbarpunkte kohärent zusammenlaufen statt
-      // chaotisch zu zucken — wie in der alten Kugel.
-      let dr = 0;
-      if (status === 'idle') {
-        // ruhiges Atmen + langsame kohärente Welle (ohne Zufall)
-        const breathe = Math.sin(t * 1.4);
-        const wave = Math.sin(bx * 2.1 + by * 1.8 + t * 1.1);
-        dr = breathe * 0.03 + wave * 0.05;
-      } else if (status === 'listening') {
-        // Rippel: kohärente Welle über die Position, von der Lautstärke gesteuert
-        const ripple = Math.sin(bx * 4 + t * 5.0) * Math.cos(by * 4 - t * 3.6);
-        dr = lvl * 0.5 * ripple;
-      } else if (status === 'thinking') {
-        // Sweep-Band wandert von oben nach unten (Dreieck-Welle) und drückt
-        // die Punkte darin nach außen; leichte kohärente Welle dazu
-        const rowT = (1 - by) / 2;
-        const sweep = sweepT >= 0 ? Math.exp(-Math.pow((rowT - sweepT) * 6, 2)) : 0;
-        dr = 0.3 * sweep + 0.06 * Math.sin(bx * 2 + bz * 2 + t * 2.6);
-      } else { // speaking — mehrere kohärente Wellen; jeder Punkt hat seinen
-               // eigenen Wert, aber Bewegungen laufen als Wellen über die Fläche
-        const rippleA = Math.sin(bx * 3.5 + t * 6.5) * Math.cos(by * 3.3 - t * 5.2);
-        const rippleB = Math.sin(bz * 4.2 - t * 6.0);
-        const rippleC = Math.sin((bx + bz) * 2.6 + t * 7.5);
-        dr = 0.20 * rippleA + 0.15 * rippleB + 0.13 * rippleC;
-      }
-      const r = 1 + dr;
-      const x = bx * r, y = by * r, z = bz * r;
-      // Rotation um Y
-      const x1 = x * cosY + z * sinY;
-      const z1 = -x * sinY + z * cosY;
-      // Rotation um X (Kippwinkel)
-      const y1 = y * cosX - z1 * sinX;
-      const z2 = y * sinX + z1 * cosX;
-      const persp = 3.4;
-      const scale = persp / (persp - z2);
-      const sx = cx + x1 * R * scale;
-      const sy = cy + y1 * R * scale;
-      const depth = (z2 + 1) / 2;                 // 0 fern … 1 nah
-      // fettere Punkte, dicht beieinander; Alpha nur = Tiefenausblendung
-      const size = 1.4 + depth * 1.9;
-      const alpha = 0.16 + depth * 0.55;
-      orbCtx.globalAlpha = Math.min(1, Math.max(0, alpha));
+    if (status === 'idle') {
+      // ruhiges Atmen + ein einzelner, langsam wandernder Lichtbogen — bereit,
+      // aber nichts Aktives zu berichten (wie im Referenzbild)
+      const breathe = 0.7 + Math.sin(t * 1.2) * 0.2;
+      orbCtx.globalAlpha = breathe;
+      orbCtx.strokeStyle = color;
+      orbCtx.lineWidth = 3;
+      const start = t * 0.6;
       orbCtx.beginPath();
-      orbCtx.arc(sx, sy, size, 0, Math.PI * 2);
-      orbCtx.fill();
+      orbCtx.arc(cx, cy, R, start, start + 0.8);
+      orbCtx.stroke();
+      orbCtx.globalAlpha = 1;
+    } else if (status === 'thinking') {
+      // deutlich schnellerer Ladebogen — klar als "verarbeitet gerade" lesbar
+      orbCtx.strokeStyle = color;
+      orbCtx.lineWidth = 3.5;
+      const start = t * 3.2;
+      orbCtx.beginPath();
+      orbCtx.arc(cx, cy, R, start, start + 1.3);
+      orbCtx.stroke();
+    } else if (status === 'listening') {
+      // Ring atmet direkt mit dem Mikrofonpegel, dazu läuft bei jedem
+      // Lautstärke-Ausschlag ein sanfter Ping nach außen — ein einzelner,
+      // glatter Puls pro Wort/Satz.
+      orbCtx.strokeStyle = color;
+      orbCtx.lineWidth = 2 + lvl * 6;
+      orbCtx.globalAlpha = 0.55 + lvl * 0.45;
+      orbCtx.beginPath();
+      orbCtx.arc(cx, cy, R, 0, Math.PI * 2);
+      orbCtx.stroke();
+      orbCtx.globalAlpha = 1;
+
+      const pingT = (t * 0.8) % 1;
+      orbCtx.strokeStyle = color;
+      orbCtx.globalAlpha = (1 - pingT) * (0.15 + lvl * 0.5);
+      orbCtx.lineWidth = 1.5;
+      orbCtx.beginPath();
+      orbCtx.arc(cx, cy, R + pingT * R * 0.6, 0, Math.PI * 2);
+      orbCtx.stroke();
+      orbCtx.globalAlpha = 1;
+    } else {
+      // speaking — der Ring zerfällt in flackernde Segmente wie ein
+      // Equalizer, angetrieben von der tatsächlichen TTS-Ausgabelautstärke:
+      // ein unruhiges, vielteiliges Muster statt des glatten Hör-Pulses.
+      const segments = 24;
+      for (let i = 0; i < segments; i++) {
+        const a0 = (i / segments) * Math.PI * 2;
+        const a1 = a0 + (Math.PI * 2 / segments) * 0.72;
+        const wobble = 0.5 + 0.5 * Math.sin(i * 1.7 + t * 9);
+        const amp = lvl * wobble;
+        orbCtx.strokeStyle = color;
+        orbCtx.globalAlpha = 0.3 + amp * 0.7;
+        orbCtx.lineWidth = 2 + amp * 4.5;
+        orbCtx.beginPath();
+        orbCtx.arc(cx, cy, R + amp * R * 0.22, a0, a1);
+        orbCtx.stroke();
+      }
+      orbCtx.globalAlpha = 1;
     }
-    orbCtx.globalAlpha = 1;
+
+    drawOrbLabel(cx, cy, R, status === 'idle' ? 0.85 : 0.95);
   }
 
   // Pegel der gesprochenen Stimme aus dem TTS-Ausgangsanalysator — die Orb
