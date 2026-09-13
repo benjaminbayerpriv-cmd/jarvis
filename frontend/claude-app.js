@@ -3674,8 +3674,13 @@
     const rect = chatRootEl ? chatRootEl.getBoundingClientRect() : { left: 0, top: 0, width: cw, height: ch };
     const cx = rect.left + rect.width / 2;
     const cy = rect.top + rect.height / 2;
-    // R1: weißer Ring direkt um die Schrift, mit Innenabstand links/rechts
-    const R1 = Math.min(rect.width, rect.height) * 0.10;
+    // R1: weißer Ring direkt um die Schrift, mit Innenabstand links/rechts.
+    // Wuchs bisher unbegrenzt mit dem Fenster mit — ab ORB_REF_DIM (gleiche
+    // Referenz wie layoutSpeechBar's REF_WIDTH) wird die Größe gedeckelt, und
+    // zwar 10% unter der alten Referenz, statt bei maximierter Ansicht immer
+    // größer zu werden.
+    const ORB_REF_DIM = 900 * 0.9;
+    const R1 = Math.min(rect.width, rect.height, ORB_REF_DIM) * 0.10;
     const lvl = orbLevel || 0;
     const t = now / 1000;
     const color = currentOrbColor();
