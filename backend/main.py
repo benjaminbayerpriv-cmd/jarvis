@@ -260,19 +260,16 @@ def serve_index():
     return HTMLResponse(html, headers=_NO_CACHE)
 
 
-_JARVIS_FAVICON = b"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
-<circle cx="12" cy="12" r="11" fill="#d97757"/>
-<circle cx="12" cy="12" r="4.5" fill="#141311"/>
-</svg>"""
+_JARVIS_FAVICON_PATH = FRONTEND_DIR / "assets" / "img" / "favicon.ico"
 
 
 @app.get("/favicon.ico")
 def favicon():
-    """Own JARVIS icon (a plain terracotta orb) at the browser's default probe
+    """Own JARVIS icon (the terracotta logo) at the browser's default probe
     path, so the frozen claude.ai snapshot never leaks Anthropic's own logo
     into the tab bar (the SSR markup links its shortcut icon to /favicon.ico,
-    and Chrome probes it regardless of the rel="icon" SVG it also links)."""
-    return Response(_JARVIS_FAVICON, media_type="image/svg+xml")
+    and Chrome probes it regardless of the rel="icon" link it also carries)."""
+    return Response(_JARVIS_FAVICON_PATH.read_bytes(), media_type="image/x-icon")
 
 
 class NoCacheStatic(StaticFiles):

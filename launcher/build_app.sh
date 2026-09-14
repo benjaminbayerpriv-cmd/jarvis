@@ -12,6 +12,7 @@ fi
 
 .venv/bin/python3 -m pip install --quiet pyinstaller
 .venv/bin/python3 -m PyInstaller --onedir --windowed --name Jarvis \
+  --icon "$(pwd)/launcher/icons/jarvis.icns" \
   --distpath launcher/dist --workpath launcher/build --specpath launcher \
   launcher/jarvis_launcher.py
 
