@@ -690,6 +690,38 @@
           <div class="js-pd-recent-label" style="font-size:12px;color:${C.textDim};margin:28px 0 4px;max-width:640px;">Zuletzt verwendet</div>
           <div class="js-pd-recent" style="display:flex;flex-direction:column;max-width:640px;"></div>
         </div>
+        <div class="js-settings-view" style="position:absolute;inset:0;display:none;flex-direction:column;min-width:0;min-height:0;overflow-y:auto;padding:40px 48px;">
+          <div style="display:flex;align-items:center;justify-content:space-between;max-width:640px;margin-bottom:28px;">
+            <h1 style="font-family:${C.serif};font-size:28px;font-weight:600;color:${C.text};margin:0;">Einstellungen</h1>
+            <button class="js-settings-close" title="Schließen" style="width:32px;height:32px;border-radius:9px;background:none;border:none;color:${C.textSoft};cursor:pointer;font-size:18px;line-height:1;">×</button>
+          </div>
+          <div style="max-width:640px;display:flex;flex-direction:column;">
+            <div style="padding:12px 0;">
+              <div style="padding:6px 0;font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:${C.textDim};">Modell</div>
+              <div class="js-settings-models" style="border:1px solid ${C.border};border-radius:12px;overflow:hidden;"></div>
+            </div>
+            <div style="padding:12px 0;border-top:1px solid ${C.border};">
+              <div style="padding:6px 0;font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:${C.textDim};">Verbindung</div>
+              <div style="padding:4px 0;display:flex;flex-direction:column;gap:8px;">
+                <span style="font-size:12px;color:${C.textSoft};">LM Studio Endpoint</span>
+                <input class="js-lmstudio-url-input" type="text" placeholder="http://127.0.0.1:1234/v1" spellcheck="false" style="width:100%;box-sizing:border-box;padding:9px 10px;background:${C.bg};border:1px solid ${C.border};border-radius:8px;color:${C.text};font-size:13px;outline:none;font-family:${C.font};" />
+                <div style="display:flex;align-items:center;gap:10px;">
+                  <button class="js-lmstudio-url-save" style="align-self:flex-start;padding:7px 12px;border:none;border-radius:8px;background:${C.accent};color:#fff;font-size:12px;cursor:pointer;font-family:${C.font};">Speichern</button>
+                  <span class="js-lmstudio-url-status" style="font-size:11.5px;color:${C.textDim};"></span>
+                </div>
+              </div>
+            </div>
+            <div style="padding:12px 0;border-top:1px solid ${C.border};">
+              <div style="padding:6px 0;font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:${C.textDim};">Code</div>
+              <div style="padding:4px 0;display:flex;flex-direction:column;gap:8px;">
+                <span style="font-size:12px;color:${C.textSoft};">Arbeitsverzeichnis für JARVIS Code</span>
+                <input class="js-code-dir-input" type="text" placeholder="~/Developer" spellcheck="false" style="width:100%;box-sizing:border-box;padding:9px 10px;background:${C.bg};border:1px solid ${C.border};border-radius:8px;color:${C.text};font-size:13px;outline:none;font-family:${C.font};" />
+                <button class="js-code-dir-save" style="align-self:flex-start;padding:7px 12px;border:none;border-radius:8px;background:${C.accent};color:#fff;font-size:12px;cursor:pointer;font-family:${C.font};">Speichern</button>
+              </div>
+            </div>
+            ${SETTINGS_SECTIONS.map((s) => settingsSectionHtml(s, false)).join('')}
+          </div>
+        </div>
       </div>
       <div class="js-composer" style="position:absolute;left:308px;right:0;bottom:0;padding:0 24px 22px;background:linear-gradient(transparent,${C.bg} 55%);">
         <div style="max-width:672px;margin:0 auto;position:relative;">
@@ -750,49 +782,9 @@
     spcReplyEl = $('.js-spc-reply', speechCaptionEl);
     document.body.appendChild(speechCaptionEl);
 
-    // Settings-Sheet (kein Fake-Profil — echte Einstellungen hier). Jede
-    // .env-Variable aus backend/config.py, die nicht schon ihr eigenes UI
-    // hat (LM-Studio-URL/Modell, Code-Verzeichnis), landet datengetrieben
-    // über SETTINGS_SECTIONS (Modul-Ebene, s.u.) — HTML hier, Vorbelegung
-    // in openSettings(), Speichern weiter unten.
-    settingsSheetEl = document.createElement('div');
-    settingsSheetEl.id = 'jsSettingsSheet';
-    settingsSheetEl.style.cssText = `position:fixed;inset:0;z-index:60;display:none;align-items:flex-start;justify-content:flex-start;padding:64px 0 24px 320px;background:rgba(0,0,0,.35);`;
-    settingsSheetEl.innerHTML = `
-      <div style="width:340px;max-width:90vw;max-height:calc(100vh - 96px);display:flex;flex-direction:column;background:${C.bgSurface3};border:1px solid ${C.border};border-radius:16px;box-shadow:0 20px 60px rgba(0,0,0,.5);overflow:hidden;">
-        <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:1px solid ${C.border};flex:0 0 auto;">
-          <span style="font-size:15px;font-weight:600;color:${C.text};">Einstellungen</span>
-          <button class="js-settings-close" title="Close" style="width:28px;height:28px;border-radius:8px;background:none;border:none;color:${C.textSoft};cursor:pointer;font-size:16px;line-height:1;">×</button>
-        </div>
-        <div style="flex:1 1 auto;overflow-y:auto;">
-        <div style="padding:12px 6px;">
-          <div style="padding:6px 10px;font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:${C.textDim};">Modell</div>
-          <div class="js-settings-models"></div>
-        </div>
-        <div style="padding:12px 6px;border-top:1px solid ${C.border};">
-          <div style="padding:6px 10px;font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:${C.textDim};">Verbindung</div>
-          <div style="padding:4px 10px;display:flex;flex-direction:column;gap:8px;">
-            <span style="font-size:12px;color:${C.textSoft};">LM Studio Endpoint</span>
-            <input class="js-lmstudio-url-input" type="text" placeholder="http://127.0.0.1:1234/v1" spellcheck="false" style="width:100%;box-sizing:border-box;padding:9px 10px;background:${C.bg};border:1px solid ${C.border};border-radius:8px;color:${C.text};font-size:13px;outline:none;font-family:${C.font};" />
-            <div style="display:flex;align-items:center;gap:10px;">
-              <button class="js-lmstudio-url-save" style="align-self:flex-start;padding:7px 12px;border:none;border-radius:8px;background:${C.accent};color:#fff;font-size:12px;cursor:pointer;font-family:${C.font};">Speichern</button>
-              <span class="js-lmstudio-url-status" style="font-size:11.5px;color:${C.textDim};"></span>
-            </div>
-          </div>
-        </div>
-        <div style="padding:12px 6px;border-top:1px solid ${C.border};">
-          <div style="padding:6px 10px;font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:${C.textDim};">Code</div>
-          <div style="padding:4px 10px;display:flex;flex-direction:column;gap:8px;">
-            <span style="font-size:12px;color:${C.textSoft};">Arbeitsverzeichnis für JARVIS Code</span>
-            <input class="js-code-dir-input" type="text" placeholder="~/Developer" spellcheck="false" style="width:100%;box-sizing:border-box;padding:9px 10px;background:${C.bg};border:1px solid ${C.border};border-radius:8px;color:${C.text};font-size:13px;outline:none;font-family:${C.font};" />
-            <button class="js-code-dir-save" style="align-self:flex-start;padding:7px 12px;border:none;border-radius:8px;background:${C.accent};color:#fff;font-size:12px;cursor:pointer;font-family:${C.font};">Speichern</button>
-          </div>
-        </div>
-        ${SETTINGS_SECTIONS.map((s, i) => settingsSectionHtml(s, i === SETTINGS_SECTIONS.length - 1)).join('')}
-        </div>
-      </div>
-    `;
-    document.body.appendChild(settingsSheetEl);
+    // Settings sind jetzt eine Vollseiten-Ansicht (.js-settings-view, s.o. im
+    // uiEl-Markup neben .js-projects-view) statt eines Popups — settingsSheetEl
+    // zeigt hier nur noch per Query darauf (s.u. bei den anderen $(...)-Zuweisungen).
 
     // Neues-Projekt-Dialog (zentriert, wie ein einfacher Modal-Dialog).
     newProjectSheetEl = document.createElement('div');
@@ -866,6 +858,7 @@
     uploadBtn = $('.js-upload', uiEl);
     attachPreviewEl = $('.js-attach-preview', uiEl);
     projectsViewEl = $('.js-projects-view', uiEl);
+    settingsSheetEl = $('.js-settings-view', uiEl);
     projectsGridEl = $('.js-projects-grid', uiEl);
     projectsPinnedGridEl = $('.js-projects-pinned-grid', uiEl);
     projectsSearchRowEl = $('.js-projects-search-row', uiEl);
@@ -1015,6 +1008,14 @@
          Code-Tab heraus öffnet (sonst läge das Terminal weiterhin sichtbar
          unter der Projekte-Ansicht). */
       #jsApp.js-projects-active .js-codeview, #jsApp.js-project-detail-active .js-codeview { display:none !important; }
+      /* Einstellungen ist wie Projekte über Chat UND Code hinweg erreichbar
+         (Sidebar-Button bleibt in beiden Modi sichtbar) — aus demselben
+         Grund wie oben muss diese Regel nach den .js-code-active-Regeln
+         stehen. */
+      #jsApp.js-settings-active .js-thread, #jsApp.js-settings-active .js-welcome, #jsApp.js-settings-active .js-composer { display:none !important; }
+      #jsApp.js-settings-active .js-settings-view { display:flex !important; }
+      #jsApp.js-settings-active .js-codeview { display:none !important; }
+      #jsApp.js-settings-active .js-settings-row { background:${C.bgHover}; color:${C.text}; }
       .js-project-card:hover { border-color:${C.textDim}; }
       .js-project-card { position:relative; cursor:pointer; }
       .js-project-menu-btn { opacity:0; transition:opacity .1s; }
@@ -1035,13 +1036,14 @@
   function navSnapshot() {
     if (uiEl && uiEl.classList.contains('js-project-detail-active')) return { v: 'projectDetail', id: viewingProjectId };
     if (uiEl && uiEl.classList.contains('js-projects-active')) return { v: 'projects' };
+    if (uiEl && uiEl.classList.contains('js-settings-active')) return { v: 'settings' };
     return { v: 'chat', mode: activeMode, id: currentConversationId, projectId: currentProjectId };
   }
   function navEqual(a, b) {
     if (!a || !b || a.v !== b.v) return false;
     if (a.v === 'chat') return a.mode === b.mode && a.id === b.id;
     if (a.v === 'projectDetail') return a.id === b.id;
-    return true;  // 'projects' — nur eine Ausprägung
+    return true;  // 'projects'/'settings' — je nur eine Ausprägung
   }
   function updateNavButtons() {
     if (!uiEl) return;
@@ -1065,6 +1067,7 @@
   }
   function navApply(snap) {
     if (snap.v === 'projects') { openProjectsView(); return; }
+    if (snap.v === 'settings') { openSettings(); return; }
     if (snap.v === 'projectDetail') {
       const p = projectsList.find((pp) => pp.id === snap.id);
       if (p) openProjectDetail(p); else openProjectsView();
@@ -1104,6 +1107,7 @@
     if (mode !== 'chat' && mode !== 'code') return;
     closeProjectsView();
     closeProjectDetail();
+    closeSettings();
     const isCode = mode === 'code';
     const pills = uiEl ? uiEl.querySelectorAll('.js-pill') : [];
     pills.forEach((p) => p.classList.toggle('active', p.dataset.mode === mode));
@@ -1369,6 +1373,7 @@
 
   async function openConversation(id, projectId) {
     closeProjectsView();
+    closeSettings();
     currentProjectId = projectId || null;
     if (id === currentConversationId) { navRecord(); return; }
     currentConversationId = id;
@@ -1404,6 +1409,7 @@
   }
   function openProjectsView() {
     closeProjectDetail();
+    closeSettings();
     if (uiEl) uiEl.classList.add('js-projects-active');
     loadProjects();
     navRecord();
@@ -1415,6 +1421,7 @@
   }
   function openProjectDetail(project) {
     closeProjectsView();
+    closeSettings();
     viewingProjectId = project.id;
     if (uiEl) uiEl.classList.add('js-project-detail-active');
     if (pdNameEl) pdNameEl.textContent = project.name;
@@ -1772,6 +1779,7 @@
     $('.js-new', uiEl).addEventListener('click', () => {
       closeProjectsView();
       closeProjectDetail();
+      closeSettings();
       if (activeMode === 'code') {
         // Im Code-Tab hat "Neu" nichts mit JARVIS-Chat-Konversationen zu tun
         // (siehe loadCodeSessions) - startet stattdessen eine frische opencode-Session.
@@ -1996,7 +2004,6 @@
     if (settingsBtn) settingsBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); openSettings(); });
     const closeSettingsBtn = $('.js-settings-close', settingsSheetEl);
     if (closeSettingsBtn) closeSettingsBtn.addEventListener('click', closeSettings);
-    if (settingsSheetEl) settingsSheetEl.addEventListener('click', (e) => { if (e.target === settingsSheetEl) closeSettings(); });
 
     // Code-Verzeichnis speichern
     const codeDirInput = $('.js-code-dir-input', settingsSheetEl);
@@ -3007,7 +3014,10 @@
   /* Echte Einstellungen statt Fake-Profil: ein Sheet mit der Modell-Auswahl. */
   async function openSettings() {
     if (!settingsSheetEl) return;
-    settingsSheetEl.style.display = 'flex';
+    closeProjectsView();
+    closeProjectDetail();
+    if (uiEl) uiEl.classList.add('js-settings-active');
+    navRecord();
     updateNavActive();
     // Code-Verzeichnis aus /code/status vorbelegen.
     try {
@@ -3076,7 +3086,7 @@
     }
   }
   function closeSettings() {
-    if (settingsSheetEl) settingsSheetEl.style.display = 'none';
+    if (uiEl) uiEl.classList.remove('js-settings-active');
     updateNavActive();
   }
 
