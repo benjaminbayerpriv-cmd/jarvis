@@ -145,6 +145,16 @@ class SelectModelRequest(BaseModel):
 
 class UpdateSettingsRequest(BaseModel):
     lm_studio_base_url: str | None = None
+    elevenlabs_api_key: str | None = None
+    elevenlabs_voice_id: str | None = None
+    supertonic_voice: str | None = None
+    supertonic_lang: str | None = None
+    whisper_model: str | None = None
+    embedding_model: str | None = None
+    deepseek_api_key: str | None = None
+    deepseek_base_url: str | None = None
+    deepseek_model: str | None = None
+    tavily_api_key: str | None = None
 
 
 class CreateProjectRequest(BaseModel):
@@ -250,19 +260,16 @@ def serve_index():
     return HTMLResponse(html, headers=_NO_CACHE)
 
 
-_JARVIS_FAVICON = b"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
-<circle cx="12" cy="12" r="11" fill="#d97757"/>
-<circle cx="12" cy="12" r="4.5" fill="#141311"/>
-</svg>"""
+_JARVIS_FAVICON_PATH = FRONTEND_DIR / "assets" / "img" / "favicon.ico"
 
 
 @app.get("/favicon.ico")
 def favicon():
-    """Own JARVIS icon (a plain terracotta orb) at the browser's default probe
+    """Own JARVIS icon (the terracotta logo) at the browser's default probe
     path, so the frozen claude.ai snapshot never leaks Anthropic's own logo
     into the tab bar (the SSR markup links its shortcut icon to /favicon.ico,
-    and Chrome probes it regardless of the rel="icon" SVG it also links)."""
-    return Response(_JARVIS_FAVICON, media_type="image/svg+xml")
+    and Chrome probes it regardless of the rel="icon" link it also carries)."""
+    return Response(_JARVIS_FAVICON_PATH.read_bytes(), media_type="image/x-icon")
 
 
 class NoCacheStatic(StaticFiles):
@@ -563,14 +570,22 @@ def delete_project(project_id: str):
 
 @app.get("/settings")
 def get_settings():
-    return {"lm_studio_base_url": config.LM_STUDIO_BASE_URL}
+    return {"lm_studio_base_url": config.LM_STUDIO_BASE_URL, **config.get_simple_settings()}
 
 
 @app.post("/settings")
 def update_settings(req: UpdateSettingsRequest):
     if req.lm_studio_base_url is not None and req.lm_studio_base_url.strip():
         config.set_lm_studio_base_url(req.lm_studio_base_url.strip())
-    return {"lm_studio_base_url": config.LM_STUDIO_BASE_URL}
+    for name in config.get_simple_settings():
+        value = getattr(req, name)
+        if value is not None:
+            config.set_simple_setting(name, value.strip())
+    if req.whisper_model is not None and req.whisper_model.strip():
+        stt.reset_model()
+    if req.supertonic_voice is not None and req.supertonic_voice.strip():
+        tts.reset_supertonic_voice()
+    return {"lm_studio_base_url": config.LM_STUDIO_BASE_URL, **config.get_simple_settings()}
 
 
 @app.get("/models")

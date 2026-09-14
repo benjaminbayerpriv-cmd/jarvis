@@ -102,6 +102,15 @@ def _build_model(device: str) -> WhisperModel:
     return WhisperModel(config.WHISPER_MODEL, device=device, compute_type=compute_type)
 
 
+def reset_model() -> None:
+    """Verwirft das geladene Whisper-Modell, damit _get_model() beim
+    nächsten Aufruf config.WHISPER_MODEL frisch einliest und neu lädt —
+    für die Settings-UI, wenn WHISPER_MODEL zur Laufzeit geändert wird."""
+    global _model
+    with _lock:
+        _model = None
+
+
 def _get_model() -> WhisperModel:
     global _model
     if _model is None:

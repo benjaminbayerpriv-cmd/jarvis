@@ -14,6 +14,7 @@ if not exist ".venv\Scripts\python.exe" (
 
 .venv\Scripts\python.exe -m pip install --quiet pyinstaller pywebview
 .venv\Scripts\python.exe -m PyInstaller --onefile --windowed --name Jarvis ^
+  --icon "%CD%\launcher\icons\jarvis.ico" ^
   --distpath launcher\dist --workpath launcher\build --specpath launcher ^
   launcher\jarvis_launcher.py
 
