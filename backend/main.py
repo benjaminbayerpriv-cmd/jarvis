@@ -398,10 +398,18 @@ def chat_stream(req: ChatRequest):
                     # verschlucken, nur den Ton).
                     yield json.dumps({"type": "sentence", "text": text, "audio": ""}) + "\n"
                     try:
-                        audio = tts.synthesize(text)
-                        audio_b64 = base64.b64encode(audio).decode("ascii")
-                        _, mime = tts.ENGINE_MEDIA.get(tts.VoiceInfo.engine, ("mp3", "audio/mpeg"))
-                        yield json.dumps({"type": "audio", "audio": audio_b64, "mime": mime}) + "\n"
+                        # Ein langer Satz wird an seiner ersten Kommapause in
+                        # zwei Sprech-Häppchen geteilt (siehe tts.split_for_
+                        # speech) — jedes geht als eigenes "audio"-Event raus,
+                        # die Frontend-Queue spielt sie einfach nacheinander
+                        # ab. So beginnt die Wiedergabe schon beim ersten
+                        # Teilsatz, während der Rest noch synthetisiert wird,
+                        # statt auf den ganzen Satz warten zu müssen.
+                        for chunk in tts.split_for_speech(text):
+                            audio = tts.synthesize(chunk)
+                            audio_b64 = base64.b64encode(audio).decode("ascii")
+                            _, mime = tts.ENGINE_MEDIA.get(tts.VoiceInfo.engine, ("mp3", "audio/mpeg"))
+                            yield json.dumps({"type": "audio", "audio": audio_b64, "mime": mime}) + "\n"
                     except Exception as exc:  # noqa: BLE001 - nie nur-wortlos
                         print(f"[tts] Sprachausgabe fehlgeschlagen: {exc}")
                 elif event["type"] == "partial":

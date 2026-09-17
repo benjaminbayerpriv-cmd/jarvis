@@ -258,6 +258,61 @@ def _spell_digit_groups(match: re.Match) -> str:
 
 
 
+# Jedes Komma/Semikolon/Doppelpunkt gefolgt von Leerraum ist ein möglicher
+# Schnittpunkt — echtes "Audio läuft schon, während der Rest noch generiert
+# wird" gibt es mit Supertonic nicht (kein Callback/Yield während der
+# internen Diffusions-Schritte), aber ein langer Satz in mehrere kleine
+# Häppchen zerlegt kommt dem so nah wie möglich: das erste Häppchen ("Zuerst
+# mache ich das,") synthetisiert praktisch sofort und spielt schon, während
+# die nächsten im Hintergrund nachrücken. Bewusst NICHT in llm_client.
+# _pop_complete_sentences gemacht: die dortige Satzgrenzen-Erkennung speist
+# auch die Tool-Leak- und Behauptungs-Prüfung (_call_prefix_verdict/
+# _is_pending_claim_risk), die auf vollständigen Sätzen arbeiten muss —
+# dieser Split hier passiert danach, rein für die Sprachausgabe eines
+# bereits geprüften Satzes.
+_SPEECH_CHUNK_SPLIT_RE = re.compile(r"(?<=[,;:])\s+")
+# Unter dieser Länge (Zeichen) lohnt sich ein eigener Chunk nicht: der feste
+# Overhead eines zusätzlichen Synthese-Aufrufs (Modell-Lock, WAV-Header,
+# Serialisierung) kostet mehr Zeit, als das frühere Losreden einspart, und
+# ein Ein-Wort-Häppchen ("Ja," / "gut.") klingt abgehackt statt schneller —
+# zu kurze Nachbar-Teile werden deshalb zusammengefasst statt einzeln
+# synthetisiert.
+_MIN_SPEECH_CHUNK_CHARS = 15
+
+
+def split_for_speech(text: str) -> list[str]:
+    """Split one already-vetted sentence into speakable chunks at its clause
+    boundaries (commas/semicolons/colons), so playback of a long sentence
+    can start on its first clause while the rest is still being
+    synthesized, and keep advancing chunk by chunk instead of one big wait.
+    A short sentence, or one with no clause break, comes back as a single
+    chunk — there is no meaningful synthesis time to hide behind a split
+    there anyway. Adjacent clauses under _MIN_SPEECH_CHUNK_CHARS are merged
+    together so no chunk ends up too short to sound natural on its own."""
+    parts: list[str] = []
+    start = 0
+    for m in _SPEECH_CHUNK_SPLIT_RE.finditer(text):
+        parts.append(text[start : m.start()])
+        start = m.end()
+    parts.append(text[start:])
+    if len(parts) == 1:
+        return [text]
+
+    chunks: list[str] = []
+    buf = ""
+    for part in parts:
+        buf = f"{buf} {part}".strip() if buf else part
+        if len(buf) >= _MIN_SPEECH_CHUNK_CHARS:
+            chunks.append(buf)
+            buf = ""
+    if buf:
+        if chunks:
+            chunks[-1] = f"{chunks[-1]} {buf}"
+        else:
+            chunks.append(buf)
+    return chunks
+
+
 def _expand_numbers_for_speech(text: str) -> str:
     # Every step below replaces digits with words, so none of them can be
     # re-matched (and re-mangled) by a later step in the pipeline — no
