@@ -32,6 +32,7 @@ FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
 
 active_sockets: list[WebSocket] = []
 filler_urls: list[str] = []
+thinking_filler_url: str | None = None
 
 
 # Emoji-Range, die aus KI-Antworten entfernt werden. Der Nutzer will keine
@@ -93,7 +94,7 @@ async def _pump_panel():
 async def on_startup():
     """Warm the filler clips (ElevenLabs is only hit for ones not already
     cached on disk) and start the panel pump."""
-    global filler_urls
+    global filler_urls, thinking_filler_url
     memory.initialize()
     healthy, detail = llm_client.model_health()
     print(f"[model] {detail}")
@@ -101,8 +102,9 @@ async def on_startup():
         panel.push("notify", text=detail)
 
     def _generate():
-        global filler_urls
+        global filler_urls, thinking_filler_url
         filler_urls = fillers.ensure_fillers()
+        thinking_filler_url = fillers.ensure_thinking_filler()
 
     loop = asyncio.get_event_loop()
     loop.run_in_executor(None, _generate)
@@ -664,7 +666,7 @@ def browser_result(result: BrowserResult):
 
 @app.get("/fillers")
 def get_fillers():
-    return {"fillers": filler_urls}
+    return {"fillers": filler_urls, "thinking_filler": thinking_filler_url}
 
 
 @app.post("/trigger")

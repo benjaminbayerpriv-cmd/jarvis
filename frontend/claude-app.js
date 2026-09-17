@@ -308,6 +308,13 @@
   let speaking = false;
   let audioQueue = [];
   let audioDraining = false;
+  // Gesetzt, solange /chat/stream noch offen ist (siehe sendMessage) — sagt
+  // drainAudioQueue(), ob eine leere Warteschlange bedeutet "Antwort fertig"
+  // oder "TTS ist schneller fertig geworden als das LLM nachliefert".
+  let streamStillGenerating = false;
+  // Einmal geladene URL des kurzen "Ähm"-Häppchens (siehe backend/fillers.py
+  // ensure_thinking_filler), das genau diese Lücke überbrückt.
+  let thinkingFillerUrl = null;
   // Ausgabe-Pegel-Messung (gesprochene Stimme) für die Orb-Animation
   let ttsAudioCtx = null, outputAnalyser = null, outBuf = null, speakingLevel = 0;
   let currentAudioEl = null, currentAudioSrc = null;
@@ -380,10 +387,36 @@
     audioQueue.push(blob);
     if (!audioDraining) drainAudioQueue();
   }
+  // "Echtzeit"-Lückenfüller: TTS synthetisiert satz-/häppchenweise, sobald
+  // ein Satz vom LLM fertig ist (siehe backend/main.py chat/stream) — bei
+  // einem schnellen Modell ist die Warteschlange aber schneller leer, als
+  // das LLM den nächsten Satz liefert. Ohne Gegenmaßnahme entsteht dort
+  // hörbare Stille mitten in der Antwort, die wie ein Abbruch/Hänger klingt.
+  // Ein kurzes "Ähm" überbrückt das genau wie bei einem Menschen, der noch
+  // nachdenkt, statt stumm zu bleiben.
+  function playFiller() {
+    return new Promise((resolve) => {
+      if (!thinkingFillerUrl) { resolve(); return; }
+      const audio = new Audio(thinkingFillerUrl);
+      const finish = () => resolve();
+      audio.onended = finish;
+      audio.onerror = finish;
+      audio.play().catch(finish);
+    });
+  }
+  function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
   async function drainAudioQueue() {
     audioDraining = true;
     speaking = false;
-    while (audioQueue.length) {
+    while (audioQueue.length || streamStillGenerating) {
+      if (!audioQueue.length) {
+        // Nichts zu sprechen da, aber die Antwort ist noch nicht fertig —
+        // kurz "Ähm" sagen (oder, ohne geladenen Filler, kurz warten) und
+        // dann erneut nachsehen, ob inzwischen echtes Audio nachgekommen ist.
+        await playFiller();
+        if (!audioQueue.length && streamStillGenerating) await sleep(250);
+        continue;
+      }
       const blob = audioQueue.shift();
       try { await playClip(blob); } catch (e) { /* nie den Faden abreißen */ }
     }
@@ -401,6 +434,7 @@
     turnAborted = true;
     try { if (abortController) abortController.abort(); } catch (e) {}
     try { if (activeReader) activeReader.cancel(); } catch (e) {}
+    streamStillGenerating = false;
     audioQueue.length = 0;
     audioDraining = false;
     if (currentAudioSrc) { try { currentAudioSrc.disconnect(); } catch (e) {} currentAudioSrc = null; }
@@ -2204,6 +2238,7 @@
     abortController = new AbortController();
     activeReader = null;
     currentTurnId = String(++turnCounter);
+    streamStillGenerating = true;
     try {
       const resp = await fetch('/chat/stream', {
         method: 'POST',
@@ -2252,6 +2287,7 @@
     }
     activeReader = null;
     abortController = null;
+    streamStillGenerating = false;
     if (turnAborted) {
       // abgebrochen: keine Historie, Status zurück in den Bereit-Zustand
       turnAborted = false;
@@ -3769,6 +3805,7 @@
       new ResizeObserver(layoutSpeechBar).observe(chatRootEl);
     }
     fetch('/models').then((r) => r.json()).then((j) => { applyModelCaps(j); if (j.current) setModelLabel(j.current); }).catch(() => {});
+    fetch('/fillers').then((r) => r.json()).then((j) => { thinkingFillerUrl = j.thinking_filler || null; }).catch(() => {});
     openPanelSocket();
   }
 
