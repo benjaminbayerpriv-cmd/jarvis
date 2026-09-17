@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8" />
+<title>JARVIS – TTS-Chunking-Test</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin:0; padding:24px; background:#151515; color:#f0efe8; font-family:system-ui,sans-serif; }
+  h1 { font-size:20px; margin:0 0 4px; }
+  p.sub { color:#8a8680; font-size:13px; margin:0 0 20px; }
+  textarea { width:100%; box-sizing:border-box; min-height:70px; padding:10px 12px; background:#1f1f1e;
+    border:1px solid rgba(240,236,225,.14); border-radius:8px; color:#f0efe8; font-size:14px; font-family:inherit;
+    resize:vertical; outline:none; }
+  .row { display:flex; gap:10px; margin-top:10px; align-items:center; }
+  button { padding:9px 16px; border:none; border-radius:8px; background:#d97757; color:#fff; font-size:13px;
+    font-weight:600; cursor:pointer; }
+  button:disabled { opacity:.5; cursor:default; }
+  button.secondary { background:none; border:1px solid rgba(240,236,225,.14); color:#c3c0b4; }
+  .status { font-size:12.5px; color:#8a8680; }
+  #log { margin-top:22px; display:flex; flex-direction:column; gap:6px; }
+  .entry { padding:8px 12px; border-radius:8px; background:#1f1f1e; border:1px solid rgba(240,236,225,.1);
+    font-size:13px; display:flex; gap:10px; align-items:baseline; }
+  .entry .t { color:#d97757; font-variant-numeric:tabular-nums; font-size:11.5px; min-width:56px; flex:0 0 auto; }
+  .entry .kind { font-size:10.5px; text-transform:uppercase; letter-spacing:.06em; color:#8a8680; min-width:60px; flex:0 0 auto; }
+  .entry.sentence { border-left:3px solid #6b8f6b; }
+  .entry.audio { border-left:3px solid #d97757; }
+  .entry.done { border-left:3px solid #8a8680; }
+  .entry .txt { word-break:break-word; }
+  .entry .playing { animation: pulse 1s ease-in-out infinite; }
+  @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:.4; } }
+</style>
+</head>
+<body>
+  <h1>TTS-Chunking-Test</h1>
+  <p class="sub">
+    Testet die satzweise Häppchen-Aufteilung der Sprachausgabe (siehe <code>tts.split_for_speech</code>) direkt
+    gegen den laufenden JARVIS-Server. Jede Zeile unten zeigt, wann ein Text-/Audio-Chunk beim Browser ankommt —
+    <strong>Audio</strong>-Zeilen spielen automatisch der Reihe nach ab, sobald sie eintreffen, damit man das
+    frühere Losreden bei langen Sätzen direkt hört.
+  </p>
+
+  <textarea id="msg">Erklär mir in einem einzigen langen Satz mit mehreren Kommas, wie ein Flugzeug fliegt.</textarea>
+  <div class="row">
+    <button id="send">Senden</button>
+    <button id="clear" class="secondary">Log leeren</button>
+    <span class="status" id="status"></span>
+  </div>
+
+  <div id="log"></div>
+
+<script>
+const API_BASE = location.origin.startsWith('file:') ? 'http://127.0.0.1:8000' : '';
+
+const logEl = document.getElementById('log');
+const statusEl = document.getElementById('status');
+const sendBtn = document.getElementById('send');
+const msgEl = document.getElementById('msg');
+
+let audioQueue = [];
+let draining = false;
+
+function addEntry(kind, timeMs, text) {
+  const el = document.createElement('div');
+  el.className = 'entry ' + kind;
+  el.innerHTML = `<span class="t">+${timeMs}ms</span><span class="kind">${kind}</span><span class="txt"></span>`;
+  el.querySelector('.txt').textContent = text;
+  logEl.appendChild(el);
+  logEl.scrollTop = logEl.scrollHeight;
+  return el;
+}
+
+function enqueueAudio(blob, el) {
+  audioQueue.push({ blob, el });
+  if (!draining) drainQueue();
+}
+
+async function drainQueue() {
+  draining = true;
+  while (audioQueue.length) {
+    const { blob, el } = audioQueue.shift();
+    await playClip(blob, el);
+  }
+  draining = false;
+}
+
+function playClip(blob, el) {
+  return new Promise((resolve) => {
+    const audio = new Audio(URL.createObjectURL(blob));
+    el.classList.add('playing');
+    const finish = () => { el.classList.remove('playing'); resolve(); };
+    audio.onended = finish;
+    audio.onerror = finish;
+    audio.play().catch(finish);
+  });
+}
+
+function base64ToBlob(base64, mime) {
+  const bytes = atob(base64);
+  const arr = new Uint8Array(bytes.length);
+  for (let i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i);
+  return new Blob([arr], { type: mime });
+}
+
+async function run() {
+  const message = msgEl.value.trim();
+  if (!message) return;
+  sendBtn.disabled = true;
+  statusEl.textContent = 'sende…';
+  audioQueue = [];
+  draining = false;
+  logEl.innerHTML = '';
+  const start = performance.now();
+  let audioChunkCount = 0;
+
+  try {
+    const resp = await fetch(`${API_BASE}/chat/stream`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message, history: [], mode: 'chat' }),
+    });
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      let idx;
+      while ((idx = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, idx).trim();
+        buf = buf.slice(idx + 1);
+        if (!line) continue;
+        const evt = JSON.parse(line);
+        const t = Math.round(performance.now() - start);
+        if (evt.type === 'sentence' && evt.text) {
+          addEntry('sentence', t, evt.text);
+          statusEl.textContent = 'Text kommt…';
+        } else if (evt.type === 'audio' && evt.audio) {
+          audioChunkCount++;
+          const el = addEntry('audio', t, `Häppchen #${audioChunkCount} (${Math.round(evt.audio.length / 1024)} KB base64)`);
+          enqueueAudio(base64ToBlob(evt.audio, evt.mime || 'audio/wav'), el);
+        } else if (evt.type === 'done') {
+          addEntry('done', t, `fertig — ${audioChunkCount} Audio-Häppchen insgesamt`);
+          statusEl.textContent = 'fertig';
+        }
+      }
+    }
+  } catch (err) {
+    addEntry('done', Math.round(performance.now() - start), 'Fehler: ' + err.message + ' — läuft der JARVIS-Server auf :8000?');
+    statusEl.textContent = 'Fehler';
+  } finally {
+    sendBtn.disabled = false;
+  }
+}
+
+document.getElementById('send').addEventListener('click', run);
+document.getElementById('clear').addEventListener('click', () => { logEl.innerHTML = ''; });
+msgEl.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) run(); });
+</script>
+</body>
+</html>
