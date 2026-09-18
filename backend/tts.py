@@ -26,6 +26,7 @@ import numpy as np
 import requests
 from num2words import num2words
 from supertonic import TTS
+from supertonic.config import DEFAULT_SPEED, DEFAULT_TOTAL_STEPS
 
 from . import config, platform_utils
 
@@ -258,6 +259,61 @@ def _spell_digit_groups(match: re.Match) -> str:
 
 
 
+# Jedes Komma/Semikolon/Doppelpunkt gefolgt von Leerraum ist ein möglicher
+# Schnittpunkt — echtes "Audio läuft schon, während der Rest noch generiert
+# wird" gibt es mit Supertonic nicht (kein Callback/Yield während der
+# internen Diffusions-Schritte), aber ein langer Satz in mehrere kleine
+# Häppchen zerlegt kommt dem so nah wie möglich: das erste Häppchen ("Zuerst
+# mache ich das,") synthetisiert praktisch sofort und spielt schon, während
+# die nächsten im Hintergrund nachrücken. Bewusst NICHT in llm_client.
+# _pop_complete_sentences gemacht: die dortige Satzgrenzen-Erkennung speist
+# auch die Tool-Leak- und Behauptungs-Prüfung (_call_prefix_verdict/
+# _is_pending_claim_risk), die auf vollständigen Sätzen arbeiten muss —
+# dieser Split hier passiert danach, rein für die Sprachausgabe eines
+# bereits geprüften Satzes.
+_SPEECH_CHUNK_SPLIT_RE = re.compile(r"(?<=[,;:])\s+")
+# Unter dieser Länge (Zeichen) lohnt sich ein eigener Chunk nicht: der feste
+# Overhead eines zusätzlichen Synthese-Aufrufs (Modell-Lock, WAV-Header,
+# Serialisierung) kostet mehr Zeit, als das frühere Losreden einspart, und
+# ein Ein-Wort-Häppchen ("Ja," / "gut.") klingt abgehackt statt schneller —
+# zu kurze Nachbar-Teile werden deshalb zusammengefasst statt einzeln
+# synthetisiert.
+_MIN_SPEECH_CHUNK_CHARS = 15
+
+
+def split_for_speech(text: str) -> list[str]:
+    """Split one already-vetted sentence into speakable chunks at its clause
+    boundaries (commas/semicolons/colons), so playback of a long sentence
+    can start on its first clause while the rest is still being
+    synthesized, and keep advancing chunk by chunk instead of one big wait.
+    A short sentence, or one with no clause break, comes back as a single
+    chunk — there is no meaningful synthesis time to hide behind a split
+    there anyway. Adjacent clauses under _MIN_SPEECH_CHUNK_CHARS are merged
+    together so no chunk ends up too short to sound natural on its own."""
+    parts: list[str] = []
+    start = 0
+    for m in _SPEECH_CHUNK_SPLIT_RE.finditer(text):
+        parts.append(text[start : m.start()])
+        start = m.end()
+    parts.append(text[start:])
+    if len(parts) == 1:
+        return [text]
+
+    chunks: list[str] = []
+    buf = ""
+    for part in parts:
+        buf = f"{buf} {part}".strip() if buf else part
+        if len(buf) >= _MIN_SPEECH_CHUNK_CHARS:
+            chunks.append(buf)
+            buf = ""
+    if buf:
+        if chunks:
+            chunks[-1] = f"{chunks[-1]} {buf}"
+        else:
+            chunks.append(buf)
+    return chunks
+
+
 def _expand_numbers_for_speech(text: str) -> str:
     # Every step below replaces digits with words, so none of them can be
     # re-matched (and re-mangled) by a later step in the pipeline — no
@@ -360,6 +416,56 @@ def _sanitize_for_supertonic(text: str, tts: TTS) -> str:
         for ch in unsupported:
             text = text.replace(ch, "")
     return text
+
+
+def _pcm_to_wav_bytes(wav, sample_rate: int) -> bytes:
+    samples = np.clip(np.asarray(wav).squeeze(), -1.0, 1.0)
+    pcm16 = (samples * 32767).astype(np.int16)
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(sample_rate)
+        wf.writeframes(pcm16.tobytes())
+    return buf.getvalue()
+
+
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+
+
+def _stream_chunks(text: str, mode: str) -> list[str]:
+    """mode "sentence": ein Modellaufruf pro ganzem Satz (gleichmäßigste
+    Stimme). mode "clause": zusätzlich an Kommas geteilt (früherer erster
+    Ton, aber hörbar unterschiedliche Betonung pro Stück)."""
+    chunks: list[str] = []
+    for sentence in _SENTENCE_SPLIT_RE.split(text.strip()):
+        sentence = sentence.strip()
+        if not sentence:
+            continue
+        chunks.extend(split_for_speech(sentence) if mode == "clause" else [sentence])
+    return chunks
+
+
+def synthesize_stream(text: str, mode: str = "sentence", seed: int | None = None, steps: int = DEFAULT_TOTAL_STEPS):
+    """Yield (wav_bytes, chunk_text) per chunk, each as soon as the model
+    finished it. Supertonic denoises the WHOLE chunk at once (all `steps`
+    passes run over the complete latent, ~92% of the time) and only then
+    runs the vocoder, so there is no audio of a chunk before the chunk is
+    done — the finest possible streaming granularity is one model call.
+
+    `seed` fixes the noise the diffusion starts from; without it every call
+    draws fresh random noise, which is what makes consecutive chunks differ
+    audibly in prosody/timbre. Supertonic only, no fallback engines."""
+    text = _expand_numbers_for_speech(text)
+    tts, style = _get_supertonic()
+    text = _sanitize_for_supertonic(text, tts)
+    lang = config.SUPERTONIC_LANG if tts.is_multilingual else None
+    for chunk in _stream_chunks(text, mode):
+        with _supertonic_lock:
+            if seed is not None:
+                np.random.seed(seed)
+            wav, _dur = tts.model([chunk], style, steps, DEFAULT_SPEED, lang)
+        yield _pcm_to_wav_bytes(wav, tts.sample_rate), chunk
 
 
 def _supertonic_say(text: str) -> bytes:

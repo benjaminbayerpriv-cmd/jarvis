@@ -48,3 +48,32 @@ def ensure_fillers() -> list[str]:
         if path and path.exists():
             urls.append(f"/static/fillers/{path.name}")
     return urls
+
+
+# Played mid-response in Sprachmodus when TTS catches up to the LLM — the
+# audio queue empties but the model hasn't produced the next sentence yet.
+# A short "Ähm" bridges that silence the way a person hesitates while still
+# thinking, instead of dead air that sounds like the connection dropped.
+# Separate from PHRASES/ensure_fillers() above (those are longer clips for
+# a long *pre-reply* wait, e.g. a slow tool call) — this one is meant to be
+# replayed repeatedly, in quick succession, mid-sentence.
+THINKING_FILLER_STEM = "thinking_aehm"
+THINKING_PHRASE = "Ähm"
+
+
+def ensure_thinking_filler() -> str | None:
+    """Generate (once, cached on disk like PHRASES above) the short
+    mid-response filler clip. Returns its static URL, or None if synthesis
+    failed (caller just won't have a filler to play, no different from
+    Sprachmodus without this feature at all)."""
+    FILLER_DIR.mkdir(parents=True, exist_ok=True)
+    path = next(FILLER_DIR.glob(f"{THINKING_FILLER_STEM}.*"), None)
+    if path is None:
+        try:
+            audio = tts.synthesize(THINKING_PHRASE)
+            ext, _ = tts.ENGINE_MEDIA.get(tts.VoiceInfo.engine, ("mp3", "audio/mpeg"))
+            path = FILLER_DIR / f"{THINKING_FILLER_STEM}.{ext}"
+            path.write_bytes(audio)
+        except Exception:
+            return None
+    return f"/static/fillers/{path.name}" if path and path.exists() else None

@@ -32,6 +32,7 @@ FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
 
 active_sockets: list[WebSocket] = []
 filler_urls: list[str] = []
+thinking_filler_url: str | None = None
 
 
 # Emoji-Range, die aus KI-Antworten entfernt werden. Der Nutzer will keine
@@ -93,7 +94,7 @@ async def _pump_panel():
 async def on_startup():
     """Warm the filler clips (ElevenLabs is only hit for ones not already
     cached on disk) and start the panel pump."""
-    global filler_urls
+    global filler_urls, thinking_filler_url
     memory.initialize()
     healthy, detail = llm_client.model_health()
     print(f"[model] {detail}")
@@ -101,8 +102,9 @@ async def on_startup():
         panel.push("notify", text=detail)
 
     def _generate():
-        global filler_urls
+        global filler_urls, thinking_filler_url
         filler_urls = fillers.ensure_fillers()
+        thinking_filler_url = fillers.ensure_thinking_filler()
 
     loop = asyncio.get_event_loop()
     loop.run_in_executor(None, _generate)
@@ -316,6 +318,38 @@ def speak(req: ChatResponse):
     return Response(content=audio, media_type=mime)
 
 
+class TtsStreamRequest(BaseModel):
+    text: str
+    mode: str = "sentence"  # "sentence" | "clause"
+    seed: int | None = None
+    steps: int = 8
+
+
+@app.post("/tts/stream")
+def speak_stream(req: TtsStreamRequest):
+    """Testweg ohne LLM: synthetisiert den übergebenen Text mit Supertonic
+    Häppchen für Häppchen und schickt jedes fertige WAV sofort als NDJSON-
+    Zeile raus, damit die Testseite es abspielen kann, während der Rest noch
+    berechnet wird."""
+    def generate():
+        start = time.time()
+        try:
+            for i, (wav, chunk) in enumerate(tts.synthesize_stream(req.text, req.mode, req.seed, req.steps)):
+                yield json.dumps({
+                    "type": "audio",
+                    "index": i,
+                    "text": chunk,
+                    "audio": base64.b64encode(wav).decode("ascii"),
+                    "mime": "audio/wav",
+                    "elapsed_ms": int((time.time() - start) * 1000),
+                }) + "\n"
+        except Exception as exc:  # noqa: BLE001
+            yield json.dumps({"type": "error", "message": str(exc)}) + "\n"
+        yield json.dumps({"type": "done", "elapsed_ms": int((time.time() - start) * 1000)}) + "\n"
+
+    return StreamingResponse(generate(), media_type="application/x-ndjson")
+
+
 @app.post("/stt")
 async def transcribe(audio: UploadFile = File(...)):
     data = await audio.read()
@@ -398,10 +432,18 @@ def chat_stream(req: ChatRequest):
                     # verschlucken, nur den Ton).
                     yield json.dumps({"type": "sentence", "text": text, "audio": ""}) + "\n"
                     try:
-                        audio = tts.synthesize(text)
-                        audio_b64 = base64.b64encode(audio).decode("ascii")
-                        _, mime = tts.ENGINE_MEDIA.get(tts.VoiceInfo.engine, ("mp3", "audio/mpeg"))
-                        yield json.dumps({"type": "audio", "audio": audio_b64, "mime": mime}) + "\n"
+                        # Ein langer Satz wird an seiner ersten Kommapause in
+                        # zwei Sprech-Häppchen geteilt (siehe tts.split_for_
+                        # speech) — jedes geht als eigenes "audio"-Event raus,
+                        # die Frontend-Queue spielt sie einfach nacheinander
+                        # ab. So beginnt die Wiedergabe schon beim ersten
+                        # Teilsatz, während der Rest noch synthetisiert wird,
+                        # statt auf den ganzen Satz warten zu müssen.
+                        for chunk in tts.split_for_speech(text):
+                            audio = tts.synthesize(chunk)
+                            audio_b64 = base64.b64encode(audio).decode("ascii")
+                            _, mime = tts.ENGINE_MEDIA.get(tts.VoiceInfo.engine, ("mp3", "audio/mpeg"))
+                            yield json.dumps({"type": "audio", "audio": audio_b64, "mime": mime}) + "\n"
                     except Exception as exc:  # noqa: BLE001 - nie nur-wortlos
                         print(f"[tts] Sprachausgabe fehlgeschlagen: {exc}")
                 elif event["type"] == "partial":
@@ -656,7 +698,7 @@ def browser_result(result: BrowserResult):
 
 @app.get("/fillers")
 def get_fillers():
-    return {"fillers": filler_urls}
+    return {"fillers": filler_urls, "thinking_filler": thinking_filler_url}
 
 
 @app.post("/trigger")
