@@ -40,6 +40,16 @@
     <button id="stop" class="secondary" disabled>Stopp</button>
     <button id="clear" class="secondary">Log leeren</button>
   </div>
+  <div class="row" style="font-size:13px;color:#c3c0b4;">
+    <label>Modell-Aufruf pro
+      <select id="mode" style="background:#1f1f1e;color:#f0efe8;border:1px solid rgba(240,236,225,.14);border-radius:6px;padding:4px 6px;">
+        <option value="sentence" selected>ganzem Satz (gleichmäßigste Stimme)</option>
+        <option value="clause">Teilsatz (früherer Start, ungleichere Stimme)</option>
+      </select>
+    </label>
+    <label><input type="checkbox" id="seedOn" checked /> fester Rausch-Seed (Stimme bleibt gleich)</label>
+    <label>Denoise-Schritte <input type="range" id="steps" min="2" max="16" value="8" /> <span id="stepsVal">8</span></label>
+  </div>
 
   <div class="stats">
     <div class="stat">Start nach<b id="sFirst">–</b></div>
@@ -95,7 +105,7 @@ async function run() {
   try {
     const resp = await fetch(`${API_BASE}/tts/stream`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text }), signal: aborter.signal,
+      body: JSON.stringify({ text, mode: $('mode').value, seed: $('seedOn').checked ? 1234 : null, steps: +$('steps').value }), signal: aborter.signal,
     });
     const reader = resp.body.getReader();
     const dec = new TextDecoder();
@@ -141,6 +151,7 @@ async function run() {
   }
 }
 
+$('steps').addEventListener('input', () => { $('stepsVal').textContent = $('steps').value; });
 $('go').addEventListener('click', run);
 $('stop').addEventListener('click', stopAll);
 $('clear').addEventListener('click', () => { $('log').innerHTML = ''; });

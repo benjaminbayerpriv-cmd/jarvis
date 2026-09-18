@@ -433,28 +433,38 @@ def _pcm_to_wav_bytes(wav, sample_rate: int) -> bytes:
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
 
 
-def _stream_chunks(text: str) -> list[str]:
+def _stream_chunks(text: str, mode: str) -> list[str]:
+    """mode "sentence": ein Modellaufruf pro ganzem Satz (gleichmäßigste
+    Stimme). mode "clause": zusätzlich an Kommas geteilt (früherer erster
+    Ton, aber hörbar unterschiedliche Betonung pro Stück)."""
     chunks: list[str] = []
     for sentence in _SENTENCE_SPLIT_RE.split(text.strip()):
-        if sentence.strip():
-            chunks.extend(split_for_speech(sentence.strip()))
+        sentence = sentence.strip()
+        if not sentence:
+            continue
+        chunks.extend(split_for_speech(sentence) if mode == "clause" else [sentence])
     return chunks
 
 
-def synthesize_stream(text: str):
-    """Yield (wav_bytes, chunk_text) per small chunk, each as soon as the
-    model finished it — supertonic's own synthesize() runs the very same
-    per-chunk loop internally but only returns after concatenating all of
-    them, so calling the model per chunk ourselves is as close to
-    "playing while it's still generating" as the library allows. Supertonic
-    only; no fallback engines here (this exists to experiment with it)."""
+def synthesize_stream(text: str, mode: str = "sentence", seed: int | None = None, steps: int = DEFAULT_TOTAL_STEPS):
+    """Yield (wav_bytes, chunk_text) per chunk, each as soon as the model
+    finished it. Supertonic denoises the WHOLE chunk at once (all `steps`
+    passes run over the complete latent, ~92% of the time) and only then
+    runs the vocoder, so there is no audio of a chunk before the chunk is
+    done — the finest possible streaming granularity is one model call.
+
+    `seed` fixes the noise the diffusion starts from; without it every call
+    draws fresh random noise, which is what makes consecutive chunks differ
+    audibly in prosody/timbre. Supertonic only, no fallback engines."""
     text = _expand_numbers_for_speech(text)
     tts, style = _get_supertonic()
     text = _sanitize_for_supertonic(text, tts)
     lang = config.SUPERTONIC_LANG if tts.is_multilingual else None
-    for chunk in _stream_chunks(text):
+    for chunk in _stream_chunks(text, mode):
         with _supertonic_lock:
-            wav, _dur = tts.model([chunk], style, DEFAULT_TOTAL_STEPS, DEFAULT_SPEED, lang)
+            if seed is not None:
+                np.random.seed(seed)
+            wav, _dur = tts.model([chunk], style, steps, DEFAULT_SPEED, lang)
         yield _pcm_to_wav_bytes(wav, tts.sample_rate), chunk
 
 

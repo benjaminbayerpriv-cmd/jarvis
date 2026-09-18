@@ -320,6 +320,9 @@ def speak(req: ChatResponse):
 
 class TtsStreamRequest(BaseModel):
     text: str
+    mode: str = "sentence"  # "sentence" | "clause"
+    seed: int | None = None
+    steps: int = 8
 
 
 @app.post("/tts/stream")
@@ -331,7 +334,7 @@ def speak_stream(req: TtsStreamRequest):
     def generate():
         start = time.time()
         try:
-            for i, (wav, chunk) in enumerate(tts.synthesize_stream(req.text)):
+            for i, (wav, chunk) in enumerate(tts.synthesize_stream(req.text, req.mode, req.seed, req.steps)):
                 yield json.dumps({
                     "type": "audio",
                     "index": i,
