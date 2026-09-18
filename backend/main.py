@@ -318,6 +318,35 @@ def speak(req: ChatResponse):
     return Response(content=audio, media_type=mime)
 
 
+class TtsStreamRequest(BaseModel):
+    text: str
+
+
+@app.post("/tts/stream")
+def speak_stream(req: TtsStreamRequest):
+    """Testweg ohne LLM: synthetisiert den übergebenen Text mit Supertonic
+    Häppchen für Häppchen und schickt jedes fertige WAV sofort als NDJSON-
+    Zeile raus, damit die Testseite es abspielen kann, während der Rest noch
+    berechnet wird."""
+    def generate():
+        start = time.time()
+        try:
+            for i, (wav, chunk) in enumerate(tts.synthesize_stream(req.text)):
+                yield json.dumps({
+                    "type": "audio",
+                    "index": i,
+                    "text": chunk,
+                    "audio": base64.b64encode(wav).decode("ascii"),
+                    "mime": "audio/wav",
+                    "elapsed_ms": int((time.time() - start) * 1000),
+                }) + "\n"
+        except Exception as exc:  # noqa: BLE001
+            yield json.dumps({"type": "error", "message": str(exc)}) + "\n"
+        yield json.dumps({"type": "done", "elapsed_ms": int((time.time() - start) * 1000)}) + "\n"
+
+    return StreamingResponse(generate(), media_type="application/x-ndjson")
+
+
 @app.post("/stt")
 async def transcribe(audio: UploadFile = File(...)):
     data = await audio.read()

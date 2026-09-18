@@ -26,6 +26,7 @@ import numpy as np
 import requests
 from num2words import num2words
 from supertonic import TTS
+from supertonic.config import DEFAULT_SPEED, DEFAULT_TOTAL_STEPS
 
 from . import config, platform_utils
 
@@ -415,6 +416,46 @@ def _sanitize_for_supertonic(text: str, tts: TTS) -> str:
         for ch in unsupported:
             text = text.replace(ch, "")
     return text
+
+
+def _pcm_to_wav_bytes(wav, sample_rate: int) -> bytes:
+    samples = np.clip(np.asarray(wav).squeeze(), -1.0, 1.0)
+    pcm16 = (samples * 32767).astype(np.int16)
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(sample_rate)
+        wf.writeframes(pcm16.tobytes())
+    return buf.getvalue()
+
+
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+
+
+def _stream_chunks(text: str) -> list[str]:
+    chunks: list[str] = []
+    for sentence in _SENTENCE_SPLIT_RE.split(text.strip()):
+        if sentence.strip():
+            chunks.extend(split_for_speech(sentence.strip()))
+    return chunks
+
+
+def synthesize_stream(text: str):
+    """Yield (wav_bytes, chunk_text) per small chunk, each as soon as the
+    model finished it — supertonic's own synthesize() runs the very same
+    per-chunk loop internally but only returns after concatenating all of
+    them, so calling the model per chunk ourselves is as close to
+    "playing while it's still generating" as the library allows. Supertonic
+    only; no fallback engines here (this exists to experiment with it)."""
+    text = _expand_numbers_for_speech(text)
+    tts, style = _get_supertonic()
+    text = _sanitize_for_supertonic(text, tts)
+    lang = config.SUPERTONIC_LANG if tts.is_multilingual else None
+    for chunk in _stream_chunks(text):
+        with _supertonic_lock:
+            wav, _dur = tts.model([chunk], style, DEFAULT_TOTAL_STEPS, DEFAULT_SPEED, lang)
+        yield _pcm_to_wav_bytes(wav, tts.sample_rate), chunk
 
 
 def _supertonic_say(text: str) -> bytes:
