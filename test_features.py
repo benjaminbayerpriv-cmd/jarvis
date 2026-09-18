@@ -4,7 +4,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from backend import browser_agent, llm_client, memory, tools
+from backend import browser_agent, llm_client, memory, tools, vector_memory
 
 
 def test_memory_vault():
@@ -14,6 +14,12 @@ def test_memory_vault():
         memory.ROOT = root
         memory.KNOWLEDGE, memory.JOURNAL = root / "Wissen", root / "Tagebuch"
         memory.PROFILE, memory.TASKS, memory.NOTES = root / "Profil.md", root / "Aufgaben.md", root / "Notizen.md"
+        # Ohne das schreibt der Test seine Beispiel-Einträge in den ECHTEN
+        # Vektor-Index — der ist danach nicht mehr leer, und jede spätere
+        # Chat-Nachricht schickt dann wieder eine Embedding-Anfrage an LM
+        # Studio (kostet Zeit und verdrängt dessen Prompt-Cache).
+        old_index = (vector_memory.INDEX_FILE, vector_memory._cache)
+        vector_memory.INDEX_FILE, vector_memory._cache = Path(tmp) / "vector_index.json", None
         try:
             memory.initialize()
             memory.add_note("Milch kaufen")
@@ -25,6 +31,7 @@ def test_memory_vault():
             assert "Browser-Erweiterung installieren" in memory.TASKS.read_text()
         finally:
             memory.ROOT, memory.KNOWLEDGE, memory.JOURNAL, memory.PROFILE, memory.TASKS, memory.NOTES = old
+            vector_memory.INDEX_FILE, vector_memory._cache = old_index
 
 
 def test_invalid_model_stream_is_safe():
