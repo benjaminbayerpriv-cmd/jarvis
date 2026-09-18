@@ -518,6 +518,10 @@
   // Graues Punktnetz (Sprachmodus)
   let orbCtx = null, orbCanvas = null, orbLevel = 0, orbRaf = 0, orbVisible = false;
   const DOT_COLOR = '#8b8b8f';
+  // Grafik, die JARVIS per visualize-Tool auf das Raster legt (siehe
+  // backend/tools.py _visualize) — { vtype, title, data, t0 } oder null.
+  let vizState = null, vizAmt = 0;
+  const GRID_STEP = 34;
 
   // Persisted conversation id; ?conv=<id>-Deep-Link priorisiert (siehe unten).
   const params = new URLSearchParams(location.search);
@@ -2239,6 +2243,7 @@
     activeReader = null;
     currentTurnId = String(++turnCounter);
     streamStillGenerating = true;
+    clearViz();
     try {
       const resp = await fetch('/chat/stream', {
         method: 'POST',
@@ -2718,6 +2723,20 @@
   }
 
   function renderPanelItem(item) {
+    if (item.kind === 'viz') {
+      // Im Sprachmodus aufs Raster zeichnen; sonst als schlichter Text im
+      // Verlauf, damit die Daten nicht verloren gehen.
+      if (speechMode) { setViz(item); return; }
+      const hostV = progressHost();
+      if (!hostV) return;
+      const b = document.createElement('div');
+      b.style.cssText = `padding:10px 12px;border:1px solid ${C.border};border-radius:10px;background:${C.bgSurface3};font-size:13px;color:${C.textSoft};white-space:pre-wrap;`;
+      const rows = Array.isArray(item.data) ? item.data.map((q) => (typeof q === 'object' ? q.label + ': ' + q.value : q)) : [String(item.data)];
+      b.textContent = (item.title ? item.title + '\n' : '') + rows.join('\n');
+      hostV.appendChild(b);
+      scrollThread();
+      return;
+    }
     const host = progressHost();
     if (!host) return;
     const kind = item.kind;
@@ -3506,6 +3525,7 @@
   }
   function exitSpeech() {
     speechMode = false;
+    clearViz();
     stopListening();
     hideOrb();
     hideSpeechCaption();
@@ -3561,7 +3581,7 @@
     // feines Gitter
     orbCtx.strokeStyle = 'rgba(150,190,210,0.07)';
     orbCtx.lineWidth = 1;
-    const step = 34;
+    const step = GRID_STEP;
     orbCtx.beginPath();
     for (let x = left; x <= left + width; x += step) { orbCtx.moveTo(x + 0.5, top); orbCtx.lineTo(x + 0.5, top + height); }
     for (let y = top; y <= top + height; y += step) { orbCtx.moveTo(left, y + 0.5); orbCtx.lineTo(left + width, y + 0.5); }
@@ -3575,6 +3595,107 @@
     orbCtx.fillStyle = vg;
     orbCtx.fillRect(left, top, width, height);
   }
+
+
+  // Zeichnet vizState auf das Raster. Bereich und Elemente rasten auf die
+  // Gitterlinien (GRID_STEP) ein, damit es wirklich "auf dem Raster" liegt;
+  // alles wächst über ~0,8 s ein.
+  function drawViz(rect, now) {
+    const v = vizState;
+    if (!v) return;
+    const S = GRID_STEP;
+    const p = Math.min(1, (now - v.t0) / 800), e = 1 - Math.pow(1 - p, 3);
+    const col = currentOrbColor();
+    const cols = Math.max(8, Math.floor(rect.width * 0.62 / S));
+    const rows = Math.max(5, Math.floor(rect.height * 0.34 / S));
+    const w = cols * S, h = rows * S;
+    const x0 = rect.left + Math.round((rect.width - w) / 2 / S) * S;
+    const y0 = rect.top + Math.round(rect.height * 0.33 / S) * S;
+    const ctx = orbCtx;
+    ctx.save();
+    ctx.globalAlpha = Math.min(1, p * 2);
+    // Rahmen mit Eckmarken
+    ctx.strokeStyle = col + '55'; ctx.lineWidth = 1;
+    ctx.strokeRect(x0 + 0.5, y0 + 0.5, w, h);
+    ctx.strokeStyle = col; ctx.lineWidth = 2;
+    const k = S * 0.5;
+    ctx.beginPath();
+    [[x0, y0, 1, 1], [x0 + w, y0, -1, 1], [x0, y0 + h, 1, -1], [x0 + w, y0 + h, -1, -1]].forEach(([x, y, dx, dy]) => {
+      ctx.moveTo(x + dx * k, y); ctx.lineTo(x, y); ctx.lineTo(x, y + dy * k);
+    });
+    ctx.stroke();
+    if (v.title) {
+      ctx.font = '600 11px system-ui, -apple-system, sans-serif';
+      ctx.fillStyle = col; ctx.textAlign = 'left'; ctx.textBaseline = 'bottom';
+      ctx.fillText(v.title.toUpperCase().split('').join(' '), x0, y0 - 8);
+    }
+    const pad = S, ix = x0 + pad, iy = y0 + pad * 0.6, iw = w - pad * 2, ih = h - pad * 1.6;
+    ctx.textBaseline = 'alphabetic';
+    if (v.vtype === 'bars') {
+      const d = v.data, n = d.length, max = Math.max(...d.map((q) => q.value), 0) || 1, min = Math.min(...d.map((q) => q.value), 0);
+      const range = (max - min) || 1, slot = iw / n, bw = Math.min(S * 1.6, Math.max(8, Math.round(slot * 0.55 / 2) * 2));
+      const baseY = iy + ih - 18 - (min < 0 ? (ih - 40) * (-min / range) : 0);
+      d.forEach((q, i) => {
+        const bx = ix + slot * i + (slot - bw) / 2, bh = (ih - 40) * (Math.abs(q.value) / range) * e;
+        const by = q.value >= 0 ? baseY - bh : baseY;
+        const g = ctx.createLinearGradient(0, by, 0, by + bh);
+        g.addColorStop(0, col); g.addColorStop(1, col + '22');
+        ctx.fillStyle = g; ctx.fillRect(bx, by, bw, bh);
+        ctx.strokeStyle = col; ctx.lineWidth = 1; ctx.strokeRect(bx + 0.5, by + 0.5, bw, bh);
+        ctx.textAlign = 'center';
+        ctx.fillStyle = '#eef2f5'; ctx.font = '600 13px system-ui, sans-serif';
+        ctx.fillText(String(Math.round(q.value * e * 10) / 10), bx + bw / 2, (q.value >= 0 ? by : by + bh) + (q.value >= 0 ? -6 : 16));
+        ctx.fillStyle = '#8fa3ad'; ctx.font = '11px system-ui, sans-serif';
+        ctx.fillText(q.label, bx + bw / 2, iy + ih);
+      });
+    } else if (v.vtype === 'line') {
+      const d = v.data, n = d.length, max = Math.max(...d.map((q) => q.value)), min = Math.min(...d.map((q) => q.value)), range = (max - min) || 1;
+      const pts = d.map((q, i) => [ix + (n === 1 ? iw / 2 : iw * i / (n - 1)), iy + (ih - 34) - (ih - 34) * ((q.value - min) / range)]);
+      const upto = e * (n - 1);
+      ctx.strokeStyle = col; ctx.lineWidth = 2.5; ctx.shadowColor = col; ctx.shadowBlur = 12;
+      ctx.beginPath();
+      pts.forEach(([x, y], i) => {
+        if (i > upto + 1e-6 && i > 0) return;
+        let px = x, py = y;
+        if (i > upto) { const [ax, ay] = pts[i - 1], f = upto - (i - 1); px = ax + (x - ax) * f; py = ay + (y - ay) * f; }
+        i === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py);
+      });
+      ctx.stroke(); ctx.shadowBlur = 0;
+      ctx.textAlign = 'center'; ctx.font = '11px system-ui, sans-serif';
+      pts.forEach(([x, y], i) => {
+        if (i > upto) return;
+        ctx.fillStyle = col; ctx.fillRect(x - 3, y - 3, 6, 6);
+        ctx.fillStyle = '#eef2f5'; ctx.fillText(String(d[i].value), x, y - 10);
+        ctx.fillStyle = '#8fa3ad'; ctx.fillText(d[i].label, x, iy + ih);
+      });
+    } else if (v.vtype === 'text') {
+      let size = Math.floor(ih * 0.7);
+      ctx.font = '300 ' + size + 'px system-ui, -apple-system, sans-serif';
+      const mw = ctx.measureText(v.data).width;
+      if (mw > iw) size = Math.floor(size * iw / mw);
+      ctx.font = '300 ' + Math.floor(size * (0.85 + 0.15 * e)) + 'px system-ui, -apple-system, sans-serif';
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillStyle = '#eef2f5'; ctx.shadowColor = col; ctx.shadowBlur = 18;
+      ctx.fillText(v.data, x0 + w / 2, y0 + h / 2);
+      ctx.shadowBlur = 0;
+    } else if (v.vtype === 'list') {
+      const d = v.data, rowH = Math.min(S, ih / d.length);
+      ctx.textAlign = 'left'; ctx.textBaseline = 'middle'; ctx.font = '15px system-ui, sans-serif';
+      d.forEach((line, i) => {
+        const a = Math.min(1, Math.max(0, (e * (d.length + 1) - i) / 1));
+        const y = iy + rowH * i + rowH / 2;
+        ctx.globalAlpha = a * Math.min(1, p * 2);
+        ctx.fillStyle = col; ctx.fillRect(ix, y - 4, 8, 8);
+        ctx.fillStyle = '#eef2f5'; ctx.fillText(line, ix + 22 + (1 - a) * 12, y);
+      });
+    }
+    ctx.restore();
+  }
+
+  function setViz(item) {
+    vizState = { vtype: item.vtype, title: item.title || '', data: item.data, t0: performance.now() };
+  }
+  function clearViz() { vizState = null; }
 
   function drawOrbLabel(cx, cy, R, alpha) {
     const label = 'JARVIS';
@@ -3697,15 +3818,18 @@
     orbCtx.clearRect(0, 0, cw, ch);
     // Zentrum über dem Chat-Bereich (rechts der Sidebar)
     const rect = chatRootEl ? chatRootEl.getBoundingClientRect() : { left: 0, top: 0, width: cw, height: ch };
+    // Mit Grafik rückt die Kugel klein nach oben und macht Platz auf dem Raster.
+    vizAmt += ((vizState ? 1 : 0) - vizAmt) * 0.12;
     const cx = rect.left + rect.width / 2;
-    const cy = rect.top + rect.height / 2;
+    const cy = rect.top + rect.height * (0.5 - 0.34 * vizAmt);
     // R1: weißer Ring direkt um die Schrift, mit Innenabstand links/rechts
-    const R1 = Math.min(rect.width, rect.height) * 0.10;
+    const R1 = Math.min(rect.width, rect.height) * 0.10 * (1 - 0.45 * vizAmt);
     const lvl = orbLevel || 0;
     const t = now / 1000;
     const color = currentOrbColor();
 
     drawSpeechBackdrop(rect);
+    drawViz(rect, now);
     drawOrbRings(cx, cy, R1, color, lvl, t);
     drawOrbLabel(cx, cy, R1, 0.95);
   }
