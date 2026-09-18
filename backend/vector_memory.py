@@ -157,14 +157,18 @@ def semantic_context_for(query: str, limit: int = 4) -> str | None:
     like memory.context_for()'s keyword matches. Returns None (not "") when
     semantic search itself is unavailable, so the caller can tell that
     apart from "available, but genuinely nothing relevant"."""
-    query_vector = embed(query, task="query")
-    if query_vector is None:
-        return None
-
+    # Index zuerst prüfen: ist er leer, gibt es nichts zu finden — und die
+    # Embedding-Anfrage würde LM Studio trotzdem ~1,6s beschäftigen UND dessen
+    # Prompt-Cache des Chat-Modells verdrängen (gemessen: danach ~5-7s statt
+    # ~0,2s bis zum ersten Text), bei jeder einzelnen Nachricht.
     with _lock:
         cache = _load()
     if not cache:
         return ""
+
+    query_vector = embed(query, task="query")
+    if query_vector is None:
+        return None
 
     query_arr = np.array(query_vector)
     query_norm = np.linalg.norm(query_arr)

@@ -59,11 +59,7 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "visualize",
-            "description": (
-                "PFLICHT bei jeder Bitte um Diagramm, Grafik, Verlauf, Balken, Linie oder Anzeige "
-                "auf dem Raster: Ruf dies auf, statt es nur zu behaupten. "
-                "bars = Balkendiagramm, line = Verlauf über Zeit, text = ein großer Wert, list = kurze Liste."
-            ),
+            "description": "PFLICHT bei Bitte um Diagramm, Grafik, Verlauf oder Anzeige auf dem Raster (nie nur behaupten). bars = Balken, line = Verlauf, text = ein großer Wert, list = kurze Liste.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -103,14 +99,7 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "web_search",
-            "description": (
-                "Sucht im Web nach einer Anfrage und liefert echte Ergebnisse "
-                "(Titel, Kurzbeschreibung, URL) zum Vorlesen/Zusammenfassen zurück. "
-                "NUR für aktuelle oder unsichere Informationen (Preise, News, "
-                "Öffnungszeiten, Fakten, die du wirklich nicht kennst). NICHT für "
-                "Allgemeinwissen wie Hauptstädte, Geschichte, Mathematik oder Definitionen "
-                "— das beantwortest du direkt aus eigenem Wissen, ohne dieses Tool."
-            ),
+            "description": "Web-Suche mit echten Ergebnissen (Titel, Kurzbeschreibung, URL). Nur für Aktuelles oder Unsicheres (Preise, News, Öffnungszeiten); Allgemeinwissen beantwortest du selbst.",
             "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]},
         },
     },
@@ -126,10 +115,7 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "open_app",
-            "description": (
-                "Ein Programm auf dem Computer öffnen, z.B. Spotify, Obsidian, Terminal, "
-                "Visual Studio Code, Discord, Rechner, Notizen."
-            ),
+            "description": "Ein Programm öffnen, z.B. Spotify, Obsidian, Terminal, Rechner, Notizen.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -150,19 +136,13 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "open_folder",
-            "description": (
-                "Öffnet einen Ordner SICHTBAR im Finder/Explorer, z.B. 'Projekte auf "
-                "dem Desktop' oder 'Rechnungen in den Dokumenten'. Nutze das nur, wenn "
-                "der Nutzer den Ordner selbst sehen/durchsuchen will. Willst du "
-                "stattdessen NUR wissen, was drin liegt, um es zu sagen, nutze "
-                "list_folder — niemals open_app für Ordner verwenden."
-            ),
+            "description": "Öffnet einen Ordner sichtbar im Finder/Explorer — nur wenn der Nutzer ihn selbst sehen will (sonst list_folder).",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "description": {
                         "type": "string",
-                        "description": "Ordnername und, falls genannt, sein Ort — genau wie der Nutzer es gesagt hat",
+                        "description": "Ordnername und Ort, wie gesagt",
                     }
                 },
                 "required": ["description"],
@@ -173,18 +153,13 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "list_folder",
-            "description": (
-                "Sagt, was in einem Ordner liegt (Dateinamen als Text), OHNE etwas zu "
-                "öffnen. Nutze das bei 'was liegt in X', 'was ist in X drin', 'zeig mir "
-                "den Inhalt von X', 'guck in X'. Für 'Dokumente', 'Desktop', 'Downloads' "
-                "reicht der Name allein — nicht nach dem genauen Pfad fragen."
-            ),
+            "description": "Sagt, was in einem Ordner liegt (Dateinamen als Text), ohne etwas zu öffnen. Für Dokumente, Desktop, Downloads reicht der Name.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "description": {
                         "type": "string",
-                        "description": "Ordnername und, falls genannt, sein Ort — genau wie der Nutzer es gesagt hat",
+                        "description": "Ordnername und Ort, wie gesagt",
                     }
                 },
                 "required": ["description"],
@@ -195,11 +170,7 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "run_shell",
-            "description": (
-                "Einen Shell-Befehl auf dem Computer ausführen und die Ausgabe bekommen. "
-                "Für Systeminfos, Dateien suchen, Ordner anlegen, git, Prozesse prüfen. "
-                "NICHT für das Bauen von Projekten — dafür build_project nutzen."
-            ),
+            "description": "Führt einen Shell-Befehl aus und liefert die Ausgabe (Systeminfos, Dateien suchen, git, Prozesse). Nicht zum Bauen von Projekten — dafür build_project.",
             "parameters": {
                 "type": "object",
                 "properties": {"command": {"type": "string", "description": "Der Shell-Befehl"}},
@@ -211,12 +182,7 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "move_file",
-            "description": (
-                "Verschiebt eine Datei oder einen Ordner von einem Ort zum anderen. "
-                "Nutze das immer, wenn der Nutzer etwas 'verschieben', 'bewegen' oder "
-                "'in einen anderen Ordner legen' will. 'source' ist der komplette Pfad "
-                "der Datei, 'destination' der Zielordner oder Zielpfad."
-            ),
+            "description": "Verschiebt eine Datei oder einen Ordner. source = voller Pfad, destination = Zielordner oder Zielpfad.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -231,11 +197,7 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "write_file",
-            "description": (
-                "Schreibt Text in eine Datei — legt sie neu an oder überschreibt sie, "
-                "legt fehlende Ordner automatisch an. Nutze das für 'schreib eine Datei', "
-                "'speicher das als', 'leg eine Konfig-Datei an' und ähnliches."
-            ),
+            "description": "Schreibt Text in eine Datei (neu oder überschrieben, fehlende Ordner werden angelegt).",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -250,21 +212,13 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "delete_path",
-            "description": (
-                "Verschiebt eine Datei oder einen Ordner in den Papierkorb (reversibel, "
-                "kein endgültiges Löschen). Nutze das für JEDE Lösch-Anfrage ('lösch den "
-                "Ordner X', 'entferne die Datei Y') — niemals rm über run_shell, das kann "
-                "bei einem falschen oder nicht existierenden Pfad fälschlich Erfolg "
-                "vortäuschen. Das Tool fragt selbst automatisch nach Bestätigung und löscht "
-                "erst, wenn der Nutzer zustimmt — ruf es einfach direkt auf, du musst nicht "
-                "selbst vorher nachfragen oder dir merken, worauf sich ein späteres 'ja' bezieht."
-            ),
+            "description": "Verschiebt in den Papierkorb (reversibel) — für jede Lösch-Anfrage, nie rm. Fragt selbst nach Bestätigung, ruf es direkt auf.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "description": {
                         "type": "string",
-                        "description": "Name/Beschreibung der Datei oder des Ordners, z.B. 'Ordner Machs auf dem Desktop' oder 'notiz.txt in Dokumente'.",
+                        "description": "Datei oder Ordner, z.B. 'notiz.txt in Dokumente'",
                     },
                 },
                 "required": ["description"],
@@ -275,12 +229,7 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "build_project",
-            "description": (
-                "Etwas programmieren: eine App, Website, ein Skript oder Tool. Baut das "
-                "vollständig in einem Ordner auf dem Computer und öffnet es danach. "
-                "WICHTIG: 'location' musst du vorher beim Nutzer erfragen — rate den "
-                "Ordner niemals selbst."
-            ),
+            "description": "Baut eine App, Website oder ein Skript vollständig in einem Ordner und öffnet es. Ort nur erfragen, wenn keiner genannt wurde.",
             "parameters": {
                 "type": "object",
                 "properties": {
