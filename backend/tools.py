@@ -58,6 +58,30 @@ TOOL_SCHEMAS = [
     {
         "type": "function",
         "function": {
+            "name": "visualize",
+            "description": (
+                "PFLICHT bei jeder Bitte um Diagramm, Grafik, Verlauf, Balken, Linie oder Anzeige "
+                "auf dem Raster: Ruf dies auf, statt es nur zu behaupten. "
+                "bars = Balkendiagramm, line = Verlauf über Zeit, text = ein großer Wert, list = kurze Liste."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "type": {"type": "string", "enum": ["bars", "line", "text", "list"]},
+                    "title": {"type": "string"},
+                    "data": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "bars/line: \"Label=Zahl\" (z.B. \"Mo=21\"); text: ein Element; list: Zeilen (max 6)",
+                    },
+                },
+                "required": ["type", "data"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "open_url",
             "description": "Eine Webseite im Browser öffnen.",
             "parameters": {
@@ -707,10 +731,39 @@ def _write_file(path: str, content: str) -> str:
     return f"Datei geschrieben: {target} ({len(content or '')} Zeichen)."
 
 
+def _visualize(vtype: str, title: str, data) -> str:
+    """Schickt eine Grafik an den Sprachmodus (frontend zeichnet sie auf das
+    Raster). Die Daten werden hier bereinigt, damit das Frontend nur
+    saubere, begrenzte Werte bekommt — die Eingabe kommt vom Modell."""
+    if vtype not in ("bars", "line", "text", "list"):
+        return "Unbekannter Typ. Erlaubt: bars, line, text, list."
+    items = [str(x).strip() for x in (data if isinstance(data, list) else [data]) if str(x).strip()]
+    if not items:
+        return "Keine Daten zum Anzeigen."
+    if vtype in ("bars", "line"):
+        points = []
+        for i, raw in enumerate(items[:12]):
+            label, _, num = raw.rpartition("=")
+            if not label and not _:
+                label, num = str(i + 1), raw
+            try:
+                points.append({"label": label.strip()[:14] or str(i + 1), "value": float(num.replace(",", ".").strip())})
+            except ValueError:
+                return f'"{raw}" ist keine Zahl. Format: "Label=Zahl".'
+        payload = points
+    elif vtype == "text":
+        payload = items[0][:40]
+    else:
+        payload = [x[:60] for x in items[:6]]
+    panel.push("viz", vtype=vtype, title=(title or "")[:60], data=payload)
+    return "Auf dem Raster angezeigt."
+
+
 DISPATCH = {
     "get_weather": lambda a: _get_weather(a.get("city", "")),
     "get_time": lambda a: _get_time(),
     "add_note": lambda a: _add_note(a.get("text", "")),
+    "visualize": lambda a: _visualize(a.get("type", ""), a.get("title", ""), a.get("data", [])),
     "open_url": lambda a: _open_url(a.get("url", "")),
     "youtube_search": lambda a: _youtube_search(a.get("query", "")),
     "web_search": lambda a: _web_search(a.get("query", "")),
