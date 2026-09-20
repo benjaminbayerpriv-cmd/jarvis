@@ -308,6 +308,14 @@
   let speaking = false;
   let audioQueue = [];
   let audioDraining = false;
+  // Generationszähler der Sprachausgabe. stopSpeech() (Stop-Taste, Barge-in)
+  // leert zwar die Warteschlange, aber die laufende drainAudioQueue-Schleife
+  // hängt in ihrem await weiter und lebt nach dessen Auflösung wieder auf —
+  // während die neue Frage längst eine zweite Schleife gestartet hat. Beide
+  // ziehen dann aus derselben Queue und reden hörbar durcheinander. Jede
+  // Schleife merkt sich hier ihre Generation und steigt aus, sobald eine
+  // neuere existiert.
+  let audioEpoch = 0;
   // Gesetzt, solange /chat/stream noch offen ist (siehe sendMessage) — sagt
   // drainAudioQueue(), ob eine leere Warteschlange bedeutet "Antwort fertig"
   // oder "TTS ist schneller fertig geworden als das LLM nachliefert".
@@ -406,9 +414,14 @@
   }
   function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
   async function drainAudioQueue() {
+    const epoch = audioEpoch;
     audioDraining = true;
     speaking = false;
     while (audioQueue.length || streamStillGenerating) {
+      // Nach jedem await neu prüfen: Wurde zwischenzeitlich unterbrochen,
+      // gehört die Warteschlange einer neueren Antwort — diese Schleife ist
+      // dann eine Leiche und darf keine fremden Clips mehr abspielen.
+      if (epoch !== audioEpoch) return;
       if (!audioQueue.length) {
         // Nichts zu sprechen da, aber die Antwort ist noch nicht fertig —
         // kurz "Ähm" sagen (oder, ohne geladenen Filler, kurz warten) und
@@ -420,6 +433,9 @@
       const blob = audioQueue.shift();
       try { await playClip(blob); } catch (e) { /* nie den Faden abreißen */ }
     }
+    // Nur aufräumen, wenn diese Schleife noch die aktuelle ist — sonst
+    // würde eine abgelöste Leiche der neuen Ausgabe die Flags wegziehen.
+    if (epoch !== audioEpoch) return;
     speaking = false;
     audioDraining = false;
     // nach der Ausgabe wieder in den Bereit-Zustand, wenn noch im Sprachmodus
@@ -432,6 +448,10 @@
   // Stop-Button: unterbricht die laufende Antwort UND die Sprachausgabe.
   function stopSpeech() {
     turnAborted = true;
+    // Generation hochzählen: entwertet eine noch laufende drainAudioQueue-
+    // Schleife, damit sie nicht gleich die Clips der NÄCHSTEN Frage
+    // mitabspielt (siehe audioEpoch).
+    audioEpoch++;
     try { if (abortController) abortController.abort(); } catch (e) {}
     try { if (activeReader) activeReader.cancel(); } catch (e) {}
     streamStillGenerating = false;
@@ -513,7 +533,7 @@
   const useLocalWhisper = !SpeechRecognitionImpl;
   let pcmNode = null, pcmSampleRate = 48000, pcmRing = [], utterancePCM = null, utteranceStartedAt = 0, fallbackSilenceStreak = 0;
   const PCM_BUFFER_SIZE = 4096, PREROLL_MS = 1500, RECORD_SILENCE_SUSTAIN = 28, RECORD_MIN_MS = 300;
-  let recognition = null;
+  let recognition = null, recognizing = false;
 
   // Graues Punktnetz (Sprachmodus)
   let orbCtx = null, orbCanvas = null, orbLevel = 0, orbRaf = 0, orbVisible = false;
@@ -529,6 +549,17 @@
   // backend/tools.py _visualize) — { vtype, title, data, t0 } oder null.
   let vizState = null, vizAmt = 0;
   const GRID_STEP = 34;
+  // Kleines OpenCode-Terminal, das sich im Sprachmodus per Sprachbefehl
+  // ("Jarvis, öffne Code") auf das Raster legt — eigene xterm-Instanz und
+  // eigener /code/tty/ws-Socket, unabhängig vom Terminal im Code-Tab (der
+  // Server startet pro Verbindung einen eigenen opencode-Prozess).
+  let speechTermEl = null, speechTermHostEl = null, speechTerm = null, speechTermFit = null;
+  let speechTermWs = null, speechTermWsOpen = false, speechTermOpen = false;
+  // Aufträge, die Jarvis über das opencode-Tool schickt, während die TUI noch
+  // startet: gepuffert bis sie Eingaben annimmt (siehe markSpeechTermReady).
+  let speechTermPending = null, speechTermReady = false, speechTermReadyTimer = 0, speechTermReadyDeadline = 0;
+  let speechTermFirstDataAt = 0;
+  const SPEECH_TERM_MIN_AGE_MS = 5000;
 
   // Persisted conversation id; ?conv=<id>-Deep-Link priorisiert (siehe unten).
   const params = new URLSearchParams(location.search);
@@ -546,11 +577,17 @@
     activeMode = String(deepConv).startsWith('code-') ? 'code' : 'chat';
     localStorage.setItem(modeKey(activeMode), deepConv);
   }
-  let currentConversationId =
-    (deepConv && isModeConv(activeMode, deepConv)) ? deepConv
-    : localStorage.getItem(modeKey(activeMode))
-    || (activeMode === 'chat' ? localStorage.getItem('jarvis_conversation_id') : null)
-    || null;
+  // Bewusst KEIN Wiederaufnehmen der zuletzt offenen Unterhaltung aus
+  // localStorage beim Start — jeder Server-/Browser-Neustart (und jedes
+  // Neuladen der Seite) soll mit einem frischen, leeren Chat beginnen. Die
+  // alte Unterhaltung geht dabei nicht verloren, sie bleibt ganz normal in
+  // der Sidebar-Historie stehen. Ein Deep-Link (?conv=...) überstimmt das
+  // weiterhin gezielt. isInitialBoot steuert denselben Ausschluss unten in
+  // setMode(), das sonst beim ersten Aufruf aus boot() heraus die gleiche
+  // localStorage-ID erneut einlesen und die frische Ausgangslage sofort
+  // wieder zunichtemachen würde.
+  let currentConversationId = (deepConv && isModeConv(activeMode, deepConv)) ? deepConv : null;
+  let isInitialBoot = true;
   function ensureConversationId() {
     if (!currentConversationId || !isModeConv(activeMode, currentConversationId)) {
       currentConversationId = activeMode + '-' + (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2));
@@ -609,7 +646,10 @@
       <aside class="js-sidebar" style="width:308px;flex:0 0 308px;height:100%;display:flex;flex-direction:column;background:${C.bgSoft};border-right:1px solid ${C.border};position:relative;">
         <div class="js-sidebar-top" style="padding:16px 8px 6px;display:flex;flex-direction:column;gap:12px;">
           <div class="js-sidebar-header" style="display:flex;align-items:center;justify-content:space-between;padding-left:8px;">
-            <span style="font-family:${C.serif};font-size:21px;font-weight:700;color:${C.text};">Jarvis</span>
+            <span style="display:flex;align-items:center;gap:8px;">
+              <img src="/static/assets/img/jarvis-logo.png" alt="" style="width:24px;height:24px;border-radius:50%;object-fit:cover;" />
+              <span style="font-family:${C.serif};font-size:21px;font-weight:700;color:${C.text};">Jarvis</span>
+            </span>
             <div style="display:flex;align-items:center;gap:2px;">
               <button class="js-nav-back" title="Zurück" disabled style="background:none;border:none;color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:7px;">${ICONS.arrowLeft}</button>
               <button class="js-nav-forward" title="Vorwärts" disabled style="background:none;border:none;color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:7px;">${ICONS.arrowRight}</button>
@@ -945,7 +985,7 @@
     const s = document.createElement('style');
     s.id = 'jsAppCss';
     s.textContent = `
-      body.js-app-active > :not(#jsApp):not(#jarvisOrb):not(#jarvisOrbHit):not(#jsSpeechbar):not(#jsSpeechCaption):not(#jsSettingsSheet):not(#jsNewProjectSheet):not(#jsRenameChatSheet):not(#jsBtwWindow):not(script):not(style) { display:none !important; }
+      body.js-app-active > :not(#jsApp):not(#jarvisOrb):not(#jarvisOrbHit):not(#jsSpeechTerm):not(#jsSpeechbar):not(#jsSpeechCaption):not(#jsSettingsSheet):not(#jsNewProjectSheet):not(#jsRenameChatSheet):not(#jsBtwWindow):not(script):not(style) { display:none !important; }
       body.js-app-active { overflow:hidden; }
       /* Echter claude.ai "Squish"-Press-Effekt (aus --cds-btn-spring extrahiert): schnelles
          Einschrumpfen beim Klicken, dann sanftes Zurueckfedern. NUR auf echten Action-Icon-
@@ -1160,6 +1200,10 @@
     if (uiEl) uiEl.classList.toggle('js-code-active', isCode);
     if (isCode) {
       // Code-Tab führt keine Chat-Konversationen; eigener Zustand + Socket.
+      // Das Sprachmodus-Terminal muss vorher weg: es hält einen zweiten
+      // /code/tty/ws offen, und der Server startet pro Verbindung einen
+      // eigenen opencode-Prozess.
+      closeSpeechTerminal();
       activeMode = mode;
       buildCodeView();
       loadCodeStatus();
@@ -1181,7 +1225,23 @@
     if (codeReconnectTimer) { clearTimeout(codeReconnectTimer); codeReconnectTimer = null; }
     if (currentConversationId) localStorage.setItem(modeKey(activeMode), currentConversationId);
     activeMode = mode;
-    const saved = localStorage.getItem(modeKey(mode));
+    // Nur INNERHALB einer laufenden Sitzung wird beim Hin-und-Herwechseln
+    // zwischen Chat/Code die zuletzt in diesem Modus offene Unterhaltung
+    // wiederhergestellt. Beim(n) allerersten setMode()-Aufruf/-Aufrufen aus
+    // boot() heraus (Server-Neustart, Browser-Refresh) bleibt es beim
+    // frischen, leeren Chat, den currentConversationId=null (siehe
+    // Initialisierung oben) bereits vorgibt — sonst würde dieser
+    // localStorage-Read genau das wieder rückgängig machen. isInitialBoot
+    // wird bewusst NICHT hier zurückgesetzt: buildUi() ruft setMode('chat')
+    // schon einmal intern auf, bevor boot() am Ende noch einmal
+    // setMode(activeMode) aufruft — beide Boot-internen Aufrufe müssen den
+    // Reset überspringen, sonst konsumiert der erste, harmlose Aufruf das
+    // Flag und der zweite, eigentlich entscheidende stellt trotzdem wieder
+    // aus localStorage her. boot() setzt isInitialBoot = false erst ganz am
+    // Ende, nach beiden Aufrufen.
+    const saved = isInitialBoot
+      ? (deepConv && isModeConv(mode, deepConv) ? deepConv : null)
+      : localStorage.getItem(modeKey(mode));
     const nextId = saved && isModeConv(mode, saved) ? saved : null;
     if (nextId === currentConversationId) { loadConversationList(); navRecord(); return; }
     currentConversationId = nextId;
@@ -2301,8 +2361,19 @@
     abortController = null;
     streamStillGenerating = false;
     if (turnAborted) {
-      // abgebrochen: keine Historie, Status zurück in den Bereit-Zustand
+      // Abgebrochen (Stop-Taste oder Barge-in) — aber stattgefunden hat der
+      // Turn trotzdem: Was Jarvis bis dahin gesagt hat, bleibt in der
+      // Historie. Sonst fehlt genau der Bezug, auf den sich eine direkte
+      // Anschlussantwort stützt ("mach Hallo Welt", nachdem er "was soll ich
+      // tun, zum Beispiel Hallo Welt?" gefragt hat) — man unterbricht ihn,
+      // antwortet auf seine Frage, und er weiß nichts mehr davon.
       turnAborted = false;
+      const spoken = (fullText || parts.join(' ')).trim();
+      if (spoken) {
+        history.push({ role: 'user', content: outgoingText });
+        history.push({ role: 'assistant', content: spoken });
+        if (history.length > 40) history = history.slice(-40);
+      }
       setBusy(false);
       resumeListening();
       if (speechMode) setSpeechStatus('Bereit');
@@ -2730,6 +2801,32 @@
   }
 
   function renderPanelItem(item) {
+    if (item.kind === 'opencode_model') {
+      // opencode liest sein Modell nur beim Start — ein laufendes Terminal
+      // muss also neu hochkommen, sonst arbeitet es stillschweigend weiter
+      // mit dem alten.
+      if (speechTermOpen) {
+        closeSpeechTerminal();
+        setTimeout(openSpeechTerminal, 300);
+      }
+      if (speechMode) noteSpeechReply('OpenCode-Modell: ' + String(item.model || ''));
+      return;
+    }
+    if (item.kind === 'opencode') {
+      // Im Sprachmodus wandert der Auftrag direkt in die eingeblendete
+      // OpenCode-TUI. Außerhalb bleibt er sichtbarer Text im Verlauf — dort
+      // ist der Code-Tab der richtige Ort, ein Overlay über den Chat zu
+      // legen wäre überraschend.
+      if (speechMode) { sendTaskToOpenCode(item.task); return; }
+      const hostO = progressHost();
+      if (!hostO) return;
+      const o = document.createElement('div');
+      o.style.cssText = `padding:10px 12px;border:1px solid ${C.border};border-radius:10px;background:${C.bgSurface3};font-size:13px;color:${C.textSoft};white-space:pre-wrap;`;
+      o.textContent = 'An OpenCode: ' + String(item.task || '');
+      hostO.appendChild(o);
+      scrollThread();
+      return;
+    }
     if (item.kind === 'viz') {
       // Im Sprachmodus aufs Raster zeichnen; sonst als schlichter Text im
       // Verlauf, damit die Daten nicht verloren gehen.
@@ -3364,6 +3461,7 @@
       if (!text) return;
       if (speechMode) {
         noteSpeechWords(text);
+        if (handleSpeechUtterance(text)) return;
         setSpeechStatus('Denke');
         sendMessage(text);
       } else if (dictating && composerInput) {
@@ -3414,7 +3512,7 @@
     rec.continuous = true;
     rec.interimResults = true;
 
-    rec.onstart = () => { if (speechMode && !busy) setSpeechStatus('Hören'); };
+    rec.onstart = () => { recognizing = true; if (speechMode && !busy) setSpeechStatus('Hören'); };
 
     rec.onresult = (event) => {
       let text = '';
@@ -3425,7 +3523,11 @@
 
       if (speechMode) {
         noteSpeechWords(text);
-        if (final) { setSpeechStatus('Denke'); sendMessage(text); }
+        if (final) {
+          if (handleSpeechUtterance(text)) return;
+          setSpeechStatus('Denke');
+          sendMessage(text);
+        }
       } else if (dictating && composerInput) {
         // Diktat: Zwischenergebnisse live ins Eingabefeld, aufbauend auf dem
         // gesicherten Stand (dictBase); abgeschlossene Segmente rücken auf.
@@ -3439,13 +3541,17 @@
     };
 
     rec.onerror = (event) => {
+      if (event.error === 'not-allowed') { recognizing = false; micReady = false; return; }
       if (event.error === 'no-speech' || event.error === 'aborted') return;
-      if (event.error === 'not-allowed') micReady = false;
     };
 
     // Chrome beendet die Erkennung nach Stille auch bei continuous=true —
-    // wiederholen, außer es ist gerade nicht gewünscht.
+    // wiederholen, außer es ist gerade nicht gewünscht. recognizing muss VOR
+    // dem Neustart-Check zurückgesetzt werden, sonst hält startListening()
+    // (das jetzt einen bereits laufenden Erkenner nicht doppelt startet) den
+    // Neustart fälschlich für überflüssig.
     rec.onend = () => {
+      recognizing = false;
       if (!muted && !busy && (speechMode || dictating) && micReady) setTimeout(startListening, 250);
     };
 
@@ -3457,7 +3563,12 @@
     // Lokales Whisper hört über fallbackVadTick() dauerhaft (pegelgesteuert)
     // zu — kein Web-Speech-Objekt, das hier explizit gestartet werden müsste.
     if (useLocalWhisper) return;
-    if (!recognition) return;
+    if (!recognition || recognizing) return;
+    // Ein Start direkt nach einem noch nicht abgeschlossenen stop() (z.B.
+    // Diktat aus/an in schneller Folge) wirft in Chrome einen stillen
+    // InvalidStateError und lässt die Erkennung hängen, ohne dass onend
+    // je wieder feuert — daher der recognizing-Guard oben statt hier blind
+    // zu starten.
     try { recognition.start(); } catch (_) {}
   }
   function stopListening() {
@@ -3472,16 +3583,22 @@
     if (!vadAnalyser || !vadData || muted) return;
     const rms = rmsFrom(vadAnalyser, vadData);
 
-    if (!busy) {
+    // busy deckt nur die Denk-/Streamphase ab. Das Vorlesen läuft danach
+    // weiter (setBusy(false) kommt, sobald der Stream durch ist, während die
+    // Audio-Warteschlange noch spielt) — ohne speaking/audioDraining wäre
+    // ausgerechnet die längste Phase, in der man ihn unterbrechen will,
+    // nicht unterbrechbar.
+    if (!busy && !speaking && !audioDraining) {
       vadNoiseFloor = vadNoiseFloor * 0.98 + rms * 0.02;
       vadAbove = 0;
       if (useLocalWhisper) fallbackVadTick(rms);
       return;
     }
 
-    // Barge-in: solange Jarvis antwortet, unterbricht eine anhaltende Stimme
-    // den Turn. Der Stream ist echo-kompensiert, also ist ein Pegel dort echte
-    // Person — Jarvis' eigene Ausgabe ist bereits abgezogen.
+    // Barge-in: solange Jarvis antwortet oder vorliest, unterbricht eine
+    // anhaltende Stimme den Turn. Der Stream ist echo-kompensiert, also ist
+    // ein Pegel dort echte Person — Jarvis' eigene Ausgabe ist bereits
+    // abgezogen.
     const threshold = Math.max(vadNoiseFloor * 2.4, 0.025);
     vadAbove = rms > threshold ? vadAbove + 1 : 0;
 
@@ -3544,6 +3661,7 @@
   function exitSpeech() {
     speechMode = false;
     clearViz();
+    closeSpeechTerminal();
     stopListening();
     hideOrb();
     hideSpeechCaption();
@@ -3552,6 +3670,245 @@
     if (chatRootEl) chatRootEl.classList.remove('js-speech-active');
     if (speechBarEl) speechBarEl.style.display = 'none';
     if (speechBtn) speechBtn.classList.remove('on');
+  }
+
+  // ------------------------------------------- OpenCode im Sprachmodus
+  // Sprachbefehle, die NICHT an das Chat-Modell gehen, sondern das kleine
+  // OpenCode-Terminal auf dem Raster öffnen bzw. schließen. Erkennung
+  // absichtlich tolerant: die Web-Speech-Erkennung schreibt "opencode" je
+  // nach Aussprache als "open code", "Open-Code" oder "Obencode".
+  function normalizeSpoken(text) {
+    return String(text || '')
+      .toLowerCase()
+      .replace(/[.,!?;:]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+  function matchSpeechTerminalCommand(text) {
+    const t = normalizeSpoken(text);
+    if (!t) return null;
+    // Nur ein ausdrücklich genanntes Ziel zählt ("Open Code" / "Terminal") —
+    // ein beiläufiges "Code" reicht nicht, sonst kapert "Jarvis, schreib mir
+    // einen Code-Schnipsel" den Befehl, statt ans Chat-Modell zu gehen.
+    const namesCode = /\b(open ?-? ?code|opencode|obencode)\b/.test(t);
+    const namesTerminal = /\b(terminal|konsole)\b/.test(t);
+    if (!namesCode && !namesTerminal) return null;
+    // Bewusst ohne \b/\w um die Verben: JavaScripts \w ist reines ASCII, "ß"
+    // gilt darin als Nicht-Wortzeichen — "schließ das Terminal" fiel damit
+    // durch die Wortgrenze und landete als Prompt in opencode (live gesehen).
+    if (/(schlie|zumach|mach .*zu|beend|close)/.test(t)) return 'close';
+    if (/(öffne|offne|oeffne|aufmach|mach .*auf|starte|start|zeig|hol)/.test(t)) return 'open';
+    // Ohne Verb öffnet nur die blanke Nennung ("Open Code bitte"). Sobald
+    // noch ein Auftrag drumherum steht ("lass OpenCode eine Funktion
+    // schreiben"), gehört der Satz Jarvis — sonst kapert der Produktname den
+    // Befehl und die Äußerung erreicht das Modell nie (live passiert).
+    const bare = t.replace(/\b(jarvis|bitte|mal|doch|hey)\b/g, ' ').replace(/\s+/g, ' ').trim();
+    return /^(open ?-? ?code|opencode|obencode|terminal|konsole)$/.test(bare) ? 'open' : null;
+  }
+
+  // Rückgabe true = Äußerung ist hier erledigt und geht NICHT ans Chat-Modell.
+  // Bewusst NUR die beiden Fensterbefehle: alles andere — auch bei offenem
+  // Terminal — geht weiter an Jarvis. Der Nutzer soll mit Jarvis reden, nicht
+  // mit OpenCode; was davon bei OpenCode landet, entscheidet Jarvis selbst
+  // über das opencode-Tool (siehe renderPanelItem/sendTaskToOpenCode).
+  function handleSpeechUtterance(text) {
+    const cmd = matchSpeechTerminalCommand(text);
+    if (cmd === 'open') { openSpeechTerminal(); return true; }
+    if (cmd === 'close') { closeSpeechTerminal(); return true; }
+    return false;
+  }
+
+  function openSpeechTerminal() {
+    if (speechTermOpen) return;
+    if (typeof Terminal === 'undefined') { noteSpeechReply('xterm.js ist nicht geladen — Terminal nicht verfügbar.'); return; }
+    speechTermOpen = true;
+
+    speechTermEl = document.createElement('div');
+    speechTermEl.id = 'jsSpeechTerm';
+    // z-index 42: über der Orb-Leinwand (40) und deren Ziehfläche (41), damit
+    // Tastatur/Maus wirklich im Terminal landen und nicht am Orb hängenbleiben.
+    speechTermEl.style.cssText = 'position:fixed;z-index:42;display:flex;flex-direction:column;'
+      + 'background:#060910;border:1px solid ' + ORB_COLOR + '55;'
+      + 'box-shadow:0 0 24px rgba(0,0,0,0.5);overflow:hidden;';
+    speechTermEl.innerHTML = `
+      <div style="flex:0 0 auto;display:flex;align-items:center;justify-content:space-between;padding:5px 10px;border-bottom:1px solid ${ORB_COLOR}33;">
+        <span style="font:600 11px system-ui,-apple-system,sans-serif;letter-spacing:3px;color:${ORB_COLOR};">O P E N C O D E</span>
+        <button class="js-speechterm-close" title="Terminal schließen" style="background:none;border:none;color:${ORB_COLOR};cursor:pointer;font-size:15px;line-height:1;padding:2px 4px;">×</button>
+      </div>
+      <div class="js-speechterm-host" style="flex:1 1 auto;min-height:0;"></div>
+    `;
+    document.body.appendChild(speechTermEl);
+    // Gleich hier einmessen statt erst im nächsten drawOrb-Frame: xterm
+    // berechnet Spalten/Zeilen beim open() aus der Elementgröße, und ein
+    // Terminal, das in eine 0x0-Box geöffnet wird, meldet dem PTY Unsinn.
+    if (chatRootEl) layoutSpeechTerminal(chatRootEl.getBoundingClientRect());
+    speechTermHostEl = speechTermEl.querySelector('.js-speechterm-host');
+    speechTermEl.querySelector('.js-speechterm-close').addEventListener('click', (e) => {
+      e.preventDefault();
+      closeSpeechTerminal();
+    });
+
+    speechTerm = new Terminal({
+      cursorBlink: true,
+      fontFamily: '"Menlo","Monaco","DejaVu Sans Mono","Courier New",monospace',
+      fontSize: 12,
+      lineHeight: 1.0,
+      scrollback: 2000,
+      theme: {
+        background: '#060910', foreground: '#d8dee9', cursor: ORB_COLOR,
+        cursorAccent: '#060910', selectionBackground: '#3b4261',
+      },
+    });
+    speechTermFit = new window.FitAddon.FitAddon();
+    speechTerm.loadAddon(speechTermFit);
+    speechTerm.open(speechTermHostEl);
+    speechTerm.onData((data) => {
+      if (speechTermWs && speechTermWsOpen) {
+        try { speechTermWs.send(new TextEncoder().encode(data)); } catch (e) {}
+      }
+    });
+
+    try {
+      speechTermWs = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/code/tty/ws');
+    } catch (e) { speechTermWs = null; }
+    if (speechTermWs) {
+      speechTermWs.binaryType = 'arraybuffer';
+      speechTermWs.onopen = () => { speechTermWsOpen = true; fitSpeechTerminal(); };
+      speechTermWs.onmessage = (ev) => {
+        if (ev.data instanceof ArrayBuffer && speechTerm) {
+          speechTerm.write(new Uint8Array(ev.data));
+          markSpeechTermReady();
+        }
+      };
+      speechTermWs.onclose = () => { speechTermWsOpen = false; speechTermWs = null; };
+      speechTermWs.onerror = () => { try { speechTermWs.close(); } catch (e) {} };
+    }
+    setSpeechStatus('OpenCode');
+    noteSpeechReply('OpenCode ist offen — sag etwas, und ich tippe es dort ein.');
+  }
+
+  function closeSpeechTerminal() {
+    if (!speechTermOpen) return;
+    speechTermOpen = false;
+    speechTermReady = false;
+    speechTermPending = null;
+    if (speechTermReadyTimer) { clearTimeout(speechTermReadyTimer); speechTermReadyTimer = 0; }
+    if (speechTermReadyDeadline) { clearTimeout(speechTermReadyDeadline); speechTermReadyDeadline = 0; }
+    speechTermFirstDataAt = 0;
+    if (speechTermWs) {
+      const w = speechTermWs;
+      speechTermWs = null; speechTermWsOpen = false;
+      w.onclose = null; w.onerror = null; w.onmessage = null;
+      try { w.close(); } catch (e) {}
+    }
+    if (speechTerm) { try { speechTerm.dispose(); } catch (e) {} }
+    speechTerm = null; speechTermFit = null; speechTermHostEl = null;
+    if (speechTermEl && speechTermEl.parentNode) speechTermEl.parentNode.removeChild(speechTermEl);
+    speechTermEl = null;
+    if (speechMode) { setSpeechStatus('Bereit'); noteSpeechReply(''); }
+  }
+
+  function fitSpeechTerminal() {
+    if (!speechTermFit || !speechTerm) return;
+    try { speechTermFit.fit(); } catch (e) {}
+    if (speechTermWs && speechTermWsOpen) {
+      try { speechTermWs.send(JSON.stringify({ type: 'resize', cols: speechTerm.cols, rows: speechTerm.rows })); } catch (e) {}
+    }
+  }
+
+  // Von Jarvis über das opencode-Tool weitergereichter Auftrag: Terminal bei
+  // Bedarf öffnen und den Text dort eintippen. Direkt nach dem Start nimmt
+  // die TUI noch nichts an, deshalb der Puffer.
+  function sendTaskToOpenCode(task) {
+    const text = String(task || '').trim();
+    if (!text) return;
+    speechTermPending = text;
+    if (!speechTermOpen) openSpeechTerminal();
+    flushSpeechTermPending();
+  }
+
+  function flushSpeechTermPending() {
+    if (!speechTermPending || !speechTermReady || !speechTermWs || !speechTermWsOpen) return;
+    const text = speechTermPending;
+    speechTermPending = null;
+    deliverToOpenCode(text, 1);
+  }
+
+  // Sichtbarer Terminalinhalt — die Kontrolle, ob der Auftrag wirklich in der
+  // Eingabezeile gelandet ist.
+  function speechTermScreenText() {
+    if (!speechTerm) return '';
+    const buf = speechTerm.buffer.active;
+    let out = '';
+    for (let i = 0; i < speechTerm.rows; i++) {
+      const line = buf.getLine(buf.viewportY + i);
+      if (line) out += line.translateToString(true) + '\n';
+    }
+    return out;
+  }
+
+  // Erst den Text schicken, dann nachsehen, ob er auch angekommen ist, und
+  // NUR dann Enter. Ein blindes "Text + Enter" ging beim Start von opencode
+  // mehrfach verloren: die TUI nimmt in den ersten Sekunden noch nichts an,
+  // und gemeldet hätte es niemand — der Auftrag war einfach weg.
+  function deliverToOpenCode(text, attempt) {
+    if (!speechTermWs || !speechTermWsOpen) return;
+    try { speechTermWs.send(new TextEncoder().encode(text)); } catch (e) { return; }
+    const probe = text.slice(0, 10);
+    let checks = 0;
+    const check = () => {
+      if (!speechTermWs || !speechTermWsOpen) return;
+      if (speechTermScreenText().includes(probe)) {
+        try { speechTermWs.send(new TextEncoder().encode('\r')); } catch (e) {}
+        if (speechMode) noteSpeechReply('An OpenCode: ' + text);
+        return;
+      }
+      if (++checks < 6) { setTimeout(check, 500); return; }
+      // Nach ~3 s immer noch nichts zu sehen: Zeile leeren (falls doch ein
+      // Rest hängt) und neu tippen, statt den Auftrag still fallen zu lassen.
+      if (attempt < 3) {
+        try { speechTermWs.send(new TextEncoder().encode('\x15')); } catch (e) {}
+        setTimeout(() => deliverToOpenCode(text, attempt + 1), 400);
+      } else if (speechMode) {
+        noteSpeechReply('OpenCode hat den Auftrag nicht angenommen — bitte nochmal.');
+      }
+    };
+    setTimeout(check, 500);
+  }
+
+  // "Bereit" heißt: die Startausgabe ist zur Ruhe gekommen, die TUI steht mit
+  // ihrer Eingabezeile da. Ein fester Timer ab dem ERSTEN Byte reichte nicht
+  // — opencode malt seinen Startbildschirm mehrere Sekunden lang, und ein
+  // währenddessen abgeschickter Auftrag war spurlos weg (live beobachtet).
+  // Deshalb bei jedem Datenpaket neu anstoßen und erst bei einer Pause
+  // senden; die Deadline ist die Notbremse, falls die TUI dauernd neu zeichnet.
+  function markSpeechTermReady() {
+    if (speechTermReady) return;
+    if (!speechTermFirstDataAt) speechTermFirstDataAt = Date.now();
+    if (speechTermReadyTimer) clearTimeout(speechTermReadyTimer);
+    // Ruhe allein reicht nicht: opencode legt beim Hochfahren selbst Pausen
+    // ein, und ein in so einer Lücke abgeschickter Auftrag ist weg (live
+    // zweimal beobachtet). Deshalb zusätzlich ein Mindestalter seit dem
+    // ersten Byte — ein bereits laufendes Terminal nimmt Aufträge dagegen
+    // sofort an, weil speechTermReady dann längst steht.
+    const settle = () => {
+      speechTermReadyTimer = 0;
+      const age = Date.now() - speechTermFirstDataAt;
+      if (age < SPEECH_TERM_MIN_AGE_MS) {
+        speechTermReadyTimer = setTimeout(settle, SPEECH_TERM_MIN_AGE_MS - age);
+        return;
+      }
+      speechTermReady = true;
+      flushSpeechTermPending();
+    };
+    speechTermReadyTimer = setTimeout(settle, 1500);
+    if (!speechTermReadyDeadline) {
+      speechTermReadyDeadline = setTimeout(() => {
+        speechTermReadyDeadline = 0;
+        speechTermReady = true;
+        flushSpeechTermPending();
+      }, 12000);
+    }
   }
 
   // Diktat-Modus: transkribiert ins Eingabefeld. Die Zwischenergebnisse der
@@ -3838,7 +4195,7 @@
     // gesetzter Versatz (bleibt fest, bis der Nutzer erneut zieht).
     const rect = chatRootEl ? chatRootEl.getBoundingClientRect() : { left: 0, top: 0, width: cw, height: ch };
     // Mit Grafik rückt die Kugel klein nach oben und macht Platz auf dem Raster.
-    vizAmt += ((vizState ? 1 : 0) - vizAmt) * 0.12;
+    vizAmt += (((vizState || speechTermOpen) ? 1 : 0) - vizAmt) * 0.12;
     const cx = rect.left + rect.width / 2 + orbOffsetX;
     const cy = rect.top + rect.height * (0.5 - 0.34 * vizAmt) + orbOffsetY;
     // R1: weißer Ring direkt um die Schrift, mit Innenabstand links/rechts.
@@ -3867,6 +4224,50 @@
       orbHitEl.style.height = (hitR * 2) + 'px';
     }
     orbBoundsRect = { width: rect.width, height: rect.height, margin: hitR };
+    layoutSpeechTerminal(rect);
+  }
+
+  // Das Terminal sitzt dort, wo auch eine Grafik (drawViz) liegen würde: auf
+  // dieselben Gitterlinien gerastert, mittig über dem Chat-Bereich. Hier pro
+  // Frame nachgeführt statt per CSS, damit Fenstergröße und Sidebar-Toggle
+  // ohne eigene Listener automatisch mitgehen (wie bei orbHitEl).
+  function layoutSpeechTerminal(rect) {
+    if (!speechTermEl) return;
+    const S = GRID_STEP;
+    // Untergrenze ist kein Schönheitswunsch: unter ~50x15 Zeichen stürzt die
+    // opencode-TUI beim Start ab (live beobachtet mit 36x9 — Bun-Panic,
+    // während dasselbe Terminal im Code-Tab in groß sauber läuft). Deshalb
+    // lieber den Orb verdecken als ein zu kleines Raster auszuliefern.
+    const MIN_W = 560, MIN_H = 340;
+    // Obergrenze ist das FENSTER, nicht der Chat-Bereich: bei schmaler
+    // Sidebar-Ansicht bliebe sonst nur ein Streifen übrig, in dem die TUI
+    // wieder abstürzt. Das Panel liegt frei über der Seite, es darf über den
+    // Chat-Bereich hinausragen — lieber breiter als unbenutzbar.
+    // Untergrenze MIN_*, nicht S*4: window.innerWidth ist in einem noch nicht
+    // gezeichneten/minimierten Fenster 0, und daraus abgeleitet käme wieder
+    // ein Raster heraus, in dem die TUI beim Start abstürzt. Lieber über den
+    // Fensterrand hinausragen als unbenutzbar klein.
+    const availW = Math.max(MIN_W, window.innerWidth - S);
+    const availH = Math.max(MIN_H, window.innerHeight - S);
+    const wantW = Math.min(Math.max(rect.width * 0.62, MIN_W), availW);
+    const wantH = Math.min(Math.max(rect.height * 0.38, MIN_H), availH);
+    const cols = Math.max(6, Math.floor(wantW / S));
+    const rows = Math.max(4, Math.floor(wantH / S));
+    const w = cols * S, h = rows * S;
+    // Über dem Chat-Bereich zentriert, aber ins Fenster geklemmt.
+    const x0 = Math.max(S / 2, Math.min(rect.left + Math.round((rect.width - w) / 2 / S) * S, window.innerWidth - w - S / 2));
+    // Standardplatz ist wie bei drawViz auf 33% Höhe; passt das Panel dort
+    // nicht mehr ganz hin, rutscht es nach oben statt unten herauszuragen.
+    const y0 = Math.max(S / 2, Math.min(rect.top + Math.round(rect.height * 0.33 / S) * S, window.innerHeight - h - S / 2));
+    if (speechTermEl.dataset.w !== String(w) || speechTermEl.dataset.h !== String(h)) {
+      speechTermEl.dataset.w = String(w);
+      speechTermEl.dataset.h = String(h);
+      speechTermEl.style.width = w + 'px';
+      speechTermEl.style.height = h + 'px';
+      requestAnimationFrame(fitSpeechTerminal);
+    }
+    speechTermEl.style.left = x0 + 'px';
+    speechTermEl.style.top = y0 + 'px';
   }
 
   // Pegel der gesprochenen Stimme aus dem TTS-Ausgangsanalysator — die Orb
@@ -3924,6 +4325,11 @@
     const indicatorTransition = indicator ? indicator.style.transition : '';
     if (indicator) indicator.style.transition = 'none';
     setMode(activeMode); // Sidebar befüllen + aktive Konversation des Modus laden
+    // Ab hier ist der Boot-Vorgang abgeschlossen (inkl. des früheren, internen
+    // setMode('chat') aus buildUi()) — jeder setMode()-Aufruf danach ist ein
+    // echter, nutzerausgelöster Moduswechsel und darf wieder ganz normal aus
+    // localStorage wiederherstellen.
+    isInitialBoot = false;
     if (indicator) requestAnimationFrame(() => { indicator.style.transition = indicatorTransition; });
     recognition = initRecognition();
     document.title = 'Jarvis';
