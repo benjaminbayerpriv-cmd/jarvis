@@ -120,6 +120,32 @@ def _allow_microphone_macos() -> None:
         print(f"[launcher] Mikrofon-Patch fehlgeschlagen (Spracheingabe im App-Fenster bleibt ggf. stumm): {exc!r}")
 
 
+def _warn_if_icon_stale(root_dir: Path, log) -> None:
+    # The icon is baked into the .exe/.app at build time (launcher/
+    # build_exe.bat, build_app.sh) — unlike the frontend, which this app
+    # loads live from root_dir, a changed icon source file has no effect
+    # until someone remembers to rerun the build script. Only meaningful
+    # for an actual frozen build; running the raw .py always uses whatever
+    # icon Explorer/Finder already cached for python.exe anyway. Written to
+    # server_log rather than stdout: a --windowed build has no console for
+    # print() to reach, but this log is the one file the app already points
+    # people at when something's off.
+    if not getattr(sys, "frozen", False):
+        return
+    icon_name = "jarvis.icns" if not IS_WINDOWS else "jarvis.ico"
+    icon_path = root_dir / "launcher" / "icons" / icon_name
+    try:
+        if icon_path.exists() and icon_path.stat().st_mtime > Path(sys.executable).stat().st_mtime:
+            log.write(
+                f"[launcher] Hinweis: {icon_path} ist neuer als diese App — "
+                "launcher/build_exe.bat bzw. build_app.sh erneut ausfuehren, "
+                "um das aktuelle Icon einzubacken.\n"
+            )
+            log.flush()
+    except OSError:
+        pass
+
+
 def main() -> None:
     try:
         root_dir = _find_root_dir()
@@ -153,6 +179,7 @@ def main() -> None:
     # extraction directory, not anywhere a user could go looking.
     server_log_path = root_dir / "launcher" / "server.err.log"
     server_log = open(server_log_path, "w")
+    _warn_if_icon_stale(root_dir, server_log)
     server = subprocess.Popen(
         [str(venv_python), "-m", "backend.main"],
         cwd=str(root_dir),

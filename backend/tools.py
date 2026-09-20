@@ -11,7 +11,7 @@ from pathlib import Path
 
 import requests
 
-from . import browser_agent, coder, config, confirm, last_target, memory, panel, platform_utils
+from . import browser_agent, coder, config, confirm, last_target, memory, opencode_agent, panel, platform_utils
 
 IS_WINDOWS = platform.system() == "Windows"
 
@@ -229,7 +229,13 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "build_project",
-            "description": "Baut eine App, Website oder ein Skript vollständig in einem Ordner und öffnet es. Ort nur erfragen, wenn keiner genannt wurde.",
+            "description": (
+                "Nur für einen KLEINEN, einmaligen Wegwerf-Entwurf (ein paar Dateien) "
+                "an einem ausdrücklich vom Nutzer genannten Ort. NICHT für ein echtes "
+                "oder größeres Projekt, nicht für Arbeit an vorhandenem Code, nicht "
+                "für mehrere Schritte — dafür IMMER opencode, das ist der richtige "
+                "Coding-Agent. Im Zweifel opencode."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -243,6 +249,60 @@ TOOL_SCHEMAS = [
                     },
                 },
                 "required": ["location", "description"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "opencode",
+            "description": (
+                "Gibt einen Programmier-Auftrag an OpenCode weiter — den lokalen "
+                "Coding-Agenten, der im Terminal am Projekt des Nutzers arbeitet. "
+                "PFLICHT, sobald am Code gearbeitet werden soll: etwas "
+                "programmieren, ändern, refactoren, einen Bug fixen, Tests "
+                "schreiben, eine Datei im Projekt umbauen. Der Auftrag wird "
+                "wortwörtlich als Prompt in OpenCode getippt, das Terminal öffnet "
+                "sich dabei automatisch. Nicht für eine komplett neue App in einem "
+                "eigenen Ordner — dafür build_project."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task": {
+                        "type": "string",
+                        "description": (
+                            "Der vollständige Auftrag als klarer Satz, so wie ihn ein "
+                            "Entwickler bekommen würde (z.B. 'Füge in main.py eine "
+                            "Funktion hinzu, die die Konfiguration validiert')"
+                        ),
+                    },
+                },
+                "required": ["task"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "opencode_model",
+            "description": (
+                "Wechselt das Modell, mit dem OpenCode arbeitet (z.B. 'nimm das "
+                "große Coder-Modell', 'wechsel auf GPT OSS'). EIN Aufruf genügt: "
+                "gib direkt das vom Nutzer genannte Modell mit, frag die Liste "
+                "nicht vorher ab. Passt der Name zu keinem Modell, bekommst du die "
+                "verfügbaren zurück. Das Terminal startet dabei neu, damit die "
+                "Wahl greift."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "model": {
+                        "type": "string",
+                        "description": "Modellname so, wie der Nutzer ihn gesagt hat (z.B. 'Devstral', 'GPT OSS')",
+                    },
+                },
+                "required": ["model"],
             },
         },
     },
@@ -708,11 +768,45 @@ def _visualize(vtype: str, title: str, data) -> str:
     return "Auf dem Raster angezeigt."
 
 
+def _opencode(task: str) -> str:
+    """Reicht einen Programmier-Auftrag an die OpenCode-TUI weiter. Getippt
+    wird im Frontend (das Terminal ist ein xterm im Sprachmodus, der PTY
+    hängt am Browser-Socket) — hier wird der Auftrag nur sauber normalisiert
+    und über den Panel-Kanal dorthin geschickt."""
+    task = " ".join(str(task or "").split())
+    if not task:
+        return "Kein Auftrag angegeben."
+    # Zeilenumbrüche sind oben schon weg: ein "\n" im PTY wäre ein Absenden
+    # mitten im Satz, OpenCode bekäme nur das erste Fragment.
+    panel.push("opencode", task=task[:2000])
+    return f"An OpenCode weitergegeben: {task}"
+
+
+def _opencode_model(name: str) -> str:
+    """Stellt das Modell um, mit dem opencode arbeitet. Die Wahl landet in der
+    opencode-Konfiguration, die nur beim Start der TUI gelesen wird — deshalb
+    schickt der Panel-Push das Frontend dazu, das Terminal neu zu starten."""
+    models = opencode_agent.list_models()
+    if not models:
+        return "LM Studio meldet gerade keine Modelle."
+    if not str(name or "").strip():
+        return "Verfügbar für OpenCode: " + ", ".join(m["id"] for m in models[:8])
+    chosen = opencode_agent.resolve_model(name)
+    if not chosen:
+        return f'Kein Modell gefunden, das zu "{name}" passt. Verfügbar: ' + ", ".join(m["id"] for m in models[:8])
+    opencode_agent.set_selected_model(chosen)
+    opencode_agent.ensure_provider_config(models, chosen)
+    panel.push("opencode_model", model=chosen)
+    return f"OpenCode arbeitet ab jetzt mit {chosen}."
+
+
 DISPATCH = {
     "get_weather": lambda a: _get_weather(a.get("city", "")),
     "get_time": lambda a: _get_time(),
     "add_note": lambda a: _add_note(a.get("text", "")),
     "visualize": lambda a: _visualize(a.get("type", ""), a.get("title", ""), a.get("data", [])),
+    "opencode": lambda a: _opencode(a.get("task", "")),
+    "opencode_model": lambda a: _opencode_model(a.get("model", "")),
     "open_url": lambda a: _open_url(a.get("url", "")),
     "youtube_search": lambda a: _youtube_search(a.get("query", "")),
     "web_search": lambda a: _web_search(a.get("query", "")),

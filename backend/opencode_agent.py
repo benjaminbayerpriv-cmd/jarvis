@@ -232,6 +232,36 @@ def current_model() -> str:
     return config.LM_STUDIO_MODEL
 
 
+def get_selected_model() -> str:
+    """Das ausdrücklich für opencode gewählte Modell (z.B. per Sprachbefehl),
+    oder "" wenn noch keins gesetzt wurde."""
+    return str(config.load_config().get("code_model", "")).strip()
+
+
+def set_selected_model(model_id: str) -> None:
+    cfg = config.load_config()
+    cfg["code_model"] = model_id
+    config.CONFIG_FILE.write_text(json.dumps(cfg, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+
+def resolve_model(name: str) -> str | None:
+    """Findet zu einer gesprochenen Bezeichnung ("das GPT OSS", "qwen coder")
+    die echte Modell-ID. Gesucht wird stur über Wortteile, weil die
+    Spracherkennung Bindestriche, Punkte und Großschreibung frei erfindet."""
+    wanted = [w for w in re.split(r"[^a-z0-9]+", str(name or "").lower()) if len(w) > 1]
+    if not wanted:
+        return None
+    best, best_score = None, 0
+    for m in list_models():
+        hay = re.split(r"[^a-z0-9]+", m["id"].lower())
+        score = sum(1 for w in wanted if any(w in part or part in w for part in hay))
+        # Bei Gleichstand gewinnt das Modell, das opencode auch wirklich packt.
+        if score > best_score or (score == best_score and score > 0 and best
+                                  and m.get("loaded_context", 0) > best.get("loaded_context", 0)):
+            best, best_score = m, score
+    return best["id"] if best else None
+
+
 def default_model() -> str:
     """Best default for opencode: a loaded model whose context fits opencode.
 
@@ -241,6 +271,11 @@ def default_model() -> str:
     with 8192 context and cannot run opencode's ~20k-token system prompt.
     """
     models = list_models()
+    # Eine ausdrückliche Wahl schlägt die Heuristik — sonst würde sie beim
+    # nächsten Start des Terminals still wieder überschrieben.
+    picked = get_selected_model()
+    if picked and any(m["id"] == picked for m in models):
+        return picked
     enough = [m for m in models if m.get("loaded_context", 0) >= CODE_MIN_CONTEXT]
     if not enough:
         return "google/gemma-4-e4b"
@@ -428,8 +463,9 @@ def start_tty(workdir: str, session_id: str | None = None) -> TtyHandle:
     Session fort, statt eine neue zu beginnen.
     """
     models = list_models()
+    wanted = default_model()
     if models:
-        ensure_provider_config(models, default_model())
+        ensure_provider_config(models, wanted)
 
     env = dict(os.environ)
     env["TERM"] = "xterm-256color"
@@ -437,6 +473,13 @@ def start_tty(workdir: str, session_id: str | None = None) -> TtyHandle:
     cmd = [OPENCODE_BIN, workdir]
     if session_id:
         cmd += ["--session", session_id]
+    # Das "model" aus der Konfiguration ist für opencode nur der Startwert für
+    # NEUE Sitzungen — es merkt sich daneben das zuletzt benutzte Modell und
+    # startete damit weiter, obwohl die Konfiguration längst ein anderes nannte
+    # (live gesehen: Konfiguration devstral, TUI lief mit gpt-oss). --model
+    # setzt es für diesen Start verbindlich.
+    if models and wanted:
+        cmd += ["--model", f"{PROVIDER_ID}/{wanted}"]
 
     if WIN:
         if PtyProcess is None:
