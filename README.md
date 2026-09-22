@@ -5,7 +5,10 @@ Ein lokaler, sprachgesteuerter KI-Assistent für den Desktop — läuft auf
 Aufgaben am Rechner: Programme öffnen, Dateien schreiben und verschieben,
 im Web suchen, Projekte bauen, Notizen führen und Dinge merken. Das Modell
 kommt aus **LM Studio** (OpenAI-kompatibel, läuft komplett lokal) — optional
-lässt sich die Text-Generierung auf DeepSeek Cloud umstellen.
+lässt sich die Text-Generierung auf DeepSeek Cloud umstellen. Echte
+Programmierarbeit an einem Projekt gibt Jarvis an einen eingebetteten
+Coding-Agenten weiter — wählbar zwischen **OpenCode**, **Claude Code** und
+**Codex**.
 
 Alles Persönliche bleibt standardmäßig auf dem eigenen Rechner: Sprache,
 Erkennung, Modelle, Gedächtnis. Nur die optionalen Bausteine (ElevenLabs,
@@ -26,6 +29,7 @@ DeepSeek, Tavily, experimentelles Gemini) verlassen die Maschine.
 ┌──────────────▼───────────────  Backend (FastAPI)  ──▼───────────────────────┐
 │ • Chat-Streaming, Turn-Abbruch, Konversations-Speicher                      │
 │ • Tools: Programme, Dateien, Shell, Web-Suche, Projekt-Build, Memory        │
+│ • Coding-Agent: OpenCode / Claude Code / Codex (Code-Tab, PTY)              │
 │ • TTS: Supertonic (lokal) → ElevenLabs (optional) → Systemstimme (Fallback)│
 │ • Browser-Agent via Chrome-Erweiterung (WebSocket)                          │
 │ • Ernste Antworten als Markdown-/Code-Blöcke im Interface, kurzer Satz      │
@@ -34,6 +38,7 @@ DeepSeek, Tavily, experimentelles Gemini) verlassen die Maschine.
                │
       LM Studio (OpenAI-kompatible API, lokal) — Modell + Embeddings
       optional: DeepSeek Cloud · Tavily Search · ElevenLabs · Gemini (experimentell)
+      Coding-Agent (Code-Tab): OpenCode (LM Studio) · Claude Code · Codex (eigene CLIs)
 ```
 
 ## Features
@@ -61,7 +66,14 @@ DeepSeek, Tavily, experimentelles Gemini) verlassen die Maschine.
   Tavily-API (kostenlos, ohne Kreditkarte) oder über den verbundenen Browser.
 - **Projekte programmieren** — Jarvis fragt nach dem Ordner und baut das
   Projekt mit dem lokalen Modell selbst; Fortschritt erscheint im Interface,
-  Meldung kommt per Sprache.
+  Meldung kommt per Sprache. Für einen kleinen, einmaligen Wegwerf-Entwurf.
+- **Code-Tab / Coding-Agent** — Eingebettetes Terminal (echte TUI über
+  PTY/xterm.js) für Arbeit an einem bestehenden oder größeren Projekt: einen
+  Auftrag ändern, refactoren, einen Bug fixen, Tests schreiben. Wählbar
+  zwischen **OpenCode** (Standard, läuft über die lokalen LM-Studio-Modelle),
+  **Claude Code** und **Codex** — per Sprachbefehl umschaltbar ("wechsel auf
+  Claude Code zum Programmieren"). Im Sprachmodus nimmt Jarvis den Auftrag im
+  Gespräch entgegen, formuliert ihn aus und tippt ihn selbst in die TUI.
 - **Gedächtnis** — Ein Obsidian-Vault (`Jarvis/`-Ordner) mit Profil,
   Aufgaben, Wissen, Notizen und Tages-Zusammenfassungen als Markdown.
   Semantische Suche über lokale Embeddings im LM Studio (ohne Modell fällt
@@ -117,13 +129,14 @@ Obsidian-Vault): [SETUP.md](SETUP.md).
 | `TAVILY_API_KEY` | (optional, kostenlos) Echte Web-Suchergebnisse; ohne Key öffnet `web_search` die Suche im Browser. |
 | `GEMINI_API_KEY` / `GEMINI_MODEL` | Nur für das experimentelle `backend/live_voice_test.py`, nicht Teil der normalen Pipeline. |
 | `JARVIS_HOST` / `JARVIS_PORT` | Bind-Adresse und Port des Servers. |
-| `config.json` | Name, Persönlichkeit (`locker_direkt`), Standard-Stadt für „Wetter“. |
+| `config.json` | Name, Persönlichkeit (`locker_direkt`), Standard-Stadt für „Wetter“, `code_dir`, `code_agent` (`opencode`/`claude`/`codex`, Code-Tab). |
+| `OPENCODE_BIN` / `CLAUDE_BIN` / `CODEX_BIN` | (optional) Pfad zur jeweiligen CLI überschreiben, falls sie nicht im PATH liegt. Claude Code (`npm i -g @anthropic-ai/claude-code`) und Codex (`npm i -g @openai/codex`) bringen ihre eigene Authentifizierung/Modellwahl mit. |
 
 ## Komponenten
 
 | Verzeichnis | Inhalt |
 |---|---|
-| `backend/` | FastAPI-Server: `main.py` (Endpoints, SSE-Streaming), `llm_client.py`, `tools.py`, `tts.py`, `stt.py`, `memory.py` + `vector_memory.py`, `conversations.py`, `browser_agent.py`, `coder.py`, `panel.py`, `confirm.py` |
+| `backend/` | FastAPI-Server: `main.py` (Endpoints, SSE-Streaming), `llm_client.py`, `tools.py`, `tts.py`, `stt.py`, `memory.py` + `vector_memory.py`, `conversations.py`, `browser_agent.py`, `coder.py`, `opencode_agent.py` (Code-Tab: PTY-Start von OpenCode/Claude Code/Codex), `panel.py`, `confirm.py` |
 | `frontend/` | UI: `index.html`/`app.js` (legacy), `claude.html`/`claude-app.js` (aktive UI), `style.css` |
 | `launcher/` | Globaler Hotkey, Server-Start, macOS-Login-Plist, Windows-`.bat`/`.exe`-Build |
 | `chrome-extension/` | Browser-Agent-Erweiterung (Tabs lesen/öffnen/suchen) |
