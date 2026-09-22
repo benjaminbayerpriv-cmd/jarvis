@@ -363,6 +363,12 @@ def _check_state() -> None:
     screen = recent_output(600).lower()
     if not screen:
         return
+    # Diese drei Muster sind aus OpenCodes eigener TUI (OpenTUI) abgelesen —
+    # "live beobachtet", nicht dokumentiert. Claude Code und Codex haben eine
+    # andere Oberfläche mit anderem Wortlaut; bei ihnen läuft dieselbe
+    # Erkennung mangels passender Muster einfach leer mit (keine Meldungen),
+    # statt etwas Falsches zu behaupten — kein aktiver Fehler, nur eine
+    # Lücke, die bislang niemand gegen die echten CLIs verifiziert hat.
     if "has crashed" in screen:
         new_state = "crashed"
     elif "permission required" in screen:
@@ -374,12 +380,13 @@ def _check_state() -> None:
     if new_state == _state:
         return
     previous, _state = _state, new_state
+    name = CODE_AGENTS.get(get_code_agent(), "Der Coding-Agent")
     if new_state == "permission":
-        _announce("OpenCode braucht eine Freigabe und wartet auf dich.")
+        _announce(f"{name} braucht eine Freigabe und wartet auf dich.")
     elif new_state == "crashed":
-        _announce("OpenCode ist abgestürzt.")
+        _announce(f"{name} ist abgestürzt.")
     elif new_state == "idle" and previous in ("busy", "permission"):
-        _announce("OpenCode ist fertig.")
+        _announce(f"{name} ist fertig.")
 
 
 def _announce(text: str) -> None:

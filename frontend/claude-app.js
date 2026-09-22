@@ -572,8 +572,12 @@
   let speechTermEl = null, speechTermHostEl = null, speechTerm = null, speechTermFit = null;
   // Kopfzeilenbeschriftung des Terminals — folgt dem gewählten Coding-Agenten
   // (siehe renderPanelItem 'code_agent'); Startwert bis /code/status geladen
-  // ist oder der Nutzer wechselt.
+  // ist oder der Nutzer wechselt. speechTermAgentName ist dieselbe Wahl in
+  // normaler Groß-/Kleinschreibung für Status-/Sprachtexte — die Kopfzeile
+  // selbst ist mit Absicht komplett großgeschrieben (Leerzeichen-gespreizt),
+  // das läse sich in "X ist offen" wie Anschreien.
   let speechTermAgentLabel = 'OPENCODE';
+  let speechTermAgentName = 'OpenCode';
   let speechTermWs = null, speechTermWsOpen = false, speechTermOpen = false;
   // Aufträge, die Jarvis über das opencode-Tool schickt, während die TUI noch
   // startet: gepuffert bis sie Eingaben annimmt (siehe markSpeechTermReady).
@@ -2825,7 +2829,8 @@
       // Der Agent wird wie das Modell (opencode_model) nur beim Start der
       // PTY-TUI gelesen — ein laufendes Terminal muss also neu hochkommen,
       // sonst redet man munter mit dem alten Prozess weiter.
-      speechTermAgentLabel = String(item.name || 'OpenCode').toUpperCase();
+      speechTermAgentName = String(item.name || 'OpenCode');
+      speechTermAgentLabel = speechTermAgentName.toUpperCase();
       if (speechTermOpen) {
         closeSpeechTerminal();
         setTimeout(openSpeechTerminal, 300);
@@ -2878,7 +2883,7 @@
       if (!hostO) return;
       const o = document.createElement('div');
       o.style.cssText = `padding:10px 12px;border:1px solid ${C.border};border-radius:10px;background:${C.bgSurface3};font-size:13px;color:${C.textSoft};white-space:pre-wrap;`;
-      o.textContent = 'An OpenCode: ' + String(item.task || '');
+      o.textContent = 'An ' + speechTermAgentName + ': ' + String(item.task || '');
       hostO.appendChild(o);
       scrollThread();
       return;
@@ -3204,7 +3209,8 @@
       if (j.dir && codeDirEl) { codeDirEl.textContent = j.dir; codeDirEl.title = j.dir; }
       if (j.agent) {
         const info = (j.agents || []).find((a) => a.id === j.agent);
-        speechTermAgentLabel = String((info && info.name) || j.agent).toUpperCase();
+        speechTermAgentName = String((info && info.name) || j.agent);
+        speechTermAgentLabel = speechTermAgentName.toUpperCase();
       }
       // Warnt VOR dem Verbinden, statt LM Studios kryptischen "Unexpected
       // server error" (Kontext-Overflow durch opencodes ~20k-Token-System-
@@ -3853,8 +3859,8 @@
       speechTermWs.onclose = () => { speechTermWsOpen = false; speechTermWs = null; };
       speechTermWs.onerror = () => { try { speechTermWs.close(); } catch (e) {} };
     }
-    setSpeechStatus('OpenCode');
-    noteSpeechReply('OpenCode ist offen — sag etwas, und ich tippe es dort ein.');
+    setSpeechStatus(speechTermAgentName);
+    noteSpeechReply(speechTermAgentName + ' ist offen — sag etwas, und ich tippe es dort ein.');
   }
 
   function closeSpeechTerminal() {
@@ -3930,7 +3936,7 @@
       if (!speechTermWs || !speechTermWsOpen) return;
       if (speechTermScreenText().includes(probe)) {
         try { speechTermWs.send(new TextEncoder().encode('\r')); } catch (e) {}
-        if (speechMode) noteSpeechReply('An OpenCode: ' + text);
+        if (speechMode) noteSpeechReply('An ' + speechTermAgentName + ': ' + text);
         return;
       }
       if (++checks < 6) { setTimeout(check, 500); return; }
@@ -3940,7 +3946,7 @@
         try { speechTermWs.send(new TextEncoder().encode('\x15')); } catch (e) {}
         setTimeout(() => deliverToOpenCode(text, attempt + 1), 400);
       } else if (speechMode) {
-        noteSpeechReply('OpenCode hat den Auftrag nicht angenommen — bitte nochmal.');
+        noteSpeechReply(speechTermAgentName + ' hat den Auftrag nicht angenommen — bitte nochmal.');
       }
     };
     setTimeout(check, 500);
