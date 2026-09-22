@@ -80,8 +80,39 @@ OPENCODE_BIN = os.environ.get("OPENCODE_BIN", _JARVIS_CODE_BIN)
 # configure them. Both authenticate and pick their own model on their own
 # (claude login / codex login, or an API key in their own config), so unlike
 # opencode there is no LM Studio provider wiring to merge in for them.
-CLAUDE_BIN = os.environ.get("CLAUDE_BIN") or shutil.which("claude") or "claude"
-CODEX_BIN = os.environ.get("CODEX_BIN") or shutil.which("codex") or "codex"
+#
+# shutil.which() alone only sees $PATH — fine from a terminal, but the
+# packaged app (launcher/jarvis_launcher.py) is started by double-clicking
+# it or from the Dock, and macOS then hands the process launchd's minimal
+# default PATH (/usr/bin:/bin:/usr/sbin:/sbin, no ~/.local/bin), not the
+# shell's. Both CLIs are typically npm-global-installed under one of a
+# handful of well-known directories, so probe those directly as a fallback
+# before giving up and falling back to the bare name.
+_EXTRA_BIN_DIRS = [
+    pathlib.Path.home() / ".local" / "bin",
+    pathlib.Path.home() / ".npm-global" / "bin",
+    pathlib.Path.home() / ".bun" / "bin",
+    pathlib.Path("/opt/homebrew/bin"),
+    pathlib.Path("/usr/local/bin"),
+]
+
+
+def _find_bin(name: str, env_var: str) -> str:
+    override = os.environ.get(env_var)
+    if override:
+        return override
+    found = shutil.which(name)
+    if found:
+        return found
+    for d in _EXTRA_BIN_DIRS:
+        candidate = d / name
+        if candidate.exists():
+            return str(candidate)
+    return name
+
+
+CLAUDE_BIN = _find_bin("claude", "CLAUDE_BIN")
+CODEX_BIN = _find_bin("codex", "CODEX_BIN")
 
 # The coding agents the Code-Tab / voice mode can drive in the PTY terminal.
 # "opencode" stays the default (existing behaviour); the other two are
@@ -746,6 +777,14 @@ def start_tty(workdir: str, session_id: str | None = None) -> TtyHandle:
 
     env = dict(os.environ)
     env["TERM"] = "xterm-256color"
+    # Same reasoning as _find_bin() above: the packaged app's PATH may lack
+    # the directories these CLIs (or tools they shell out to, e.g. git/node)
+    # live in. Appending rather than replacing keeps whatever PATH the
+    # process already had.
+    existing_path = env.get("PATH", "")
+    extra = [str(d) for d in _EXTRA_BIN_DIRS if str(d) not in existing_path]
+    if extra:
+        env["PATH"] = os.pathsep.join([existing_path, *extra]) if existing_path else os.pathsep.join(extra)
 
     cmd = _build_cmd(agent_id, workdir, session_id)
 
