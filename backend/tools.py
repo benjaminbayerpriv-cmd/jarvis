@@ -257,14 +257,16 @@ TOOL_SCHEMAS = [
         "function": {
             "name": "opencode",
             "description": (
-                "Gibt einen Programmier-Auftrag an OpenCode weiter — den lokalen "
-                "Coding-Agenten, der im Terminal am Projekt des Nutzers arbeitet. "
-                "PFLICHT, sobald am Code gearbeitet werden soll: etwas "
-                "programmieren, ändern, refactoren, einen Bug fixen, Tests "
-                "schreiben, eine Datei im Projekt umbauen. Der Auftrag wird "
-                "wortwörtlich als Prompt in OpenCode getippt, das Terminal öffnet "
-                "sich dabei automatisch. Nicht für eine komplett neue App in einem "
-                "eigenen Ordner — dafür build_project."
+                "Gibt einen Programmier-Auftrag an den lokalen Coding-Agenten "
+                "weiter, der im Terminal am Projekt des Nutzers arbeitet — "
+                "standardmäßig OpenCode, oder Claude Code bzw. Codex, falls der "
+                "Nutzer per set_code_agent umgestellt hat. PFLICHT, sobald am "
+                "Code gearbeitet werden soll: etwas programmieren, ändern, "
+                "refactoren, einen Bug fixen, Tests schreiben, eine Datei im "
+                "Projekt umbauen. Der Auftrag wird wortwörtlich als Prompt "
+                "eingetippt, das Terminal öffnet sich dabei automatisch. Nicht "
+                "für eine komplett neue App in einem eigenen Ordner — dafür "
+                "build_project."
             ),
             "parameters": {
                 "type": "object",
@@ -303,6 +305,31 @@ TOOL_SCHEMAS = [
                     },
                 },
                 "required": ["model"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "set_code_agent",
+            "description": (
+                "Wechselt, WELCHER Coding-Agent Programmieraufträge (opencode-"
+                "Tool) bearbeitet: OpenCode, Claude Code oder Codex ('nimm "
+                "Claude Code zum Programmieren', 'wechsel auf Codex', 'benutz "
+                "wieder OpenCode'). EIN Aufruf genügt: gib direkt den vom "
+                "Nutzer genannten Namen mit. Ist der Agent nicht installiert, "
+                "bekommst du das gesagt statt eines stillen Fehlschlags. Ein "
+                "offenes Terminal startet dabei neu, damit die Wahl greift."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "agent": {
+                        "type": "string",
+                        "description": "Agentenname so, wie der Nutzer ihn gesagt hat (z.B. 'Claude Code', 'Codex', 'OpenCode')",
+                    },
+                },
+                "required": ["agent"],
             },
         },
     },
@@ -800,6 +827,23 @@ def _opencode_model(name: str) -> str:
     return f"OpenCode arbeitet ab jetzt mit {chosen}."
 
 
+def _set_code_agent(name: str) -> str:
+    """Stellt um, welcher Coding-Agent das opencode-Tool bedient. Landet in
+    derselben Konfiguration, die start_tty() beim Start der PTY-TUI liest —
+    ein offenes Terminal muss also neu starten, damit die Wahl greift
+    (genau wie beim Modellwechsel oben, siehe _opencode_model)."""
+    chosen = opencode_agent.resolve_agent(name)
+    if not chosen:
+        available = ", ".join(a["name"] for a in opencode_agent.list_code_agents())
+        return f'Kein Coding-Agent gefunden, der zu "{name}" passt. Verfügbar: {available}.'
+    display_name = opencode_agent.CODE_AGENTS[chosen]
+    if not opencode_agent.agent_available(chosen):
+        return f"{display_name} ist auf diesem Rechner nicht installiert oder nicht im PATH."
+    opencode_agent.set_code_agent(chosen)
+    panel.push("code_agent", agent=chosen, name=display_name)
+    return f"Programmieraufträge gehen ab jetzt an {display_name}."
+
+
 DISPATCH = {
     "get_weather": lambda a: _get_weather(a.get("city", "")),
     "get_time": lambda a: _get_time(),
@@ -807,6 +851,7 @@ DISPATCH = {
     "visualize": lambda a: _visualize(a.get("type", ""), a.get("title", ""), a.get("data", [])),
     "opencode": lambda a: _opencode(a.get("task", "")),
     "opencode_model": lambda a: _opencode_model(a.get("model", "")),
+    "set_code_agent": lambda a: _set_code_agent(a.get("agent", "")),
     "open_url": lambda a: _open_url(a.get("url", "")),
     "youtube_search": lambda a: _youtube_search(a.get("query", "")),
     "web_search": lambda a: _web_search(a.get("query", "")),
