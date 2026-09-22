@@ -269,19 +269,23 @@ TOOL_SCHEMAS = [
         "function": {
             "name": "opencode_model",
             "description": (
-                "Wechselt das Modell, mit dem OpenCode arbeitet (z.B. 'nimm das "
-                "große Coder-Modell', 'wechsel auf GPT OSS'). EIN Aufruf genügt: "
-                "gib direkt das vom Nutzer genannte Modell mit, frag die Liste "
-                "nicht vorher ab. Passt der Name zu keinem Modell, bekommst du die "
-                "verfügbaren zurück. Das Terminal startet dabei neu, damit die "
-                "Wahl greift."
+                "Wechselt das Modell des AKTUELL gewählten Coding-Agenten "
+                "(OpenCode, Claude Code oder Codex — siehe set_code_agent), "
+                "z.B. 'nimm das große Coder-Modell', 'wechsel auf GPT OSS', "
+                "'benutz Sonnet', 'nimm Opus'. EIN Aufruf genügt: gib direkt "
+                "das vom Nutzer genannte Modell mit, frag die Liste nicht "
+                "vorher ab. Bei OpenCode bekommst du bei einem unbekannten "
+                "Namen die verfügbaren zurück; Claude Code und Codex haben "
+                "keinen abfragbaren lokalen Katalog, ihr Name wird direkt "
+                "übernommen. Das Terminal startet dabei neu, damit die Wahl "
+                "greift."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "model": {
                         "type": "string",
-                        "description": "Modellname so, wie der Nutzer ihn gesagt hat (z.B. 'Devstral', 'GPT OSS')",
+                        "description": "Modellname so, wie der Nutzer ihn gesagt hat (z.B. 'Devstral', 'GPT OSS', 'Sonnet', 'Opus')",
                     },
                 },
                 "required": ["model"],
@@ -915,18 +919,47 @@ def _opencode_status() -> str:
 
 
 def _opencode_model(name: str) -> str:
-    """Stellt das Modell um, mit dem opencode arbeitet. Die Wahl landet in der
-    opencode-Konfiguration, die nur beim Start der TUI gelesen wird — deshalb
-    schickt der Panel-Push das Frontend dazu, das Terminal neu zu starten."""
-    # Alle Modelle, die opencode kennt — auch seine eigenen kostenlosen
-    # (opencode/big-pickle und Co.), nicht nur die aus LM Studio.
+    """Stellt das Modell um, mit dem der AKTUELL gewählte Coding-Agent
+    arbeitet (opencode, Claude Code oder Codex — siehe set_code_agent). Die
+    Wahl landet in einer pro Agent getrennten Konfiguration (siehe
+    opencode_agent.get_selected_model), die erst beim nächsten Start der TUI
+    gelesen wird — deshalb schickt der Panel-Push das Frontend dazu, das
+    Terminal neu zu starten.
+
+    Früher lief das immer gegen OpenCodes eigenen Modellkatalog, auch wenn
+    gerade Claude Code oder Codex aktiv war — "Sonnet" landete dann live
+    beobachtet bei einem irrelevanten OpenRouter-Modell aus OpenCodes Liste.
+    Claude Code und Codex haben eigene, disjunkte Kataloge, gegen die
+    OpenCodes Liste nichts hergibt.
+    """
+    agent = opencode_agent.get_code_agent()
+
+    if agent == "claude":
+        chosen = opencode_agent.resolve_claude_model(name)
+        if not chosen:
+            return "Welches Modell soll Claude Code benutzen?"
+        opencode_agent.set_selected_model(chosen, "claude")
+        panel.push("opencode_model", model=chosen)
+        return f"Claude Code arbeitet ab jetzt mit {chosen} (Terminal startet neu)."
+
+    if agent == "codex":
+        chosen = opencode_agent.resolve_codex_model(name)
+        if not chosen:
+            return "Welches Modell soll Codex benutzen?"
+        opencode_agent.set_selected_model(chosen, "codex")
+        panel.push("opencode_model", model=chosen)
+        return f"Codex arbeitet ab jetzt mit {chosen} (Terminal startet neu)."
+
+    # opencode (Standard) — hier gibt es einen echten lokalen Katalog
+    # (LM Studio + OpenCodes eigene kostenlose Modelle), gegen den sich der
+    # gesprochene Name sinnvoll fuzzy matchen lässt.
     available = opencode_agent.list_all_models()
     if not available:
         return "OpenCode meldet gerade keine Modelle."
     chosen = opencode_agent.resolve_model(name, available)
     if not chosen:
         return f'Kein Modell gefunden, das zu "{name}" passt. Verfügbar: ' + ", ".join(available[:10])
-    opencode_agent.set_selected_model(chosen)
+    opencode_agent.set_selected_model(chosen, "opencode")
     lm_models = opencode_agent.list_models()
     if lm_models:
         opencode_agent.ensure_provider_config(lm_models, chosen)

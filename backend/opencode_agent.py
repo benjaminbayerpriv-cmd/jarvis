@@ -469,15 +469,28 @@ def list_all_models() -> list[str]:
     return [ln.strip() for ln in out.splitlines() if "/" in ln and not ln.startswith(" ")]
 
 
-def get_selected_model() -> str:
-    """Das ausdrücklich für opencode gewählte Modell (z.B. per Sprachbefehl),
-    oder "" wenn noch keins gesetzt wurde."""
-    return str(config.load_config().get("code_model", "")).strip()
+def _model_config_key(agent_id: str | None) -> str:
+    # opencode keeps its original bare key ("code_model") for backward
+    # compatibility with configs written before claude/codex existed; the
+    # other two get their own key so switching agents never overwrites or
+    # misreads a different agent's model choice (see get_selected_model()).
+    agent_id = agent_id or get_code_agent()
+    return "code_model" if agent_id == "opencode" else f"code_model_{agent_id}"
 
 
-def set_selected_model(model_id: str) -> None:
+def get_selected_model(agent_id: str | None = None) -> str:
+    """Das ausdrücklich gewählte Modell für den angegebenen (oder aktuell
+    aktiven) Coding-Agenten, oder "" wenn noch keins gesetzt wurde. Jeder
+    Agent hat seine eigene Auswahl — opencode, Claude Code und Codex haben
+    disjunkte Modellkataloge, eine gemeinsame Einstellung würde beim
+    Umschalten des Agenten Unsinn liefern (z.B. ein OpenRouter-Modell, das
+    Claude Code nicht kennt)."""
+    return str(config.load_config().get(_model_config_key(agent_id), "")).strip()
+
+
+def set_selected_model(model_id: str, agent_id: str | None = None) -> None:
     cfg = config.load_config()
-    cfg["code_model"] = model_id
+    cfg[_model_config_key(agent_id)] = model_id
     config.CONFIG_FILE.write_text(json.dumps(cfg, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
@@ -498,6 +511,39 @@ def resolve_model(name: str, available: list[str] | None = None) -> str | None:
         if score > best_score:
             best, best_score = full_id, score
     return best
+
+
+# Claude Code's documented short aliases (see `claude --help` --model) for
+# "whatever is current" at that tier — unlike opencode there is no queryable
+# local catalog of full model IDs to fuzzy-match against, so a bare alias is
+# the reliable choice; anything else is passed through as a literal model
+# name/ID and left for Claude Code itself to accept or reject.
+_CLAUDE_MODEL_ALIASES = ["fable", "opus", "sonnet", "haiku"]
+
+
+def resolve_claude_model(name: str) -> str | None:
+    """Findet zu einer gesprochenen Bezeichnung ('Sonnet', 'das Opus-Modell')
+    einen der bekannten Claude-Code-Aliase, oder gibt den bereinigten Namen
+    unverändert weiter, falls der Nutzer eine volle Modell-ID gesagt hat."""
+    cleaned = str(name or "").strip()
+    if not cleaned:
+        return None
+    wanted = re.sub(r"[^a-z0-9]+", "", cleaned.lower())
+    for alias in _CLAUDE_MODEL_ALIASES:
+        if alias in wanted:
+            return alias
+    return cleaned
+
+
+def resolve_codex_model(name: str) -> str | None:
+    """Wie resolve_claude_model, aber für Codex: es gibt keine dokumentierten
+    Kurz-Aliase, also wird der gesprochene Name nur in eine plausible
+    Modell-ID-Form gebracht (klein, Leerzeichen zu Bindestrichen) und Codex
+    selbst überlassen, sie zu akzeptieren oder abzulehnen."""
+    cleaned = str(name or "").strip()
+    if not cleaned:
+        return None
+    return re.sub(r"\s+", "-", cleaned.lower())
 
 
 def default_model() -> str:
@@ -711,8 +757,12 @@ def _build_cmd(agent_id: str, workdir: str, session_id: str | None) -> list[str]
     opencode braucht das Arbeitsverzeichnis als Argument und eine eigene
     LM-Studio-Provider-Konfiguration (siehe ensure_provider_config); Claude
     Code und Codex laufen dagegen einfach im PTY-cwd (siehe subprocess.Popen/
-    PtyProcess.spawn unten) und bringen ihre eigene Modell-/Auth-Konfiguration
-    mit — dafür gibt es hier nichts zu wiring.
+    PtyProcess.spawn unten) und bringen ihre eigene Auth-Konfiguration mit.
+    Ihr Modell wird trotzdem hier gewired: beide akzeptieren es nur als
+    Start-Flag, kein "/model" im laufenden Gespräch — ein per opencode_model
+    gesetzter Wunsch (siehe get_selected_model/resolve_claude_model/
+    resolve_codex_model in tools.py) greift deshalb erst ab dem nächsten
+    Start, genau wie bei opencode selbst.
     """
     if agent_id == "claude":
         cmd = [CLAUDE_BIN]
@@ -720,10 +770,19 @@ def _build_cmd(agent_id: str, workdir: str, session_id: str | None) -> list[str]
             # --resume <id> setzt eine konkrete, zuvor geführte Sitzung fort
             # (siehe https://code.claude.com/docs/en/sessions).
             cmd += ["--resume", session_id]
+        model = get_selected_model("claude")
+        if model:
+            cmd += ["--model", model]
         return cmd
 
     if agent_id == "codex":
         cmd = [CODEX_BIN]
+        model = get_selected_model("codex")
+        if model:
+            # "-c model=..." statt "-m/--model": Letzteres kennt nur der
+            # Top-Level-Aufruf, nicht das "resume"-Subcommand darunter, "-c"
+            # funktioniert bei beiden gleich (siehe `codex resume --help`).
+            cmd += ["-c", f'model="{model}"']
         if session_id:
             # "resume <id>" ist bei Codex ein Subcommand, kein Flag.
             cmd += ["resume", session_id]
