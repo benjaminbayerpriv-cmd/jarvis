@@ -717,12 +717,17 @@ async def trigger():
 
 @app.get("/code/status")
 def code_status():
-    """Everything the frontend needs to render the Code-Tab: the LM Studio
-    model list (with loaded context), the current/default model and the
-    working directory. Also refreshes the opencode provider config so the
-    models opencode knows about stay in sync with what LM Studio reports."""
-    models = opencode_agent.list_models()
-    default = opencode_agent.default_model()
+    """Everything the frontend needs to render the Code-Tab: which coding
+    agent is selected (opencode/claude/codex) and which are installed, the LM
+    Studio model list (with loaded context, opencode only), the current/
+    default model and the working directory. Also refreshes the opencode
+    provider config so the models opencode knows about stay in sync with what
+    LM Studio reports."""
+    agent = opencode_agent.get_code_agent()
+    # LM Studio wiring only means anything for opencode — claude/codex bring
+    # their own model config and don't read LM Studio at all.
+    models = opencode_agent.list_models() if agent == "opencode" else []
+    default = opencode_agent.default_model() if agent == "opencode" else ""
     if models:
         opencode_agent.ensure_provider_config(models, default)
     return {
@@ -731,23 +736,36 @@ def code_status():
         "dir": opencode_agent.get_code_dir(),
         "models": models,
         "min_context": opencode_agent.CODE_MIN_CONTEXT,
+        "agent": agent,
+        "agents": opencode_agent.list_code_agents(),
     }
 
 
 @app.post("/code/config")
 def code_set_config(body: dict):
-    """Persist the Code-Tab working directory."""
+    """Persist the Code-Tab working directory and/or the selected coding agent."""
     new_dir = str(body.get("dir", "")).strip()
     if new_dir:
         opencode_agent.set_code_dir(new_dir)
-    return {"dir": opencode_agent.get_code_dir()}
+    new_agent = str(body.get("agent", "")).strip()
+    if new_agent:
+        try:
+            opencode_agent.set_code_agent(new_agent)
+        except ValueError:
+            raise HTTPException(status_code=422, detail=f"Unbekannter Coding-Agent: {new_agent!r}")
+    return {"dir": opencode_agent.get_code_dir(), "agent": opencode_agent.get_code_agent()}
 
 
 @app.get("/code/sessions")
 def code_sessions():
     """Real opencode sessions (from opencode's own SQLite store), most recent
     first — the Code-Tab sidebar shows these instead of JARVIS chat
-    conversations, since the two are unrelated (see opencode_agent.list_recent_sessions)."""
+    conversations, since the two are unrelated (see opencode_agent.list_recent_sessions).
+    Claude Code and Codex keep their own session history outside JARVIS
+    entirely (`claude --resume`/`codex resume` pickers), so there is nothing
+    to list here for them."""
+    if opencode_agent.get_code_agent() != "opencode":
+        return {"sessions": []}
     wdir = opencode_agent.get_code_dir()
     return {"sessions": opencode_agent.list_recent_sessions(directory=wdir)}
 

@@ -554,6 +554,10 @@
   // eigener /code/tty/ws-Socket, unabhängig vom Terminal im Code-Tab (der
   // Server startet pro Verbindung einen eigenen opencode-Prozess).
   let speechTermEl = null, speechTermHostEl = null, speechTerm = null, speechTermFit = null;
+  // Kopfzeilenbeschriftung des Terminals — folgt dem gewählten Coding-Agenten
+  // (siehe renderPanelItem 'code_agent'); Startwert bis /code/status geladen
+  // ist oder der Nutzer wechselt.
+  let speechTermAgentLabel = 'OPENCODE';
   let speechTermWs = null, speechTermWsOpen = false, speechTermOpen = false;
   // Aufträge, die Jarvis über das opencode-Tool schickt, während die TUI noch
   // startet: gepuffert bis sie Eingaben annimmt (siehe markSpeechTermReady).
@@ -2801,6 +2805,18 @@
   }
 
   function renderPanelItem(item) {
+    if (item.kind === 'code_agent') {
+      // Der Agent wird wie das Modell (opencode_model) nur beim Start der
+      // PTY-TUI gelesen — ein laufendes Terminal muss also neu hochkommen,
+      // sonst redet man munter mit dem alten Prozess weiter.
+      speechTermAgentLabel = String(item.name || 'OpenCode').toUpperCase();
+      if (speechTermOpen) {
+        closeSpeechTerminal();
+        setTimeout(openSpeechTerminal, 300);
+      }
+      if (speechMode) noteSpeechReply('Coding-Agent: ' + String(item.name || ''));
+      return;
+    }
     if (item.kind === 'opencode_model') {
       // opencode liest sein Modell nur beim Start — ein laufendes Terminal
       // muss also neu hochkommen, sonst arbeitet es stillschweigend weiter
@@ -3146,10 +3162,15 @@
       const r = await fetch('/code/status');
       const j = await r.json();
       if (j.dir && codeDirEl) { codeDirEl.textContent = j.dir; codeDirEl.title = j.dir; }
+      if (j.agent) {
+        const info = (j.agents || []).find((a) => a.id === j.agent);
+        speechTermAgentLabel = String((info && info.name) || j.agent).toUpperCase();
+      }
       // Warnt VOR dem Verbinden, statt LM Studios kryptischen "Unexpected
       // server error" (Kontext-Overflow durch opencodes ~20k-Token-System-
-      // Prompt) einfach unerklärt im Terminal auftauchen zu lassen.
-      if (codeContextWarningEl) {
+      // Prompt) einfach unerklärt im Terminal auftauchen zu lassen. Nur für
+      // opencode relevant — Claude Code/Codex lesen LM Studio gar nicht.
+      if (codeContextWarningEl && j.agent === 'opencode') {
         const models = j.models || [];
         const minContext = j.min_context || 0;
         const hasEnough = models.some((m) => (m.loaded_context || 0) >= minContext);
@@ -3163,6 +3184,8 @@
         } else {
           codeContextWarningEl.style.display = 'none';
         }
+      } else if (codeContextWarningEl) {
+        codeContextWarningEl.style.display = 'none';
       }
     } catch (e) {}
   }
@@ -3732,7 +3755,7 @@
       + 'box-shadow:0 0 24px rgba(0,0,0,0.5);overflow:hidden;';
     speechTermEl.innerHTML = `
       <div style="flex:0 0 auto;display:flex;align-items:center;justify-content:space-between;padding:5px 10px;border-bottom:1px solid ${ORB_COLOR}33;">
-        <span style="font:600 11px system-ui,-apple-system,sans-serif;letter-spacing:3px;color:${ORB_COLOR};">O P E N C O D E</span>
+        <span style="font:600 11px system-ui,-apple-system,sans-serif;letter-spacing:3px;color:${ORB_COLOR};">${speechTermAgentLabel.split('').join(' ')}</span>
         <button class="js-speechterm-close" title="Terminal schließen" style="background:none;border:none;color:${ORB_COLOR};cursor:pointer;font-size:15px;line-height:1;padding:2px 4px;">×</button>
       </div>
       <div class="js-speechterm-host" style="flex:1 1 auto;min-height:0;"></div>

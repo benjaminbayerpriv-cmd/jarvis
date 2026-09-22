@@ -25,6 +25,7 @@ import json
 import os
 import pathlib
 import re
+import shutil
 import signal
 import sqlite3
 import struct
@@ -71,6 +72,80 @@ else:
     _arch = "arm64" if os.uname().machine == "arm64" else "x64"
     _JARVIS_CODE_BIN = str(_RELEASES_DIR / f"jarvis-code-darwin-{_arch}")
 OPENCODE_BIN = os.environ.get("OPENCODE_BIN", _JARVIS_CODE_BIN)
+
+# Claude Code and Codex are both installed by the user themselves (`npm i -g
+# @anthropic-ai/claude-code` / `npm i -g @openai/codex`) and picked up from
+# PATH — unlike the bundled jarvis-code binary above, JARVIS does not ship or
+# configure them. Both authenticate and pick their own model on their own
+# (claude login / codex login, or an API key in their own config), so unlike
+# opencode there is no LM Studio provider wiring to merge in for them.
+CLAUDE_BIN = os.environ.get("CLAUDE_BIN") or shutil.which("claude") or "claude"
+CODEX_BIN = os.environ.get("CODEX_BIN") or shutil.which("codex") or "codex"
+
+# The coding agents the Code-Tab / voice mode can drive in the PTY terminal.
+# "opencode" stays the default (existing behaviour); the other two are
+# switched to via set_code_agent() (see backend/tools.py's set_code_agent
+# voice tool).
+CODE_AGENTS: dict[str, str] = {
+    "opencode": "OpenCode",
+    "claude": "Claude Code",
+    "codex": "Codex",
+}
+
+
+def agent_bin(agent_id: str) -> str:
+    return {"opencode": OPENCODE_BIN, "claude": CLAUDE_BIN, "codex": CODEX_BIN}.get(agent_id, "")
+
+
+def agent_available(agent_id: str) -> bool:
+    """Whether the agent's binary can actually be launched.
+
+    opencode ships its own binary under releases/ (checked by path); claude
+    and codex are resolved from PATH at import time, so "available" there
+    just means shutil.which found something.
+    """
+    b = agent_bin(agent_id)
+    if not b:
+        return False
+    if agent_id == "opencode":
+        return pathlib.Path(b).exists()
+    return shutil.which(b) is not None or pathlib.Path(b).exists()
+
+
+def list_code_agents() -> list[dict]:
+    return [{"id": aid, "name": name, "available": agent_available(aid)} for aid, name in CODE_AGENTS.items()]
+
+
+def get_code_agent() -> str:
+    """The coding agent currently selected for the Code-Tab / voice terminal."""
+    agent = str(config.load_config().get("code_agent", "")).strip()
+    return agent if agent in CODE_AGENTS else "opencode"
+
+
+def set_code_agent(agent_id: str) -> None:
+    if agent_id not in CODE_AGENTS:
+        raise ValueError(f"Unbekannter Coding-Agent: {agent_id!r}")
+    cfg = config.load_config()
+    cfg["code_agent"] = agent_id
+    config.CONFIG_FILE.write_text(json.dumps(cfg, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+
+def resolve_agent(name: str) -> str | None:
+    """Findet zu einer gesprochenen Bezeichnung ("Claude Code", "Codex",
+    "OpenCode") die Agent-Id — genauso tolerant wie resolve_model() oben,
+    weil die Spracherkennung Groß-/Kleinschreibung und Leerzeichen frei
+    erfindet ("claude code" vs. "Claude-Code")."""
+    wanted = re.sub(r"[^a-z0-9]+", "", str(name or "").lower())
+    if not wanted:
+        return None
+    if "codex" in wanted:
+        return "codex"
+    if "claude" in wanted:
+        return "claude"
+    if "opencode" in wanted or "open" in wanted:
+        return "opencode"
+    return None
+
 
 # Where opencode reads its provider config. We MERGE into it, never overwrite.
 OPENCODE_CONFIG = pathlib.Path.home() / ".config" / "opencode" / "opencode.json"
@@ -448,28 +523,35 @@ class TtyHandle:
         return self.proc.poll()
 
 
-def start_tty(workdir: str, session_id: str | None = None) -> TtyHandle:
-    """Starte die echte opencode-TUI in einem PTY/ConPTY; gib einen TtyHandle.
+def _build_cmd(agent_id: str, workdir: str, session_id: str | None) -> list[str]:
+    """Baut die Startkommandozeile für den gewählten Coding-Agenten.
 
-    Aktualisiert zuerst die opencode-Provider-Konfiguration, damit die TUI die
-    LM-Studio-Modelle sieht, und startet ``opencode <workdir>`` auf einem
-    xterm-256color-Terminal. Auf POSIX läuft der Kindprozess in einer eigenen
-    Session (Prozessgruppe → per SIGTERM/SIGWINCH steuerbar); auf Windows
-    übernimmt eine pywinpty-PtyProcess (ConPTY). Der Aufrufer besitzt das
-    Handle und erklärt sich bereit, es am Ende zu schließen/abzuräumen.
-
-    session_id: wenn gesetzt, wird die TUI mit ``--session <id>`` gestartet und
-    setzt damit eine echte, zuvor per list_recent_sessions() gefundene opencode-
-    Session fort, statt eine neue zu beginnen.
+    opencode braucht das Arbeitsverzeichnis als Argument und eine eigene
+    LM-Studio-Provider-Konfiguration (siehe ensure_provider_config); Claude
+    Code und Codex laufen dagegen einfach im PTY-cwd (siehe subprocess.Popen/
+    PtyProcess.spawn unten) und bringen ihre eigene Modell-/Auth-Konfiguration
+    mit — dafür gibt es hier nichts zu wiring.
     """
+    if agent_id == "claude":
+        cmd = [CLAUDE_BIN]
+        if session_id:
+            # --resume <id> setzt eine konkrete, zuvor geführte Sitzung fort
+            # (siehe https://code.claude.com/docs/en/sessions).
+            cmd += ["--resume", session_id]
+        return cmd
+
+    if agent_id == "codex":
+        cmd = [CODEX_BIN]
+        if session_id:
+            # "resume <id>" ist bei Codex ein Subcommand, kein Flag.
+            cmd += ["resume", session_id]
+        return cmd
+
+    # opencode (Standard)
     models = list_models()
     wanted = default_model()
     if models:
         ensure_provider_config(models, wanted)
-
-    env = dict(os.environ)
-    env["TERM"] = "xterm-256color"
-
     cmd = [OPENCODE_BIN, workdir]
     if session_id:
         cmd += ["--session", session_id]
@@ -480,6 +562,37 @@ def start_tty(workdir: str, session_id: str | None = None) -> TtyHandle:
     # setzt es für diesen Start verbindlich.
     if models and wanted:
         cmd += ["--model", f"{PROVIDER_ID}/{wanted}"]
+    return cmd
+
+
+def start_tty(workdir: str, session_id: str | None = None) -> TtyHandle:
+    """Starte die TUI des aktuell gewählten Coding-Agenten (siehe
+    get_code_agent()/set_code_agent()) in einem PTY/ConPTY; gib einen
+    TtyHandle zurück.
+
+    Bei opencode wird zuerst die Provider-Konfiguration aktualisiert, damit
+    die TUI die LM-Studio-Modelle sieht (siehe _build_cmd). Claude Code und
+    Codex laufen unverändert mit ihrer eigenen Konfiguration. Auf POSIX läuft
+    der Kindprozess in einer eigenen Session (Prozessgruppe → per
+    SIGTERM/SIGWINCH steuerbar); auf Windows übernimmt eine
+    pywinpty-PtyProcess (ConPTY). Der Aufrufer besitzt das Handle und erklärt
+    sich bereit, es am Ende zu schließen/abzuräumen.
+
+    session_id: wenn gesetzt, wird die TUI mit einer echten, zuvor per
+    list_recent_sessions() gefundenen Session fortgesetzt statt einer neuen.
+    """
+    agent_id = get_code_agent()
+    if not agent_available(agent_id):
+        name = CODE_AGENTS.get(agent_id, agent_id)
+        raise RuntimeError(
+            f"{name} ist nicht installiert oder nicht im PATH gefunden "
+            f"({agent_bin(agent_id)!r}). Bitte installieren und erneut versuchen."
+        )
+
+    env = dict(os.environ)
+    env["TERM"] = "xterm-256color"
+
+    cmd = _build_cmd(agent_id, workdir, session_id)
 
     if WIN:
         if PtyProcess is None:
