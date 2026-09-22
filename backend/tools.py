@@ -11,7 +11,7 @@ from pathlib import Path
 
 import requests
 
-from . import browser_agent, coder, config, confirm, last_target, memory, opencode_agent, panel, platform_utils
+from . import browser_agent, config, confirm, last_target, memory, opencode_agent, panel, platform_utils
 
 IS_WINDOWS = platform.system() == "Windows"
 
@@ -170,7 +170,7 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "run_shell",
-            "description": "Führt einen Shell-Befehl aus und liefert die Ausgabe (Systeminfos, Dateien suchen, git, Prozesse). Nicht zum Bauen von Projekten — dafür build_project.",
+            "description": "Führt einen Shell-Befehl aus und liefert die Ausgabe (Systeminfos, Dateien suchen, git, Prozesse). Nicht zum Programmieren und nicht zum Bauen von Projekten — dafür opencode.",
             "parameters": {
                 "type": "object",
                 "properties": {"command": {"type": "string", "description": "Der Shell-Befehl"}},
@@ -197,7 +197,7 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "write_file",
-            "description": "Schreibt Text in eine Datei (neu oder überschrieben, fehlende Ordner werden angelegt).",
+            "description": "Schreibt Text in eine Datei (neu oder überschrieben, fehlende Ordner werden angelegt). Für Notizen, Listen, Textdokumente — NICHT für Quellcode, den schreibt ausschließlich opencode.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -225,33 +225,12 @@ TOOL_SCHEMAS = [
             },
         },
     },
-    {
-        "type": "function",
-        "function": {
-            "name": "build_project",
-            "description": (
-                "Nur für einen KLEINEN, einmaligen Wegwerf-Entwurf (ein paar Dateien) "
-                "an einem ausdrücklich vom Nutzer genannten Ort. NICHT für ein echtes "
-                "oder größeres Projekt, nicht für Arbeit an vorhandenem Code, nicht "
-                "für mehrere Schritte — dafür IMMER opencode, das ist der richtige "
-                "Coding-Agent. Im Zweifel opencode."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "location": {
-                        "type": "string",
-                        "description": "Ordner, z.B. 'Desktop/Rechner' oder '~/Projekte/todo-app'",
-                    },
-                    "description": {
-                        "type": "string",
-                        "description": "Ausführliche Beschreibung, was gebaut werden soll",
-                    },
-                },
-                "required": ["location", "description"],
-            },
-        },
-    },
+    # build_project (der alte, eingebaute Bau-Durchlauf) wird dem Modell
+    # bewusst NICHT mehr angeboten: Programmiert wird ausschließlich über
+    # opencode, mit dem dort gewählten Modell. Solange es zwei Wege gab, hat
+    # das kleine lokale Modell bei gleichem Satz mal den einen, mal den
+    # anderen genommen. Der Dispatch-Eintrag unten bleibt und leitet einen
+    # trotzdem erfolgenden Aufruf auf opencode um.
     {
         "type": "function",
         "function": {
@@ -263,10 +242,11 @@ TOOL_SCHEMAS = [
                 "Nutzer per set_code_agent umgestellt hat. PFLICHT, sobald am "
                 "Code gearbeitet werden soll: etwas programmieren, ändern, "
                 "refactoren, einen Bug fixen, Tests schreiben, eine Datei im "
-                "Projekt umbauen. Der Auftrag wird wortwörtlich als Prompt "
-                "eingetippt, das Terminal öffnet sich dabei automatisch. Nicht "
-                "für eine komplett neue App in einem eigenen Ordner — dafür "
-                "build_project."
+                "Projekt umbauen, eine komplett neue App bauen — AUSNAHMSLOS, "
+                "auch ein eigener Zielordner ändert daran nichts. Der Auftrag "
+                "wird wortwörtlich als Prompt eingetippt, das Terminal öffnet "
+                "sich dabei automatisch. Schreib niemals selbst Code als Text "
+                "oder über write_file."
             ),
             "parameters": {
                 "type": "object",
@@ -331,6 +311,40 @@ TOOL_SCHEMAS = [
                 },
                 "required": ["agent"],
             },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "open_file",
+            "description": (
+                "Öffnet eine einzelne Datei mit dem passenden Programm — auch eine, "
+                "die der Coding-Agent gerade angelegt hat (der Arbeitsordner wird "
+                "mitdurchsucht). Fürs ANSCHAUEN/Öffnen zuständig, nicht opencode: "
+                "das programmiert nur. Für einen Ordner open_folder, für eine "
+                "Webseite open_url."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Dateiname oder Pfad, z.B. 'signal2.txt' oder '~/Desktop/notiz.txt'"},
+                },
+                "required": ["path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "opencode_status",
+            "description": (
+                "Liest, was im Terminal des Coding-Agenten zuletzt passiert ist. "
+                "PFLICHT, sobald der Nutzer nach dem Stand fragt ('wie weit ist "
+                "er', 'ist es fertig', 'was macht er gerade') — rate den "
+                "Fortschritt niemals, sondern schau nach und fasse zusammen, was "
+                "dort steht."
+            ),
+            "parameters": {"type": "object", "properties": {}},
         },
     },
 ]
@@ -689,7 +703,15 @@ def _run_shell(command: str) -> str:
 
 
 def _build_project(location: str, description: str) -> str:
-    return coder.start_build(location, description)
+    """Wird dem Modell nicht mehr angeboten (siehe TOOL_SCHEMAS), kann aber
+    weiterhin aus einem halluzinierten Namen heraus ankommen. Programmiert
+    wird ausschließlich über opencode, also landet auch das dort — mit dem
+    Ort im Auftragstext, damit die Angabe nicht verloren geht."""
+    task = str(description or "").strip()
+    where = str(location or "").strip()
+    if where:
+        task = f"{task} (im Ordner {where})" if task else f"Arbeite im Ordner {where}"
+    return _opencode(task)
 
 
 def _move_file(source: str, destination: str) -> str:
@@ -754,10 +776,33 @@ def _delete_path(description: str) -> str:
     return confirm.propose(f"Soll ich '{target.name}' wirklich in den Papierkorb verschieben?", _do_delete)
 
 
+# Dateiendungen, hinter denen Quellcode steckt. Der Nutzer will, dass
+# programmiert ausschließlich über opencode wird — ohne diese Sperre schrieb
+# das Modell den Code trotz gegenteiliger Beschreibung einfach selbst per
+# write_file (live beobachtet: ~/Desktop/zahlen.py).
+_CODE_SUFFIXES = {
+    ".py", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".html", ".htm", ".css",
+    ".scss", ".java", ".kt", ".go", ".rs", ".c", ".h", ".cpp", ".hpp", ".cs",
+    ".rb", ".php", ".swift", ".sh", ".bat", ".ps1", ".sql", ".vue", ".svelte",
+}
+
+
 def _write_file(path: str, content: str) -> str:
     target = Path(os.path.expanduser((path or "").strip().strip("\"'")))
     if not str(target):
         return "Welche Datei soll ich schreiben?"
+    if target.suffix.lower() in _CODE_SUFFIXES:
+        # Ein bloßes Verweigern reichte nicht: das Modell meldete danach
+        # trotzdem Vollzug und rief opencode NICHT auf — die Datei entstand
+        # nirgends (live beobachtet). Also hier direkt weiterreichen, damit
+        # die Arbeit wirklich in opencode und bei dessen Modell landet; der
+        # mitgelieferte Entwurf geht nur als Beschreibung mit, nicht als
+        # fertige Datei.
+        draft = (content or "").strip()
+        task = f"Schreibe die Datei {target}."
+        if draft:
+            task += " Sie soll das hier leisten:\n\n" + draft
+        return _opencode(task)
     target.parent.mkdir(parents=True, exist_ok=True)
     # Same cp1252-vs-UTF-8 trap as elsewhere in this file (see coder.py):
     # without an explicit encoding, any character outside the Windows
@@ -809,20 +854,82 @@ def _opencode(task: str) -> str:
     return f"An OpenCode weitergegeben: {task}"
 
 
+# Dateien, die das Betriebssystem beim Öffnen AUSFÜHREN würde. "Zeig mir die
+# Datei" darf kein Skript starten, also gehen die in den Editor.
+_RUNNABLE_SUFFIXES = {".py", ".js", ".mjs", ".cjs", ".ps1", ".bat", ".cmd", ".sh", ".vbs", ".jar"}
+
+
+def _open_in_editor(target: Path) -> None:
+    if shutil.which("code"):
+        subprocess.run(["code", str(target)], timeout=30, capture_output=True)
+    elif platform_utils.is_windows():
+        subprocess.run(["notepad", str(target)], timeout=30, capture_output=True)
+    elif platform_utils.is_macos():
+        subprocess.run(["open", "-t", str(target)], timeout=30, capture_output=True)
+    else:
+        subprocess.run(["xdg-open", str(target)], timeout=30, capture_output=True)
+
+
+def _open_file(path: str) -> str:
+    """Öffnet eine Datei mit dem Standardprogramm. Eigenes Tool, weil es nur
+    open_url/open_app/open_folder gab — eine einzelne Datei konnte Jarvis gar
+    nicht öffnen und reichte die Bitte deshalb an opencode weiter, das sie
+    nicht öffnet."""
+    raw = (path or "").strip().strip("\"'")
+    if not raw:
+        return "Welche Datei soll ich öffnen?"
+    target = Path(os.path.expanduser(raw))
+    if not target.is_absolute() or not target.exists():
+        # Dateien, die opencode gerade angelegt hat, liegen in dessen
+        # Arbeitsordner — dort zuerst nachsehen, bevor aufgegeben wird.
+        for base in (Path.cwd(), Path(opencode_agent.get_code_dir()), platform_utils.desktop_dir(), Path.home()):
+            candidate = base / raw
+            if candidate.exists():
+                target = candidate
+                break
+    if not target.exists():
+        return f"Die Datei {raw} finde ich nicht."
+    try:
+        if target.suffix.lower() in _RUNNABLE_SUFFIXES:
+            # "Öffne zahlen.py" darf das Skript NICHT ausführen: unter Windows
+            # startet os.startfile eine .py/.bat/.ps1 einfach, statt sie zu
+            # zeigen. Solche Dateien landen deshalb im Editor.
+            _open_in_editor(target)
+        elif platform_utils.is_windows():
+            os.startfile(str(target))  # noqa: S606 - genau dafür gedacht
+        elif platform_utils.is_macos():
+            subprocess.run(["open", str(target)], timeout=30, capture_output=True)
+        else:
+            subprocess.run(["xdg-open", str(target)], timeout=30, capture_output=True)
+    except Exception as exc:  # noqa: BLE001 - Öffnen kann am OS scheitern
+        return f"Konnte {target} nicht öffnen: {exc}"
+    last_target.remember(target)
+    return f"Geöffnet: {target}"
+
+
+def _opencode_status() -> str:
+    text = opencode_agent.recent_output(1800)
+    if not text:
+        return "Im Coding-Terminal ist noch nichts passiert (es läuft gerade keins)."
+    return "Letzte Ausgabe im Coding-Terminal:\n" + text
+
+
 def _opencode_model(name: str) -> str:
     """Stellt das Modell um, mit dem opencode arbeitet. Die Wahl landet in der
     opencode-Konfiguration, die nur beim Start der TUI gelesen wird — deshalb
     schickt der Panel-Push das Frontend dazu, das Terminal neu zu starten."""
-    models = opencode_agent.list_models()
-    if not models:
-        return "LM Studio meldet gerade keine Modelle."
-    if not str(name or "").strip():
-        return "Verfügbar für OpenCode: " + ", ".join(m["id"] for m in models[:8])
-    chosen = opencode_agent.resolve_model(name)
+    # Alle Modelle, die opencode kennt — auch seine eigenen kostenlosen
+    # (opencode/big-pickle und Co.), nicht nur die aus LM Studio.
+    available = opencode_agent.list_all_models()
+    if not available:
+        return "OpenCode meldet gerade keine Modelle."
+    chosen = opencode_agent.resolve_model(name, available)
     if not chosen:
-        return f'Kein Modell gefunden, das zu "{name}" passt. Verfügbar: ' + ", ".join(m["id"] for m in models[:8])
+        return f'Kein Modell gefunden, das zu "{name}" passt. Verfügbar: ' + ", ".join(available[:10])
     opencode_agent.set_selected_model(chosen)
-    opencode_agent.ensure_provider_config(models, chosen)
+    lm_models = opencode_agent.list_models()
+    if lm_models:
+        opencode_agent.ensure_provider_config(lm_models, chosen)
     panel.push("opencode_model", model=chosen)
     return f"OpenCode arbeitet ab jetzt mit {chosen}."
 
@@ -852,6 +959,8 @@ DISPATCH = {
     "opencode": lambda a: _opencode(a.get("task", "")),
     "opencode_model": lambda a: _opencode_model(a.get("model", "")),
     "set_code_agent": lambda a: _set_code_agent(a.get("agent", "")),
+    "opencode_status": lambda a: _opencode_status(),
+    "open_file": lambda a: _open_file(a.get("path", "")),
     "open_url": lambda a: _open_url(a.get("url", "")),
     "youtube_search": lambda a: _youtube_search(a.get("query", "")),
     "web_search": lambda a: _web_search(a.get("query", "")),
