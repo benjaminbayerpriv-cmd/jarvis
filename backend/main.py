@@ -729,7 +729,7 @@ def code_status():
     models = opencode_agent.list_models() if agent == "opencode" else []
     default = opencode_agent.default_model() if agent == "opencode" else ""
     if models:
-        opencode_agent.ensure_provider_config(models, default)
+        opencode_agent.ensure_provider_config(models, opencode_agent.startup_model())
     return {
         "model": config.LM_STUDIO_MODEL,
         "default": default,
@@ -805,6 +805,7 @@ async def code_tty_ws(websocket: WebSocket):
     wdir = opencode_agent.get_code_dir()
     session_id = websocket.query_params.get("session_id") or None
     try:
+        opencode_agent.reset_output()
         tty = opencode_agent.start_tty(wdir, session_id=session_id)
     except (RuntimeError, OSError) as exc:
         # RuntimeError: z.B. kein PTY auf diesem OS (Windows).
@@ -829,6 +830,10 @@ async def code_tty_ws(websocket: WebSocket):
                 if not data:
                     break
                 opencode_agent.answer_terminal_queries(tty, data, tty_state)
+                # Mitschneiden, damit Jarvis sagen kann, was opencode gerade
+                # tut (Tool "opencode_status") — der Browser ist sonst der
+                # Einzige, der die Ausgabe je zu sehen bekommt.
+                opencode_agent.note_output(data)
                 loop.call_soon_threadsafe(out_q.put_nowait, ("data", data))
         except OSError:
             pass

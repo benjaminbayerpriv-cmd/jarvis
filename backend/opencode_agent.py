@@ -30,6 +30,7 @@ import signal
 import sqlite3
 import struct
 import subprocess
+import threading
 import time
 
 try:
@@ -307,6 +308,129 @@ def current_model() -> str:
     return config.LM_STUDIO_MODEL
 
 
+# Mitschnitt der TUI-Ausgabe. Jarvis schickt Aufträge an opencode, konnte
+# bisher aber nicht sehen, was dabei herauskommt — auf "wie weit ist er?"
+# blieb ihm nur Raten (und der Ehrlichkeits-Filter machte daraus zu Recht
+# "das habe ich nicht ausgeführt"). Der WebSocket-Pump in main.py reicht
+# jeden Block hier durch; opencode_status() liest das Ende wieder aus.
+_OUTPUT_LIMIT = 60000
+_output_lock = threading.Lock()
+_output_buf: list[str] = []
+
+
+def note_output(data: bytes) -> None:
+    try:
+        text = data.decode("utf-8", errors="replace")
+    except Exception:  # noqa: BLE001 - Mitschnitt darf den PTY nie stören
+        return
+    with _output_lock:
+        _output_buf.append(text)
+        total = sum(len(p) for p in _output_buf)
+        while total > _OUTPUT_LIMIT and len(_output_buf) > 1:
+            total -= len(_output_buf.pop(0))
+    _check_state()
+
+
+def reset_output() -> None:
+    global _state, _state_checked_at
+    with _output_lock:
+        _output_buf.clear()
+    _state = "idle"
+    _state_checked_at = 0.0
+
+
+# Zustandswechsel der TUI melden, damit Jarvis von sich aus Bescheid sagen
+# kann — sonst merkt der Nutzer nie, dass opencode auf eine Antwort wartet
+# oder längst fertig ist (er sieht das Terminal ja nicht zwangsläufig an).
+_state = "idle"          # idle | busy | permission
+_state_checked_at = 0.0
+_STATE_MIN_INTERVAL = 0.5
+
+
+def _check_state() -> None:
+    global _state, _state_checked_at
+    now = time.monotonic()
+    # Die TUI zeichnet bei jedem Tastendruck komplett neu; ohne Drossel
+    # liefe die Auswertung hunderte Male pro Sekunde.
+    if now - _state_checked_at < _STATE_MIN_INTERVAL:
+        return
+    _state_checked_at = now
+    # Bewusst nur ein kurzes Stück: die TUI zeichnet ihren ganzen Bildschirm
+    # bei jeder Änderung neu, und in einem längeren Ausschnitt steht das
+    # "esc interrupt" vergangener Neuzeichnungen noch drin — der Zustand
+    # bliebe dann für immer auf "beschäftigt" (live beobachtet: die
+    # Fertig-Meldung kam nie).
+    screen = recent_output(600).lower()
+    if not screen:
+        return
+    if "has crashed" in screen:
+        new_state = "crashed"
+    elif "permission required" in screen:
+        new_state = "permission"
+    elif "esc interrupt" in screen:
+        new_state = "busy"
+    else:
+        new_state = "idle"
+    if new_state == _state:
+        return
+    previous, _state = _state, new_state
+    if new_state == "permission":
+        _announce("OpenCode braucht eine Freigabe und wartet auf dich.")
+    elif new_state == "crashed":
+        _announce("OpenCode ist abgestürzt.")
+    elif new_state == "idle" and previous in ("busy", "permission"):
+        _announce("OpenCode ist fertig.")
+
+
+def _announce(text: str) -> None:
+    # Spät importiert: panel importiert transcript_log, und ein Import ganz
+    # oben würde den Modulkreis schließen.
+    from . import panel
+
+    panel.push("opencode_event", text=text)
+
+
+_ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b[\]P][^\x07\x1b]*(?:\x07|\x1b\\)?|\x1b[@-Z\\-_]")
+
+
+def recent_output(max_chars: int = 2000) -> str:
+    """Die letzten lesbaren Zeilen der TUI — ohne Steuerzeichen und ohne die
+    Rahmen-/Füllzeichen, mit denen die Oberfläche ihr Layout malt."""
+    with _output_lock:
+        raw = "".join(_output_buf)
+    if not raw:
+        return ""
+    plain = _ANSI_RE.sub("", raw).replace("\r", "\n")
+    lines = []
+    for ln in plain.split("\n"):
+        ln = "".join(ch for ch in ln if ch == "\t" or ch >= " ")
+        ln = ln.replace("█", " ").strip(" ─│┌┐└┘░▒▓")
+        if ln.strip():
+            lines.append(ln.rstrip())
+    # Aufeinanderfolgende Dubletten: die TUI zeichnet denselben Bildschirm
+    # bei jedem Tastendruck neu, sonst steht alles zigfach da.
+    deduped = [ln for i, ln in enumerate(lines) if i == 0 or ln != lines[i - 1]]
+    return "\n".join(deduped)[-max_chars:]
+
+
+def list_all_models() -> list[str]:
+    """Alle Modelle, die opencode kennt — als vollständige IDs inklusive
+    Provider ("lmstudio/qwen/qwen3.5-9b", "opencode/big-pickle").
+
+    Bewusst über `opencode models` statt über LM Studio: opencode bringt
+    eigene (auch kostenlose) Modelle mit, die LM Studio gar nicht kennt und
+    die sonst nicht auswählbar wären.
+    """
+    try:
+        out = subprocess.run(
+            [OPENCODE_BIN, "models"],
+            capture_output=True, text=True, timeout=60,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return []
+    return [ln.strip() for ln in out.splitlines() if "/" in ln and not ln.startswith(" ")]
+
+
 def get_selected_model() -> str:
     """Das ausdrücklich für opencode gewählte Modell (z.B. per Sprachbefehl),
     oder "" wenn noch keins gesetzt wurde."""
@@ -319,22 +443,23 @@ def set_selected_model(model_id: str) -> None:
     config.CONFIG_FILE.write_text(json.dumps(cfg, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
-def resolve_model(name: str) -> str | None:
-    """Findet zu einer gesprochenen Bezeichnung ("das GPT OSS", "qwen coder")
-    die echte Modell-ID. Gesucht wird stur über Wortteile, weil die
-    Spracherkennung Bindestriche, Punkte und Großschreibung frei erfindet."""
+def resolve_model(name: str, available: list[str] | None = None) -> str | None:
+    """Findet zu einer gesprochenen Bezeichnung ("das GPT OSS", "Big Pickle",
+    "qwen coder") die vollständige Modell-ID. Gesucht wird stur über
+    Wortteile, weil die Spracherkennung Bindestriche, Punkte und
+    Großschreibung frei erfindet."""
     wanted = [w for w in re.split(r"[^a-z0-9]+", str(name or "").lower()) if len(w) > 1]
     if not wanted:
         return None
     best, best_score = None, 0
-    for m in list_models():
-        hay = re.split(r"[^a-z0-9]+", m["id"].lower())
+    # Die Liste kostet einen Prozessstart — wer sie schon hat, reicht sie
+    # durch, statt die Binary ein zweites Mal zu befragen.
+    for full_id in (available if available is not None else list_all_models()):
+        hay = re.split(r"[^a-z0-9]+", full_id.lower())
         score = sum(1 for w in wanted if any(w in part or part in w for part in hay))
-        # Bei Gleichstand gewinnt das Modell, das opencode auch wirklich packt.
-        if score > best_score or (score == best_score and score > 0 and best
-                                  and m.get("loaded_context", 0) > best.get("loaded_context", 0)):
-            best, best_score = m, score
-    return best["id"] if best else None
+        if score > best_score:
+            best, best_score = full_id, score
+    return best
 
 
 def default_model() -> str:
@@ -364,6 +489,22 @@ def default_model() -> str:
     return (coders[0]["id"] if coders else enough[0]["id"])
 
 
+def startup_model() -> str:
+    """Vollständige Modell-ID, mit der die TUI starten soll — die
+    ausdrückliche Wahl, sonst die Heuristik aus default_model()."""
+    picked = get_selected_model()
+    if picked:
+        if picked.startswith(PROVIDER_ID + "/"):
+            return picked
+        # Ältere gespeicherte Werte waren reine LM-Studio-IDs ohne Provider;
+        # alles andere (z.B. "opencode/big-pickle") ist bereits vollständig.
+        if any(m["id"] == picked for m in list_models()):
+            return f"{PROVIDER_ID}/{picked}"
+        return picked
+    fallback = default_model()
+    return f"{PROVIDER_ID}/{fallback}" if fallback else ""
+
+
 def get_code_dir() -> str:
     cfg = config.load_config()
     d = str(cfg.get("code_dir", "")).strip() or DEFAULT_CODE_DIR
@@ -382,7 +523,7 @@ def set_code_dir(dir_path: str) -> None:
     config.CONFIG_FILE.write_text(json.dumps(cfg, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
-def ensure_provider_config(models: list[dict], default_model_name: str) -> dict:
+def ensure_provider_config(models: list[dict], model_id: str) -> dict:
     """Merge an ``lmstudio`` provider into the opencode config.
 
     Preserves every existing key (the user's ``ollama-lan`` provider, etc.).
@@ -404,7 +545,10 @@ def ensure_provider_config(models: list[dict], default_model_name: str) -> dict:
         "options": {"baseURL": config.LM_STUDIO_BASE_URL, "apiKey": "lm-studio"},
         "models": {m["id"]: {"name": m["id"]} for m in models},
     }
-    cfg["model"] = f"{PROVIDER_ID}/{default_model_name}"
+    # model_id ist eine vollständige ID inklusive Provider — auch ein Modell
+    # von opencode selbst (z.B. "opencode/big-pickle") muss hier stehen
+    # können, nicht nur eins aus LM Studio.
+    cfg["model"] = model_id
     OPENCODE_CONFIG.parent.mkdir(parents=True, exist_ok=True)
     OPENCODE_CONFIG.write_text(json.dumps(cfg, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     return cfg
@@ -549,7 +693,7 @@ def _build_cmd(agent_id: str, workdir: str, session_id: str | None) -> list[str]
 
     # opencode (Standard)
     models = list_models()
-    wanted = default_model()
+    wanted = startup_model()
     if models:
         ensure_provider_config(models, wanted)
     cmd = [OPENCODE_BIN, workdir]
@@ -560,8 +704,12 @@ def _build_cmd(agent_id: str, workdir: str, session_id: str | None) -> list[str]
     # startete damit weiter, obwohl die Konfiguration längst ein anderes nannte
     # (live gesehen: Konfiguration devstral, TUI lief mit gpt-oss). --model
     # setzt es für diesen Start verbindlich.
-    if models and wanted:
-        cmd += ["--model", f"{PROVIDER_ID}/{wanted}"]
+    # wanted ist bereits vollständig (Provider inklusive, siehe startup_model)
+    # — hier NICHT noch einmal präfixen, sonst startet die TUI mit
+    # "lmstudio/lmstudio/…", verwirft die unbekannte ID stillschweigend und
+    # nimmt ihr gemerktes Modell (live beobachtet).
+    if wanted:
+        cmd += ["--model", wanted]
     return cmd
 
 

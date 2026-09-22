@@ -395,6 +395,22 @@
     audioQueue.push(blob);
     if (!audioDraining) drainAudioQueue();
   }
+
+  // Kurze Ansage außerhalb eines Turns (z.B. "OpenCode ist fertig"): eigener
+  // Weg über /tts, weil solche Meldungen nicht aus dem Antwort-Stream
+  // kommen. Landet in derselben Warteschlange und drängelt sich damit nicht
+  // in eine gerade laufende Antwort.
+  async function speakNotice(text) {
+    try {
+      const r = await fetch('/tts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reply: text }),
+      });
+      if (!r.ok) return;
+      enqueueClip(await r.blob());
+    } catch (e) { /* stumm bleiben ist besser als ein Fehler im Sprachmodus */ }
+  }
   // "Echtzeit"-Lückenfüller: TTS synthetisiert satz-/häppchenweise, sobald
   // ein Satz vom LLM fertig ist (siehe backend/main.py chat/stream) — bei
   // einem schnellen Modell ist die Warteschlange aber schneller leer, als
@@ -2817,6 +2833,28 @@
       if (speechMode) noteSpeechReply('Coding-Agent: ' + String(item.name || ''));
       return;
     }
+    if (item.kind === 'opencode_event') {
+      // Meldung vom Coding-Agenten selbst (wartet auf Freigabe, fertig,
+      // abgestürzt). Im Sprachmodus sagt Jarvis sie an — sonst bekäme man
+      // sie gar nicht mit, weil dort der Verlauf gar nicht sichtbar ist. Im
+      // getippten Chat bleibt es bei einem Hinweis im Verlauf, ohne
+      // unaufgefordert zu reden.
+      const msg = String(item.text || '');
+      if (!msg) return;
+      if (speechMode) {
+        noteSpeechReply(msg);
+        speakNotice(msg);
+        return;
+      }
+      const hostE = progressHost();
+      if (!hostE) return;
+      const e = document.createElement('div');
+      e.style.cssText = `padding:10px 12px;border:1px solid ${C.border};border-left:3px solid ${C.accent};border-radius:10px;background:${C.bgSurface3};font-size:13px;color:${C.text};`;
+      e.textContent = msg;
+      hostE.appendChild(e);
+      scrollThread();
+      return;
+    }
     if (item.kind === 'opencode_model') {
       // opencode liest sein Modell nur beim Start — ein laufendes Terminal
       // muss also neu hochkommen, sonst arbeitet es stillschweigend weiter
@@ -2829,11 +2867,13 @@
       return;
     }
     if (item.kind === 'opencode') {
-      // Im Sprachmodus wandert der Auftrag direkt in die eingeblendete
-      // OpenCode-TUI. Außerhalb bleibt er sichtbarer Text im Verlauf — dort
-      // ist der Code-Tab der richtige Ort, ein Overlay über den Chat zu
-      // legen wäre überraschend.
-      if (speechMode) { sendTaskToOpenCode(item.task); return; }
+      // Auch im getippten Chat: Jarvis sagt "das Terminal öffnet sich" —
+      // wenn dann nur ein Textblock erscheint, ist der Auftrag faktisch ins
+      // Leere gegangen und es sieht aus, als hätte er keinen Zugriff auf
+      // OpenCode. Der Verlaufseintrag bleibt zusätzlich, damit man später
+      // noch nachlesen kann, was weitergereicht wurde.
+      sendTaskToOpenCode(item.task);
+      if (speechMode) return;
       const hostO = progressHost();
       if (!hostO) return;
       const o = document.createElement('div');
@@ -3716,6 +3756,13 @@
     const namesCode = /\b(open ?-? ?code|opencode|obencode)\b/.test(t);
     const namesTerminal = /\b(terminal|konsole)\b/.test(t);
     if (!namesCode && !namesTerminal) return null;
+    // Fenstersteuerung ist ein kurzes Kommando ("öffne Open Code"). Sobald
+    // ein ganzer Auftrag drumherum steht, gehört der Satz Jarvis — sonst
+    // kapert "Öffne bitte die Datei, die OpenCode erstellt hat" den Befehl
+    // und die Bitte erreicht das Modell nie (live passiert).
+    const bareWords = t.replace(/\b(jarvis|bitte|mal|doch|hey|der|die|das|den|dem|mir|mal)\b/g, ' ')
+      .split(/\s+/).filter(Boolean);
+    if (bareWords.length > 5) return null;
     // Bewusst ohne \b/\w um die Verben: JavaScripts \w ist reines ASCII, "ß"
     // gilt darin als Nicht-Wortzeichen — "schließ das Terminal" fiel damit
     // durch die Wortgrenze und landete als Prompt in opencode (live gesehen).
