@@ -1043,14 +1043,29 @@ _ACTION_PARTICIPLE_RE = re.compile(
     r"\b(?:geöffnet|gespeichert|erstellt|angelegt|ausgeführt|hinzugefügt|notiert|"
     r"geklickt|gestartet|getippt|gedrückt|eingerichtet|installiert|verschoben|"
     r"gelöscht|kopiert|aufgenommen|abgeschickt|gesendet|gesperrt|entsperrt|"
-    r"heruntergefahren|neugestartet|gesichert|verriegelt|aktiviert|deaktiviert)\b",
+    r"heruntergefahren|neugestartet|gesichert|verriegelt|aktiviert|deaktiviert|"
+    r"weitergegeben|weitergeleitet)\b",
+    re.IGNORECASE,
+)
+# Handing a coding task to the opencode tool has its own characteristic
+# phrasing ("Ich habe den Auftrag ... gegeben") that the participle list
+# above doesn't fully cover — a bare "gegeben" is too generic on its own
+# (also shows up in plenty of unrelated honest sentences), but "gegeben"
+# right after "Auftrag" specifically is not (observed live, five times
+# over five otherwise-identical requests: the model claimed exactly this
+# without ever calling opencode, and neither this word nor
+# "weitergegeben" above existed anywhere in this file's claim detection —
+# it was built up for the older open/save/delete/click tools and never
+# extended when opencode was added).
+_TASK_HANDOFF_RE = re.compile(
+    r"\bauftrag\b[^.!?]{0,60}\b(?:weitergegeben|weitergeleitet|übergeben|gegeben)\b",
     re.IGNORECASE,
 )
 _CHECK_PARTICIPLE_RE = re.compile(
     r"\b(?:gefunden|durchsucht|gescannt|überprüft|geprüft|analysiert|kontrolliert)\b",
     re.IGNORECASE,
 )
-_NEGATION_RE = re.compile(r"\b(?:nicht|kein|keine|keinen|keinem|keiner)\b", re.IGNORECASE)
+_NEGATION_RE = re.compile(r"\b(?:nicht|nichts|kein|keine|keinen|keinem|keiner)\b", re.IGNORECASE)
 
 # "I'm doing/will do X" reads as just as done as a past participle to a
 # listener, in any tense or mood — observed live first with present tense
@@ -1092,7 +1107,7 @@ _CLAUSE_BOUNDARY_WORDS = {
 # gelöscht" is still two real claims) — conflating the two would wrongly
 # swallow the second half of a compound claim too.
 _SUBORDINATORS = _CLAUSE_BOUNDARY_WORDS - {"oder", "und"}
-_NEGATION_WORDS = {"nicht", "kein", "keine", "keinen", "keinem", "keiner"}
+_NEGATION_WORDS = {"nicht", "nichts", "kein", "keine", "keinen", "keinem", "keiner"}
 # "ich KANN X" states general capability/ability, not that X is happening or
 # will happen — unlike "ich werde/muss/will X", which _ACTION_STEM_RE's own
 # comment deliberately treats as committing to the action. Cancels a match
@@ -1205,6 +1220,7 @@ def _claims_action(text: str) -> bool:
             _bare_participle_claim(sentence, _CHECK_PARTICIPLE_RE)
             or (_bare_participle_claim(sentence, _ACTION_PARTICIPLE_RE) and not negated)
             or _direct_ich_claim(sentence)
+            or (bool(_TASK_HANDOFF_RE.search(sentence)) and not negated)
         )
         if not is_claim:
             continue
@@ -1224,20 +1240,49 @@ def _looks_like_tool_text(text: str) -> bool:
     return bool(re.search(rf"\b(?:{names})\s*\(", text or "", re.IGNORECASE))
 
 
-def _history_has_recent_action_claim(history: list | None, lookback: int = 6) -> bool:
-    """Whether a nearby past assistant turn already reported a real action.
+_FOLLOWUP_ACTION_RE = re.compile(
+    r"\b(wirklich|tats(?:ä|ae)chlich|hast du|hat es|ist es|ist er|ist sie|"
+    r"schon fertig|erledigt|geklappt|funktioniert(?:\s+hat)?|sicher)\b",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_followup_question(user_message: str) -> bool:
+    """A short back-reference to what just happened ("hast du das wirklich
+    gemacht?", "ist es fertig?"), not a fresh request. Deliberately cheap:
+    a question mark or one of a handful of confirmation words — good enough
+    to separate "did that thing you said happen" from a new imperative."""
+    t = (user_message or "").strip()
+    if not t:
+        return False
+    return "?" in t or bool(_FOLLOWUP_ACTION_RE.search(t))
+
+
+def _history_has_recent_action_claim(user_message: str, history: list | None, lookback: int = 6) -> bool:
+    """Whether the user is asking about a real action a nearby past turn
+    already reported, rather than making a fresh request this turn.
 
     Anything sitting in history already passed this same vet check when it
     was first generated — an action claim only survives into history if a
-    tool really ran that turn (see _vet below). So if one shows up nearby,
-    a follow-up like "hast du das wirklich gemacht?" is asking about
-    something that genuinely happened, not making a fresh, unverified
-    claim — and must not be blocked just because no tool ran in *this*
-    turn (observed live: user asked exactly that after a real open_app
-    call, and Jarvis's honest "ja, hab ich" got replaced with "Das habe
-    ich nicht ausgeführt.", flatly contradicting an action it had just
-    completed).
+    tool really ran that turn (see _vet below). So if one shows up nearby
+    AND the user's current message reads like a follow-up about it ("hast
+    du das wirklich gemacht?"), that's asking about something that
+    genuinely happened, not making a fresh, unverified claim — and must
+    not be blocked just because no tool ran in *this* turn (observed live:
+    user asked exactly that after a real open_app call, and Jarvis's
+    honest "ja, hab ich" got replaced with "Das habe ich nicht
+    ausgeführt.", flatly contradicting an action it had just completed).
+
+    The follow-up check matters: without it, ANY nearby real action —
+    regardless of what the new message actually asks for — exempted the
+    whole turn from the check, letting an unrelated fresh claim slip
+    through unverified (observed live: a real set_code_agent call one turn,
+    then "Ich gebe den Auftrag an Claude Code weiter" the next with no
+    opencode call behind it at all, waved through only because
+    set_code_agent still counted as "recent").
     """
+    if not _looks_like_followup_question(user_message):
+        return False
     for msg in (history or [])[-lookback:]:
         if msg.get("role") == "assistant" and _claims_action(msg.get("content") or ""):
             return True
@@ -1353,7 +1398,7 @@ def _stream_reply_impl(user_message: str, history: list | None = None, turn_id: 
     # this only widens the exemption for claims that echo/confirm one of
     # those, never for a claim about something new (see
     # _history_has_recent_action_claim).
-    recent_action_confirmed = _history_has_recent_action_claim(history)
+    recent_action_confirmed = _history_has_recent_action_claim(user_message, history)
 
     def _vet(text: str) -> str:
         """Swap a sentence for an honest one if it fails the same checks
@@ -1708,7 +1753,7 @@ def get_reply(user_message: str, history: list | None = None, mode: str | None =
 
     last_tool_result = None
     tool_ran = False
-    recent_action_confirmed = _history_has_recent_action_claim(history)
+    recent_action_confirmed = _history_has_recent_action_claim(user_message, history)
 
     for _ in range(MAX_TOOL_ROUNDS):
         data = _post_chat(messages)
