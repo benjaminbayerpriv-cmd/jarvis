@@ -3,18 +3,21 @@ from __future__ import annotations
 import datetime
 import json
 import re
-import shutil
 import subprocess
-import sys
 from pathlib import Path
 
 import requests
 
-from . import confirm, config, last_target, memory, tools
+from . import confirm, config, hardware, last_target, memory, tools
 
 
 class ModelError(RuntimeError):
     """A local-model failure that must become a user-facing response."""
+
+
+class ModelTooLargeError(ModelError):
+    """The configured model doesn't fit into this PC's memory; the message
+    is meant to be shown/spoken to the user as-is."""
 
 # At low reasoning effort this model occasionally leaks raw <think>/</think>
 # markers into the content field instead of keeping them confined to
@@ -400,7 +403,14 @@ def _request_targets() -> list[tuple[str, str, dict, dict]]:
     if config.DEEPSEEK_API_KEY:
         headers = {"Authorization": f"Bearer {config.DEEPSEEK_API_KEY}"}
         targets.append((config.DEEPSEEK_BASE_URL, config.DEEPSEEK_MODEL, headers, {}))
-    targets.append((config.LM_STUDIO_BASE_URL, config.LM_STUDIO_MODEL, {}, {"reasoning_effort": "none"}))
+    # LM Studio loads a model just-in-time on the first request for it — so
+    # a model too big for this PC must never be requested at all, or that
+    # request is what triggers the crash.
+    too_large = hardware.blocked_reason(config.LM_STUDIO_MODEL)
+    if not too_large:
+        targets.append((config.LM_STUDIO_BASE_URL, config.LM_STUDIO_MODEL, {}, {"reasoning_effort": "none"}))
+    elif not targets:
+        raise ModelTooLargeError(too_large)
     return targets
 
 
@@ -693,25 +703,12 @@ def list_model_capabilities() -> dict[str, list[str]]:
     return caps
 
 
-def _find_lms_cli() -> str | None:
-    """LM Studio's own `lms` CLI is the only way to explicitly unload a
-    model — the OpenAI-compatible HTTP API has no unload endpoint, and
-    just-in-time loading alone was observed to leave a previous model
-    resident in VRAM instead of reliably evicting it on its own. `lms` is
-    usually only on PATH after the user has run `lms bootstrap` once, so
-    this also checks LM Studio's standard install location directly."""
-    found = shutil.which("lms")
-    if found:
-        return found
-    exe = "lms.exe" if sys.platform.startswith("win") else "lms"
-    default = Path.home() / ".lmstudio" / "bin" / exe
-    return str(default) if default.exists() else None
-
-
 def eject_model(model_id: str) -> None:
     """Unloads a model via `lms unload` so switching models actually
-    replaces the one in VRAM instead of leaving both loaded at once."""
-    lms = _find_lms_cli()
+    replaces the one in VRAM instead of leaving both loaded at once — the
+    OpenAI-compatible HTTP API has no unload endpoint, and just-in-time
+    loading alone was observed to leave a previous model resident."""
+    lms = hardware.find_lms_cli()
     if not lms:
         print(
             f"[model] 'lms'-CLI nicht gefunden — {model_id} bleibt in LM Studio geladen. "
@@ -1201,6 +1198,25 @@ _NOT_A_CLAIM_RE = re.compile(
 _SENTENCE_BOUNDARY_RE = re.compile(r"(?<=[.!?])\s+")
 
 
+def _sentence_is_claim(sentence: str) -> bool:
+    negated = _NEGATION_RE.search(sentence)
+    is_claim = (
+        _bare_participle_claim(sentence, _CHECK_PARTICIPLE_RE)
+        or (_bare_participle_claim(sentence, _ACTION_PARTICIPLE_RE) and not negated)
+        or _direct_ich_claim(sentence)
+        or (bool(_TASK_HANDOFF_RE.search(sentence)) and not negated)
+    )
+    if not is_claim:
+        return False
+    if _NOT_A_CLAIM_RE.search(sentence):
+        return False
+    # A real question mixed into the same sentence ("... welchen Ordner
+    # soll ich nehmen?") is Jarvis asking, not claiming.
+    if "?" in sentence:
+        return False
+    return True
+
+
 def _claims_action(text: str) -> bool:
     """A claim in one sentence isn't excused by a question mark in another.
 
@@ -1211,26 +1227,57 @@ def _claims_action(text: str) -> bool:
     has anything to do with the first sentence (observed live: exactly this
     sentence pattern, for a delete that never actually ran as a tool call).
     """
+    return any(
+        _sentence_is_claim(s.strip())
+        for s in _SENTENCE_BOUNDARY_RE.split(text or "")
+        if s.strip()
+    )
+
+
+# Most claim wording (the participle/stem lists above) is shared across many
+# tools, so "some tool ran this turn" was a reasonable proxy for "this claim
+# is backed" — until it wasn't: observed live, a real set_code_agent call
+# was enough to wave through a completely unrelated, unbacked claim "Ich
+# habe den Auftrag an Claude Code weitergegeben" the very next turn, because
+# opencode itself never ran. The task-handoff phrasing is distinctive enough
+# to map to its one real backing tool; extending this table to every other
+# participle would need a similarly tight, verified mapping for each one
+# (risking newly flagging genuine claims from a wrong guess) and hasn't been
+# done — this stays scoped to the one gap actually observed.
+_CLAIM_TOOL_REQUIREMENTS: tuple[tuple[re.Pattern, frozenset[str]], ...] = (
+    (_TASK_HANDOFF_RE, frozenset({"opencode"})),
+)
+
+
+def _required_tools_for_claim(sentence: str) -> frozenset[str] | None:
+    """Which specific tool(s) would back this sentence's claim, or None to
+    fall back to the old, coarser "some tool ran this turn" rule."""
+    for pattern, required in _CLAIM_TOOL_REQUIREMENTS:
+        if pattern.search(sentence):
+            return required
+    return None
+
+
+def _unbacked_claim(text: str, tools_used, recent_action_confirmed: bool) -> bool:
+    """Whether `text` contains a claim not backed by what actually ran.
+
+    A specifically-mapped claim (see _CLAIM_TOOL_REQUIREMENTS) needs its own
+    named tool in `tools_used`; every other claim keeps the old, coarser
+    rule of needing just some tool to have run this turn.
+    """
+    if recent_action_confirmed:
+        return False
+    used = set(tools_used)
     for sentence in _SENTENCE_BOUNDARY_RE.split(text or ""):
         sentence = sentence.strip()
-        if not sentence:
+        if not sentence or not _sentence_is_claim(sentence):
             continue
-        negated = _NEGATION_RE.search(sentence)
-        is_claim = (
-            _bare_participle_claim(sentence, _CHECK_PARTICIPLE_RE)
-            or (_bare_participle_claim(sentence, _ACTION_PARTICIPLE_RE) and not negated)
-            or _direct_ich_claim(sentence)
-            or (bool(_TASK_HANDOFF_RE.search(sentence)) and not negated)
-        )
-        if not is_claim:
-            continue
-        if _NOT_A_CLAIM_RE.search(sentence):
-            continue
-        # A real question mixed into the same sentence ("... welchen Ordner
-        # soll ich nehmen?") is Jarvis asking, not claiming.
-        if "?" in sentence:
-            continue
-        return True
+        required = _required_tools_for_claim(sentence)
+        if required is not None:
+            if not (required & used):
+                return True
+        elif not used:
+            return True
     return False
 
 
@@ -1405,9 +1452,7 @@ def _stream_reply_impl(user_message: str, history: list | None = None, turn_id: 
         the old end-of-turn gate used to run on the whole reply at once —
         now run per sentence so a lone false claim doesn't hold up (or
         taint) everything spoken around it."""
-        if _looks_like_tool_text(text) or (
-            not tools_used and not recent_action_confirmed and _claims_action(text)
-        ):
+        if _looks_like_tool_text(text) or _unbacked_claim(text, tools_used, recent_action_confirmed):
             print(f"[vet] Ersetze mutmaßlich falsche Aktionsbehauptung: {text!r}")
             return "Das habe ich nicht ausgeführt."
         if _is_repetition_loop(text):
@@ -1427,12 +1472,7 @@ def _stream_reply_impl(user_message: str, history: list | None = None, turn_id: 
     pending_claims: list[str] = []
 
     def _is_pending_claim_risk(text: str) -> bool:
-        return (
-            not _looks_like_tool_text(text)
-            and not tools_used
-            and not recent_action_confirmed
-            and _claims_action(text)
-        )
+        return not _looks_like_tool_text(text) and _unbacked_claim(text, tools_used, recent_action_confirmed)
 
     def _flush_pending_claims():
         nonlocal pending_claims
@@ -1752,7 +1792,7 @@ def get_reply(user_message: str, history: list | None = None, mode: str | None =
     messages = _build_messages(user_message, history, mode)
 
     last_tool_result = None
-    tool_ran = False
+    tools_used: list[str] = []
     recent_action_confirmed = _history_has_recent_action_claim(user_message, history)
 
     for _ in range(MAX_TOOL_ROUNDS):
@@ -1770,7 +1810,7 @@ def get_reply(user_message: str, history: list | None = None, mode: str | None =
                 name, args = recovered
                 result = tools.call_tool(name, args)
                 last_tool_result = result
-                tool_ran = True
+                tools_used.append(name)
                 messages.append({"role": "assistant", "content": content})
                 messages.append({"role": "user", "content": f"[Ergebnis von {name}: {result}]"})
                 continue
@@ -1780,9 +1820,7 @@ def get_reply(user_message: str, history: list | None = None, mode: str | None =
                 # reported doing it either (see
                 # _history_has_recent_action_claim — same reasoning as the
                 # streaming path in stream_reply).
-                if _looks_like_tool_text(content) or (
-                    not tool_ran and not recent_action_confirmed and _claims_action(content)
-                ):
+                if _looks_like_tool_text(content) or _unbacked_claim(content, tools_used, recent_action_confirmed):
                     return "Das habe ich nicht ausgeführt."
                 return content
             # Model sometimes returns empty text right after a tool call —
@@ -1798,7 +1836,7 @@ def get_reply(user_message: str, history: list | None = None, mode: str | None =
                 args = {}
             result = tools.call_tool(fn["name"], args)
             last_tool_result = result
-            tool_ran = True
+            tools_used.append(fn["name"])
             messages.append(
                 {
                     "role": "tool",

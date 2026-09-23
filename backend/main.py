@@ -18,7 +18,7 @@ from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import browser_agent, config, conversations, fillers, llm_client, memory, opencode_agent, panel, projects, stt, transcript_log, tts, vector_memory
+from . import browser_agent, config, conversations, fillers, hardware, llm_client, memory, opencode_agent, panel, projects, stt, transcript_log, tts, vector_memory
 
 app = FastAPI(title="Jarvis")
 app.add_middleware(
@@ -96,10 +96,18 @@ async def on_startup():
     cached on disk) and start the panel pump."""
     global filler_urls, thinking_filler_url
     memory.initialize()
+    fit = hardware.check_model(config.LM_STUDIO_MODEL)
+    if not fit["fits"]:
+        hardware.block(config.LM_STUDIO_MODEL, fit["message"])
+        print(f"[model] {fit['message']}")
+        panel.push("notify", text=fit["message"])
     healthy, detail = llm_client.model_health()
-    print(f"[model] {detail}")
-    if not healthy:
-        panel.push("notify", text=detail)
+    # model_health only checks that LM Studio lists the model, so its
+    # "Modell bereit" would contradict the too-large warning just given.
+    if fit["fits"]:
+        print(f"[model] {detail}")
+        if not healthy:
+            panel.push("notify", text=detail)
 
     def _generate():
         global filler_urls, thinking_filler_url
@@ -288,6 +296,8 @@ app.mount("/static", NoCacheStatic(directory=FRONTEND_DIR), name="static")
 def chat(req: ChatRequest):
     try:
         reply = llm_client.get_reply(req.message, req.history, req.mode)
+    except llm_client.ModelTooLargeError as exc:
+        reply = str(exc)
     except (requests.RequestException, llm_client.ModelError):
         reply = (
             "I can't reach my language model right now. "
@@ -462,6 +472,7 @@ def chat_stream(req: ChatRequest):
                     _generate_title_in_background(req.message, full_text)
         except (requests.RequestException, llm_client.ModelError, KeyError, IndexError) as exc:
             fallback = (
+                str(exc) if isinstance(exc, llm_client.ModelTooLargeError) else
                 "I can't reach my language model right now. "
                 "Please check whether Gemma is loaded in LM Studio."
             )
@@ -635,11 +646,20 @@ def list_models():
     try:
         model_ids = llm_client.list_models()
         caps = llm_client.list_model_capabilities()
+        fit = hardware.check_models(
+            list(dict.fromkeys([*model_ids, config.LM_STUDIO_MODEL])),
+            freeable_ids=[config.LM_STUDIO_MODEL],
+        )
         return {
             "models": model_ids,
             "current": config.LM_STUDIO_MODEL,
             "model_caps": caps,
             "current_caps": caps.get(config.LM_STUDIO_MODEL, []),
+            "model_fit": fit,
+            "current_fit": {
+                "fits": not hardware.blocked_reason(config.LM_STUDIO_MODEL),
+                "message": hardware.blocked_reason(config.LM_STUDIO_MODEL),
+            },
         }
     except requests.RequestException as exc:
         return {"models": [], "current": config.LM_STUDIO_MODEL, "error": str(exc)}
@@ -648,10 +668,21 @@ def list_models():
 @app.post("/models/select")
 def select_model(req: SelectModelRequest):
     previous_model = config.LM_STUDIO_MODEL
+    fit = hardware.check_model(req.model, freeable_ids=[previous_model])
+    if not fit["fits"]:
+        print(f"[model] {fit['message']}")
+        return {"ok": False, "error": fit["message"], "current": previous_model}
+    # Fits only once the previous model is out of memory: unload it BEFORE
+    # loading the new one. The usual load-then-unload order (below) would
+    # briefly hold both, which is exactly the overload this check prevents.
+    eject_first = not fit["fits_now"] and previous_model and previous_model != req.model
+    hardware.unblock_all()
     config.set_model(req.model)
     llm_client._note_active_target(config.LM_STUDIO_BASE_URL, req.model)
 
     def _switch():
+        if eject_first:
+            llm_client.eject_model(previous_model)
         # A minimal completion request is what actually makes LM Studio's
         # just-in-time loading load the new model — it won't otherwise
         # happen until the next real chat turn. Only once that succeeds is
@@ -672,7 +703,7 @@ def select_model(req: SelectModelRequest):
         except requests.RequestException as exc:
             print(f"[model] Warmladen von {req.model} fehlgeschlagen: {exc}")
             return
-        if previous_model and previous_model != req.model:
+        if not eject_first and previous_model and previous_model != req.model:
             llm_client.eject_model(previous_model)
 
     threading.Thread(target=_switch, daemon=True).start()
