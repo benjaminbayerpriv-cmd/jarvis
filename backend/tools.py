@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import ast
 import datetime
+import operator
 import os
 import platform
 import re
@@ -37,6 +39,31 @@ TOOL_SCHEMAS = [
                 "ist heute', 'welcher Wochentag' nutzen — nicht den Kalender öffnen."
             ),
             "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "calculate",
+            "description": (
+                "Berechnet einen mathematischen Ausdruck exakt (+, -, *, /, ^, Klammern, "
+                "Prozent). Nutze das IMMER bei jeder Rechnung, egal wie einfach — auch "
+                "'acht geteilt durch zwei' oder Kopfrechnen —, statt das Ergebnis selbst "
+                "zu erfinden. Ein Sprachmodell rechnet unzuverlässig, besonders bei "
+                "Division; nur dieses Tool liefert das echte Ergebnis. Wandle Zahlwörter "
+                "in Ziffern und 'geteilt durch'/'durch' in '/', 'mal' in '*', 'hoch' in "
+                "'^' um, z.B. 'acht geteilt durch zwei' -> '8/2'."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "expression": {
+                        "type": "string",
+                        "description": "Reiner Rechenausdruck, z.B. '8/2' oder '(3+4)*2'",
+                    }
+                },
+                "required": ["expression"],
+            },
         },
     },
     {
@@ -420,6 +447,64 @@ def _get_time() -> str:
 
 def _add_note(text: str) -> str:
     return memory.add_note(text)
+
+
+# Restricted to arithmetic only — no names, no calls, no subscripts — so this
+# can safely evaluate whatever expression the model hands over without
+# risking arbitrary code execution the way a bare eval() would.
+_CALC_OPS = {
+    ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul,
+    ast.Div: operator.truediv, ast.FloorDiv: operator.floordiv, ast.Mod: operator.mod,
+    ast.Pow: operator.pow, ast.USub: operator.neg, ast.UAdd: operator.pos,
+}
+
+
+def _eval_calc_node(node):
+    if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
+        return node.value
+    if isinstance(node, ast.BinOp) and type(node.op) in _CALC_OPS:
+        return _CALC_OPS[type(node.op)](_eval_calc_node(node.left), _eval_calc_node(node.right))
+    if isinstance(node, ast.UnaryOp) and type(node.op) in _CALC_OPS:
+        return _CALC_OPS[type(node.op)](_eval_calc_node(node.operand))
+    raise ValueError("unsupported expression")
+
+
+def _format_calc_result(value: float) -> str:
+    if isinstance(value, float) and value.is_integer():
+        value = int(value)
+    text = f"{value:.10f}".rstrip("0").rstrip(".") if isinstance(value, float) else str(value)
+    return text.replace(".", ",")
+
+
+def _calculate(expression: str) -> str:
+    # "geteilt durch"/"durch" -> "/", "mal" -> "*", "hoch" -> "**", "%" as a
+    # trailing percent -> "/100" — a small safety net in case the model
+    # passes the words through instead of converting them itself, since
+    # that conversion is exactly the step this tool exists to not trust it
+    # blindly with (see the tool description).
+    expr = expression.strip().lower()
+    expr = re.sub(r"geteilt\s+durch|:", "/", expr)
+    expr = re.sub(r"\bdurch\b", "/", expr)
+    expr = re.sub(r"\bmal\b|×", "*", expr)
+    expr = re.sub(r"\bhoch\b|\^", "**", expr)
+    expr = re.sub(r"\bplus\b", "+", expr)
+    expr = re.sub(r"\bminus\b", "-", expr)
+    expr = re.sub(r"(?<=\d),(?=\d)", ".", expr)
+    expr = re.sub(r"(\d+(?:\.\d+)?)\s*%", r"(\1/100)", expr)
+    if not re.fullmatch(r"[\d\s+\-*/().%]*", expr):
+        return f"'{expression}' ist kein Rechenausdruck, den ich auswerten kann."
+    try:
+        # mode="eval" only parses expr into an AST — nothing here calls the
+        # eval() builtin. _eval_calc_node then walks that AST itself and
+        # only ever executes the whitelisted arithmetic ops in _CALC_OPS,
+        # rejecting names/calls/attributes/subscripts outright.
+        tree = ast.parse(expr, mode="eval")
+        result = _eval_calc_node(tree.body)
+    except ZeroDivisionError:
+        return "Division durch null ist nicht definiert."
+    except (SyntaxError, ValueError, TypeError, OverflowError):
+        return f"'{expression}' ist kein Rechenausdruck, den ich auswerten kann."
+    return f"{expression} = {_format_calc_result(result)}"
 
 
 def _open_url(url: str) -> str:
@@ -988,6 +1073,7 @@ DISPATCH = {
     "get_weather": lambda a: _get_weather(a.get("city", "")),
     "get_time": lambda a: _get_time(),
     "add_note": lambda a: _add_note(a.get("text", "")),
+    "calculate": lambda a: _calculate(a.get("expression", "")),
     "visualize": lambda a: _visualize(a.get("type", ""), a.get("title", ""), a.get("data", [])),
     "opencode": lambda a: _opencode(a.get("task", "")),
     "opencode_model": lambda a: _opencode_model(a.get("model", "")),

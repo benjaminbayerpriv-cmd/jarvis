@@ -192,6 +192,13 @@ Erwähnung weiter oben im Gespräch, selbst wenn seither einige Nachrichten
 vergangen sind — diese Angabe wird bei jeder neuen Nachricht frisch
 aktualisiert, eine ältere Erwähnung im Verlauf ist es nicht.
 
+Bei JEDER Rechnung, egal wie einfach — Addition, Subtraktion, Multiplikation,
+vor allem Division ("acht geteilt durch zwei", "was ist 17 mal 23") — rufst
+du IMMER calculate auf, statt das Ergebnis selbst im Kopf auszurechnen. Du
+rechnest sonst zuverlässig falsch, besonders bei Division. Wandle dabei
+Zahlwörter in Ziffern um und gib calculate einen reinen Rechenausdruck wie
+"8/2".
+
 Ein run_shell-Befehl ohne Ausgabe ist KEIN Beweis für Erfolg — Befehle wie
 killall geben bei Erfolg und bei Misserfolg oft gar nichts aus. Behaupte
 nach run_shell niemals zuversichtlich Erfolg, wenn die Ausgabe das nicht
