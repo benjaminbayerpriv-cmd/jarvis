@@ -1009,7 +1009,7 @@
     const s = document.createElement('style');
     s.id = 'jsAppCss';
     s.textContent = `
-      body.js-app-active > :not(#jsApp):not(#jarvisOrb):not(#jarvisOrbHit):not(#jsSpeechTerm):not(#jsSpeechbar):not(#jsSpeechCaption):not(#jsSettingsSheet):not(#jsNewProjectSheet):not(#jsRenameChatSheet):not(#jsBtwWindow):not(script):not(style) { display:none !important; }
+      body.js-app-active > :not(#jsApp):not(#jarvisOrb):not(#jarvisOrbHit):not(#jsSpeechTerm):not(#jsSpeechbar):not(#jsSpeechCaption):not(#jsSettingsSheet):not(#jsNewProjectSheet):not(#jsRenameChatSheet):not(#jsBtwWindow):not(#jsNotice):not(script):not(style) { display:none !important; }
       body.js-app-active { overflow:hidden; }
       /* Echter claude.ai "Squish"-Press-Effekt (aus --cds-btn-spring extrahiert): schnelles
          Einschrumpfen beim Klicken, dann sanftes Zurueckfedern. NUR auf echten Action-Icon-
@@ -3006,10 +3006,56 @@
   // llm_client.list_model_capabilities) — modelCapsMap merkt sich das pro
   // Modell-Id, currentModelSupportsVision spiegelt das gerade aktive.
   let modelCapsMap = {};
+  let modelFitMap = {};
   let currentModelSupportsVision = false;
+  let startupFitWarningShown = false;
   function applyModelCaps(j) {
     modelCapsMap = j.model_caps || {};
+    modelFitMap = j.model_fit || {};
     currentModelSupportsVision = (j.current_caps || []).includes('vision');
+    if (!startupFitWarningShown && j.current_fit && j.current_fit.fits === false && j.current_fit.message) {
+      startupFitWarningShown = true;
+      showNotice(j.current_fit.message);
+    }
+  }
+  function modelTooLarge(id) {
+    const f = modelFitMap[id];
+    return f && f.fits === false ? (f.message || 'Dieses Modell ist zu groß für deinen PC.') : '';
+  }
+  async function requestModelSwitch(id) {
+    setModelLabel(id);
+    selectModelCaps(id);
+    try {
+      const r = await fetch('/models/select', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: id }) });
+      const j = await r.json();
+      if (j && j.ok === false) {
+        showNotice(j.error || 'Das Modell konnte nicht geladen werden.');
+        if (j.current) { setModelLabel(j.current); selectModelCaps(j.current); }
+      }
+    } catch (e) {}
+  }
+  let noticeEl = null;
+  let noticeTimer = null;
+  function showNotice(text) {
+    if (!noticeEl) {
+      noticeEl = document.createElement('div');
+      noticeEl.id = 'jsNotice';
+      noticeEl.setAttribute('role', 'alert');
+      noticeEl.title = 'Klicken zum Schließen';
+      noticeEl.addEventListener('click', () => { noticeEl.style.display = 'none'; });
+      document.body.appendChild(noticeEl);
+    }
+    noticeEl.style.cssText = `position:fixed;top:16px;left:50%;transform:translateX(-50%);z-index:10000;max-width:min(520px,calc(100vw - 32px));padding:12px 14px;border:1px solid ${C.border};border-left:3px solid #e5534b;border-radius:10px;background:${C.bgSurface3};color:${C.text};font-size:13.5px;line-height:1.45;box-shadow:0 6px 24px rgba(0,0,0,.25);cursor:pointer;`;
+    noticeEl.textContent = text;
+    clearTimeout(noticeTimer);
+    noticeTimer = setTimeout(() => { if (noticeEl) noticeEl.style.display = 'none'; }, 12000);
+  }
+  function markTooLarge(btn, subText) {
+    btn.style.opacity = '0.5';
+    const warnEl = document.createElement('span');
+    warnEl.textContent = subText;
+    warnEl.style.cssText = `font-size:11.5px;font-weight:400;color:#e5534b;`;
+    btn.appendChild(warnEl);
   }
   function selectModelCaps(id) {
     currentModelSupportsVision = (modelCapsMap[id] || []).includes('vision');
@@ -3056,14 +3102,15 @@
         subEl.style.cssText = `font-size:11.5px;font-weight:400;color:${C.textDim};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;`;
         b.appendChild(subEl);
       }
+      const tooLarge = modelTooLarge(m.id);
+      if (tooLarge) markTooLarge(b, 'Zu groß für diesen PC');
       b.onmouseenter = () => { b.style.background = C.bgHover; };
       b.onmouseleave = () => { b.style.background = 'none'; };
       b.addEventListener('click', async (e) => {
         e.stopPropagation();
         modelMenuEl.style.display = 'none';
-        setModelLabel(m.id);
-        selectModelCaps(m.id);
-        try { await fetch('/models/select', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: m.id }) }); } catch (e2) {}
+        if (tooLarge) { showNotice(tooLarge); return; }
+        await requestModelSwitch(m.id);
       });
       modelMenuEl.appendChild(b);
     }
@@ -3364,12 +3411,13 @@
             subEl.style.cssText = `font-size:11.5px;font-weight:400;color:${C.textDim};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;`;
             b.appendChild(subEl);
           }
+          const tooLarge = modelTooLarge(m);
+          if (tooLarge) markTooLarge(b, 'Zu groß für diesen PC');
           b.onmouseenter = () => { b.style.background = C.bgHover; };
           b.onmouseleave = () => { b.style.background = 'none'; };
           b.addEventListener('click', () => {
-            setModelLabel(m);
-            selectModelCaps(m);
-            try { fetch('/models/select', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: m }) }); } catch (e2) {}
+            if (tooLarge) { showNotice(tooLarge); return; }
+            requestModelSwitch(m);
           });
           settingsModelsEl.appendChild(b);
         }
