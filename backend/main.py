@@ -157,6 +157,10 @@ class CancelRequest(BaseModel):
 
 class SelectModelRequest(BaseModel):
     model: str
+    # "Trotzdem laden" im Modell-Auswahlmenü — überspringt hardware.py's
+    # Speicher-Check, statt den Nutzer auf Chat-Nachrichten zu verweisen, wo
+    # dieselbe Umgehung schon existiert (siehe /model/force-load).
+    force: bool = False
 
 
 class UpdateSettingsRequest(BaseModel):
@@ -911,9 +915,9 @@ def list_models():
 def select_model(req: SelectModelRequest):
     previous_model = config.LM_STUDIO_MODEL
     fit = hardware.check_model(req.model, freeable_ids=[previous_model])
-    if not fit["fits"]:
+    if not fit["fits"] and not req.force:
         print(f"[model] {fit['message']}")
-        return {"ok": False, "error": fit["message"], "current": previous_model}
+        return {"ok": False, "error": fit["message"], "current": previous_model, "model": req.model}
     # Fits only once the previous model is out of memory: unload it BEFORE
     # loading the new one. The usual load-then-unload order (below) would
     # briefly hold both, which is exactly the overload this check prevents.
