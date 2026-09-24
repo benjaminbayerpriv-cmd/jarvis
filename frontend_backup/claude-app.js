@@ -159,7 +159,11 @@
   // Senden-Button ein — beide teilen sich den gleichen Platz statt nebeneinander
   // zu stehen (spiegelt claude.ai's Composer-Verhalten).
   function updateSendSlot() {
-    const canSend = canSendNow();
+    // Während Jarvis generiert bleibt der Senden-Slot sichtbar (als Stopp-
+    // Button, siehe setBusy) statt zu verschwinden, nur weil das Eingabefeld
+    // inzwischen leer ist — sonst gäbe es im normalen Textchat gar keine
+    // Möglichkeit, eine laufende Antwort abzubrechen.
+    const canSend = canSendNow() || busy;
     if (speechBtn) speechBtn.style.display = canSend ? 'none' : 'inline-flex';
     if (sendBtn) sendBtn.style.display = canSend ? 'inline-flex' : 'none';
   }
@@ -2120,7 +2124,7 @@
       });
     });
 
-    if (sendBtn) sendBtn.addEventListener('click', (e) => { e.preventDefault(); sendFromComposer(); });
+    if (sendBtn) sendBtn.addEventListener('click', (e) => { e.preventDefault(); if (busy) stopSpeech(); else sendFromComposer(); });
     if (composerInput) {
       composerInput.addEventListener('keydown', (e) => {
         if (handleSlashMenuKeydown(e)) return;
@@ -2343,9 +2347,19 @@
   }
 
   // ---------------------------------------------------------------- chat
+  // Solange Jarvis generiert, wird aus dem Senden-Button ein Stopp-Button
+  // (gleicher Slot, wie updateSendSlot() oben) statt ihn nur auszugrauen -
+  // vorher gab es im normalen Textchat KEINE Möglichkeit, eine laufende
+  // Antwort abzubrechen (nur im Sprachmodus, über js-sp-stop).
   function setBusy(v) {
     busy = v;
-    if (sendBtn) { sendBtn.disabled = v; sendBtn.style.opacity = v ? '0.5' : '1'; }
+    if (sendBtn) {
+      sendBtn.disabled = false;
+      sendBtn.style.opacity = '1';
+      sendBtn.title = v ? 'Stopp' : 'Senden';
+      sendBtn.innerHTML = v ? ICONS.stop : jsIcon('0xe013', 24);
+    }
+    updateSendSlot();
   }
 
   // Ist kein Modell/keine API erreichbar, wird im Composer NICHTS vom
@@ -3306,6 +3320,7 @@
   }
 
   let lastModelsList = null;  // Cache: sofort anzeigen statt bei jedem Klick auf den Netzwerk-Roundtrip zu warten
+  let lastLoadedModelIds = new Set();  // siehe /model/loaded — für den Entladen-Button je Zeile im Dropdown
   let modelMenuAnchor = null;  // welcher Button hat das Menü zuletzt geöffnet — für Repositionierung nach dem fetch
   function positionModelMenu(anchorBtn) {
     if (!modelMenuEl || !anchorBtn || !uiEl) return;
@@ -3333,8 +3348,10 @@
     }
     for (const m of models) {
       const publisher = String(m.id).includes('/') ? String(m.id).split('/')[0] : '';
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;align-items:stretch;';
       const b = document.createElement('button');
-      b.style.cssText = `display:flex;flex-direction:column;gap:1px;width:100%;text-align:left;padding:8px 14px;background:none;border:none;color:${C.text};font-size:13.5px;font-weight:500;cursor:pointer;line-height:1.35;`;
+      b.style.cssText = `display:flex;flex-direction:column;gap:1px;flex:1;min-width:0;text-align:left;padding:8px 14px;background:none;border:none;color:${C.text};font-size:13.5px;font-weight:500;cursor:pointer;line-height:1.35;`;
       b.title = m.id;
       const nameEl = document.createElement('span');
       nameEl.textContent = prettyModelName(m.id);
@@ -3346,8 +3363,8 @@
         subEl.style.cssText = `font-size:11.5px;font-weight:400;color:${C.textDim};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;`;
         b.appendChild(subEl);
       }
-      b.onmouseenter = () => { b.style.background = C.bgHover; };
-      b.onmouseleave = () => { b.style.background = 'none'; };
+      row.onmouseenter = () => { row.style.background = C.bgHover; };
+      row.onmouseleave = () => { row.style.background = 'none'; };
       b.addEventListener('click', async (e) => {
         e.stopPropagation();
         modelMenuEl.style.display = 'none';
@@ -3355,7 +3372,37 @@
         selectModelCaps(m.id);
         try { await fetch('/models/select', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: m.id }) }); } catch (e2) {}
       });
-      modelMenuEl.appendChild(b);
+      row.appendChild(b);
+      // Entladen-Button: nur für Modelle, die LM Studio gerade wirklich im
+      // Speicher hat (siehe /model/loaded) — nicht für jedes Modell auf der
+      // Platte, das wäre ein Button, der bei den meisten Klicks nichts zu
+      // tun hätte.
+      if (lastLoadedModelIds.has(m.id)) {
+        const ejectBtn = document.createElement('button');
+        ejectBtn.type = 'button';
+        ejectBtn.title = `${m.id} entladen`;
+        ejectBtn.textContent = '⏏';
+        ejectBtn.style.cssText = `flex:0 0 auto;width:32px;align-self:center;margin-right:6px;background:none;border:none;color:${C.textSoft};font-size:14px;cursor:pointer;border-radius:6px;`;
+        ejectBtn.addEventListener('click', async (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          ejectBtn.disabled = true;
+          ejectBtn.textContent = '…';
+          try {
+            await fetch('/model/unload', {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ model: m.id }),
+            });
+            lastLoadedModelIds.delete(m.id);
+            ejectBtn.remove();
+          } catch (e2) {
+            ejectBtn.disabled = false;
+            ejectBtn.textContent = '⏏';
+          }
+        });
+        row.appendChild(ejectBtn);
+      }
+      modelMenuEl.appendChild(row);
     }
   }
   async function toggleModelMenu(anchorBtn) {
@@ -3373,12 +3420,15 @@
     modelMenuEl.style.display = 'block';
     positionModelMenu(anchorBtn);
     try {
-      const r = await fetch('/models');
+      const [r, rLoaded] = await Promise.all([fetch('/models'), fetch('/model/loaded').catch(() => null)]);
       const j = await r.json();
       const models = (j.models || []).map((m) => ({ id: m }));
       applyModelCaps(j);
       if (j.current) setModelLabel(j.current);
       lastModelsList = models;
+      if (rLoaded && rLoaded.ok) {
+        try { lastLoadedModelIds = new Set((await rLoaded.json()).models.map((m) => m.id)); } catch (e2) {}
+      }
       if (modelMenuEl.style.display !== 'none') { renderModelMenu(models); positionModelMenu(modelMenuAnchor); }
     } catch (e) {
       if (!lastModelsList) renderModelMenu([]);
