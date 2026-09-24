@@ -11,6 +11,26 @@
 
   const $ = (s, r = document) => r.querySelector(s);
 
+  // ------------------------------------------------ animiertes Grain (Rauschen)
+  // Ein kleines Canvas mit echtem Zufallsrauschen (nicht CSS-Noise-Trick),
+  // einmal beim Laden erzeugt und als Kachel-Textur wiederverwendet — die
+  // Bewegung kommt später rein billig über eine CSS-Animation der
+  // background-position, kein Neuzeichnen pro Frame nötig.
+  function makeGrainDataUrl(size) {
+    const cnv = document.createElement('canvas');
+    cnv.width = cnv.height = size;
+    const ctx = cnv.getContext('2d');
+    const img = ctx.createImageData(size, size);
+    for (let i = 0; i < img.data.length; i += 4) {
+      const v = Math.random() * 255;
+      img.data[i] = v; img.data[i + 1] = v; img.data[i + 2] = v;
+      img.data[i + 3] = Math.random() * 60;
+    }
+    ctx.putImageData(img, 0, 0);
+    return cnv.toDataURL();
+  }
+  const GRAIN_URL = makeGrainDataUrl(160);
+
   // ------------------------------------------------ design-tokens (ObsidianUI)
   // Palette nach dem Vorbild von obsidianui.dev (obsidianui.dev/components,
   // live per computed style abgelesen: Seitenhintergrund reines Schwarz
@@ -21,6 +41,7 @@
   // Obsidian-app-Lila-Optik.
   const C = {
     bg: '#000000',
+    bgFade: 'rgba(0,0,0,.72)',          // Ausblenden des Threads hinter dem schwebenden Composer, jetzt über dem Aurora-Hintergrund statt reinem Schwarz
     bgSoft: '#050505',
     bgSurface3: '#0a0a0a',
     bgHover: 'rgba(255,255,255,.06)',
@@ -32,6 +53,12 @@
     accent: '#ffffff',                 // monochrom: Primär-Buttons sind weiß auf schwarz
     accentText: '#0a0a0a',             // Text/Icon-Farbe auf accent-Hintergrund
     accentSoft: 'rgba(255,255,255,.09)',
+    // Liquid-Glass für Sidebar + Composer (siehe buildUi): wenig Tönung
+    // (niedrige Deckkraft), die eigentliche "Glas"-Wirkung kommt vom
+    // backdrop-filter blur+saturate darunter, nicht von der Füllfarbe.
+    glassBg: 'rgba(255,255,255,.05)',
+    glassBorder: 'rgba(255,255,255,.14)',
+    glassBlur: 'blur(28px) saturate(180%)',
     radiusCard: '20px',
     radiusControl: '12px',
     font: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif",
@@ -671,8 +698,15 @@
     uiEl.id = 'jsApp';
     uiEl.style.cssText = `position:fixed;inset:0;z-index:30;display:flex;background:${C.bg};color:${C.text};font-family:${C.font};`;
     uiEl.innerHTML = `
+      <div class="js-aurora-bg" style="position:absolute;inset:0;z-index:0;overflow:hidden;pointer-events:none;background:#000;">
+        <div class="js-aurora-blob js-aurora-blob-1"></div>
+        <div class="js-aurora-blob js-aurora-blob-2"></div>
+        <div class="js-aurora-blob js-aurora-blob-3"></div>
+        <div class="js-aurora-blob js-aurora-blob-4"></div>
+        <div class="js-grain-overlay" style="background-image:url(${GRAIN_URL});"></div>
+      </div>
       <button class="js-side-toggle-float" title="Sidebar einblenden" style="display:none;position:absolute;top:15px;left:12px;z-index:31;background:none;border:none;color:${C.textSoft};cursor:pointer;align-items:center;justify-content:center;width:30px;height:30px;border-radius:8px;">${ICONS.menu}</button>
-      <aside class="js-sidebar" style="width:308px;flex:0 0 308px;height:100%;display:flex;flex-direction:column;background:${C.bgSoft};border-right:1px solid ${C.border};position:relative;">
+      <aside class="js-sidebar" style="width:308px;flex:0 0 308px;height:100%;display:flex;flex-direction:column;background:${C.glassBg};backdrop-filter:${C.glassBlur};-webkit-backdrop-filter:${C.glassBlur};border-right:1px solid ${C.glassBorder};position:relative;">
         <div class="js-sidebar-top" style="padding:16px 8px 6px;display:flex;flex-direction:column;gap:12px;">
           <div class="js-sidebar-header" style="display:flex;align-items:center;justify-content:space-between;padding-left:8px;">
             <span style="display:flex;align-items:center;gap:8px;">
@@ -837,9 +871,9 @@
           </div>
         </div>
       </div>
-      <div class="js-composer" style="position:absolute;left:308px;right:0;bottom:0;padding:0 24px 22px;background:linear-gradient(transparent,${C.bg} 55%);">
+      <div class="js-composer" style="position:absolute;left:308px;right:0;bottom:0;padding:0 24px 22px;background:linear-gradient(transparent,${C.bgFade} 55%);">
         <div style="max-width:672px;margin:0 auto;position:relative;">
-          <div style="background:${C.bgSurface3};border-radius:20px;box-shadow:0 4px 20px rgba(0,0,0,.18),0 0 0 1px ${C.borderStrong};">
+          <div style="background:${C.glassBg};backdrop-filter:${C.glassBlur};-webkit-backdrop-filter:${C.glassBlur};border-radius:20px;box-shadow:0 8px 32px rgba(0,0,0,.35),0 0 0 1px ${C.glassBorder};">
             <div class="js-attach-preview" style="display:none;gap:8px;padding:14px 14px 0;flex-wrap:wrap;"></div>
             <div style="padding:14px;display:flex;flex-direction:column;gap:12px;">
               <div class="js-editor" contenteditable="true" data-placeholder="Wie kann ich dir heute helfen?" style="min-height:48px;max-height:200px;overflow-y:auto;padding:6px 6px 0;color:${C.text};font-size:15px;line-height:1.5;outline:none;white-space:pre-wrap;word-break:break-word;"></div>
@@ -1014,6 +1048,31 @@
     const s = document.createElement('style');
     s.id = 'jsAppCss';
     s.textContent = `
+      /* Aurora-Hintergrund: mehrere weiche, farbige Blobs statt Pechschwarz,
+         jeder auf einer eigenen langsamen Drift-Schleife (unterschiedliche
+         Dauer/Phase, damit es nie repetitiv wirkt). mix-blend-mode:screen
+         lässt sich überlappende Farben addieren statt sich zu verdecken. */
+      .js-aurora-blob { position:absolute; border-radius:50%; filter:blur(90px); mix-blend-mode:screen; will-change:transform; }
+      .js-aurora-blob-1 { width:70vmax; height:70vmax; top:-30vmax; right:-22vmax; background:radial-gradient(circle, #4f8dff 0%, rgba(79,141,255,0) 70%); opacity:.8; animation:jsAurora1 28s ease-in-out infinite; }
+      .js-aurora-blob-2 { width:62vmax; height:62vmax; top:6vmax; right:-18vmax; background:radial-gradient(circle, #9b6bff 0%, rgba(155,107,255,0) 70%); opacity:.7; animation:jsAurora2 34s ease-in-out infinite; }
+      .js-aurora-blob-3 { width:58vmax; height:58vmax; bottom:-24vmax; left:-16vmax; background:radial-gradient(circle, #3fd0ff 0%, rgba(63,208,255,0) 70%); opacity:.65; animation:jsAurora3 24s ease-in-out infinite; }
+      .js-aurora-blob-4 { width:46vmax; height:46vmax; top:32vmax; left:2vmax; background:radial-gradient(circle, #ff7ad9 0%, rgba(255,122,217,0) 70%); opacity:.5; animation:jsAurora4 31s ease-in-out infinite; }
+      @keyframes jsAurora1 { 0%,100% { transform:translate(0,0) scale(1); } 50% { transform:translate(-7%,5%) scale(1.1); } }
+      @keyframes jsAurora2 { 0%,100% { transform:translate(0,0) scale(1); } 50% { transform:translate(6%,-7%) scale(1.06); } }
+      @keyframes jsAurora3 { 0%,100% { transform:translate(0,0) scale(1); } 50% { transform:translate(5%,-5%) scale(1.12); } }
+      @keyframes jsAurora4 { 0%,100% { transform:translate(0,0) scale(1); } 50% { transform:translate(-6%,6%) scale(1.08); } }
+      /* Feines, bewegtes Filmkorn obendrauf (echtes Zufallsrauschen aus
+         GRAIN_URL, siehe makeGrainDataUrl) — steps() statt ease, damit es wie
+         flackerndes analoges Korn aussieht statt sanft zu gleiten. */
+      .js-grain-overlay { position:absolute; inset:-50%; width:200%; height:200%; background-repeat:repeat; opacity:.5; mix-blend-mode:overlay; animation:jsGrain 1s steps(4) infinite; }
+      @keyframes jsGrain {
+        0% { transform:translate(0,0); } 25% { transform:translate(-3%,2%); }
+        50% { transform:translate(2%,-3%); } 75% { transform:translate(-2%,-2%); }
+        100% { transform:translate(0,0); }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .js-aurora-blob, .js-grain-overlay { animation:none !important; }
+      }
       body.js-app-active > :not(#jsApp):not(#jarvisOrb):not(#jarvisOrbHit):not(#jsSpeechTerm):not(#jsSpeechbar):not(#jsSpeechCaption):not(#jsSettingsSheet):not(#jsNewProjectSheet):not(#jsRenameChatSheet):not(#jsBtwWindow):not(script):not(style) { display:none !important; }
       body.js-app-active { overflow:hidden; }
       /* Echter claude.ai "Squish"-Press-Effekt (aus --cds-btn-spring extrahiert): schnelles
