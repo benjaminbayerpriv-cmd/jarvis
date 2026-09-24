@@ -67,20 +67,18 @@
     // bewusst nur noch ein Hauch (die Aurora selbst ist jetzt kräftig genug;
     // ein starker saturate-Boost machte das Glas sonst bunter/heller als der
     // eigentliche Hintergrund, den es doch nur zeigen soll).
-    glassBlur: 'url(#jsGlassDistort) blur(24px) saturate(115%)',
-    // Rein weißes glassBg bei .05 Deckkraft dimmt die durchscheinende Aurora
-    // kaum - Blur verwischt Farbe, macht sie aber nicht dunkler. Text/Icons
-    // auf dem Composer wurden dadurch live unlesbar (helles Pink direkt
-    // hinter dem Editor). Ein neutraler, mäßig deckender Dunkel-Anteil
-    // dimmt genug für Kontrast, bleibt aber "Glas" (Farbe/Bewegung bleiben
-    // sichtbar) statt blickdicht zu werden - das ist weiterhin "wenig
-    // Tönung" im Sinne von "keine eigene Farbe", nicht "keine Dimmung".
-    glassBg: 'rgba(8,8,14,.46)',
+    glassBlur: 'url(#jsGlassDistort) blur(32px) saturate(115%)',
+    // Zu hell/zu transparent gewesen: bei niedriger Deckkraft ist "Glas" nur
+    // eine verschwommene Kopie des Hintergrunds, kein eigenes Material, das
+    // darüber SCHWEBT. Ein Objekt aus echtem (auch dunkel getöntem) Glas ist
+    // spürbar dunkler/dichter als das, was dahinter liegt - deutlich höhere
+    // Deckkraft hier, kombiniert mit dem Tiefenschatten in glassShadow unten.
+    glassBg: 'rgba(4,4,8,.72)',
     glassBorder: 'rgba(255,255,255,.16)',
     // Specular-Highlight-Kante oben/links, wie Licht, das am Rand einer
     // echten Glasscheibe bricht — zusammen mit glassBorder das, was aus
     // "durchsichtig mit Blur" ein "Glas" macht statt eine trübe Milchscheibe.
-    glassShadow: 'inset 0 1px 0 rgba(255,255,255,.5), inset 1px 0 0 rgba(255,255,255,.18), inset 0 0 40px rgba(255,255,255,.05), 0 8px 32px rgba(0,0,0,.35)',
+    glassShadow: 'inset 0 1px 0 rgba(255,255,255,.45), inset 1px 0 0 rgba(255,255,255,.14), inset 0 0 30px rgba(255,255,255,.03), 0 24px 60px rgba(0,0,0,.55), 0 4px 16px rgba(0,0,0,.4)',
     radiusCard: '20px',
     radiusControl: '12px',
     font: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif",
@@ -1087,11 +1085,11 @@
          war zu klein/blass (Ecken-Kreise mit frühem Transparent-Stop) und
          wirkte dadurch überwiegend schwarz statt farbig wie im Referenzbild.*/
       .js-aurora-blob { position:absolute; border-radius:50%; filter:blur(70px); mix-blend-mode:screen; will-change:transform; }
-      .js-aurora-blob-1 { width:95vmax; height:95vmax; top:-40vmax; right:-35vmax; background:radial-gradient(circle, #2e8bff 0%, #2e8bff 35%, rgba(46,139,255,0) 68%); opacity:.95; animation:jsAurora1 30s ease-in-out infinite; }
-      .js-aurora-blob-2 { width:85vmax; height:85vmax; top:-10vmax; right:-30vmax; background:radial-gradient(circle, #9b5cff 0%, #9b5cff 35%, rgba(155,92,255,0) 68%); opacity:.85; animation:jsAurora2 36s ease-in-out infinite; }
-      .js-aurora-blob-3 { width:95vmax; height:95vmax; bottom:-40vmax; left:-35vmax; background:radial-gradient(circle, #29b6ff 0%, #29b6ff 35%, rgba(41,182,255,0) 68%); opacity:.9; animation:jsAurora3 26s ease-in-out infinite; }
-      .js-aurora-blob-4 { width:80vmax; height:80vmax; top:20vmax; left:-10vmax; background:radial-gradient(circle, #b25cff 0%, #b25cff 35%, rgba(178,92,255,0) 68%); opacity:.75; animation:jsAurora4 33s ease-in-out infinite; }
-      .js-aurora-blob-5 { width:90vmax; height:90vmax; top:8vmax; left:18vmax; background:radial-gradient(circle, #ff8fe0 0%, #ff8fe0 32%, rgba(255,143,224,0) 66%); opacity:.7; animation:jsAurora5 29s ease-in-out infinite; }
+      .js-aurora-blob-1 { width:78vmax; height:78vmax; top:-35vmax; right:-28vmax; background:radial-gradient(circle, #2e8bff 0%, #2e8bff 22%, rgba(46,139,255,0) 52%); opacity:.5; animation:jsAurora1 30s ease-in-out infinite; }
+      .js-aurora-blob-2 { width:68vmax; height:68vmax; top:-8vmax; right:-24vmax; background:radial-gradient(circle, #9b5cff 0%, #9b5cff 22%, rgba(155,92,255,0) 52%); opacity:.42; animation:jsAurora2 36s ease-in-out infinite; }
+      .js-aurora-blob-3 { width:78vmax; height:78vmax; bottom:-35vmax; left:-28vmax; background:radial-gradient(circle, #29b6ff 0%, #29b6ff 22%, rgba(41,182,255,0) 52%); opacity:.46; animation:jsAurora3 26s ease-in-out infinite; }
+      .js-aurora-blob-4 { width:62vmax; height:62vmax; top:16vmax; left:-8vmax; background:radial-gradient(circle, #b25cff 0%, #b25cff 20%, rgba(178,92,255,0) 50%); opacity:.36; animation:jsAurora4 33s ease-in-out infinite; }
+      .js-aurora-blob-5 { width:70vmax; height:70vmax; top:6vmax; left:14vmax; background:radial-gradient(circle, #ff8fe0 0%, #ff8fe0 18%, rgba(255,143,224,0) 48%); opacity:.3; animation:jsAurora5 29s ease-in-out infinite; }
       @keyframes jsAurora1 { 0%,100% { transform:translate(0,0) scale(1); } 50% { transform:translate(-6%,5%) scale(1.08); } }
       @keyframes jsAurora2 { 0%,100% { transform:translate(0,0) scale(1); } 50% { transform:translate(5%,-6%) scale(1.05); } }
       @keyframes jsAurora3 { 0%,100% { transform:translate(0,0) scale(1); } 50% { transform:translate(5%,-4%) scale(1.1); } }
