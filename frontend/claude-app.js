@@ -1,8 +1,7 @@
-// JARVIS — funktionale Schicht über dem eingefrorenen claude.ai-SSR-DOM.
-// Der Snapshot (frontend/claude.html) ist inert: seine Anthropic-Skripte sind
-// in serve_index() gestrippt, React läuft nie. Seine CSS-Tokens/Fonts
-// (--font-anthropic-sans, --text-primary/…, Terracotta #d97757) behalten wir;
-// das tote DOM verdecken wir mit einer EIGENEN, funktionalen UI-Schicht (#jsApp):
+// JARVIS — eigene, funktionale UI-Schicht (#jsApp), von buildUi() komplett
+// per JS erzeugt und über das inerte SSR-Grundgerüst (frontend/claude.html,
+// Skripte gestrippt, React läuft nie) gelegt. Das Grundgerüst liefert nur
+// noch Font-Fallback-Variablen im Hintergrund, sonst nichts sichtbares.
 // Sidebar mit echten Chats + Einstellungen, Uhrzeit-Begrüßung, Chat/Code-Toggle,
 // Composer -> /chat/stream (NDJSON + TTS), Modell-Auswahl, Datei-Upload,
 // Diktat (Mikrofon) und Sprachmodus (mittiges graues Punktnetz, Canvas2D).
@@ -12,25 +11,26 @@
 
   const $ = (s, r = document) => r.querySelector(s);
 
-  // ------------------------------------------------ claude-design-tokens
-  // Echte claude.ai-Dark-Palette (aus dem live-DOM extrahiert: --cds-surface-1
-  // #151515 für Seite/Sidebar, --cds-surface-3 #1f1f1e fürs Composer-Karten,
-  // --cds-gray-200/-350 für Sekundär-/Tertiärtext, ein HELLER Haarlinien-Rand
-  // bei ~10% Deckkraft statt eines dunklen Randtons — auf dunklem Grund liegt
-  // dort ein dezenter LICHTER Ring, kein brauner Schatten).
+  // ------------------------------------------------ design-tokens (Obsidian)
+  // Palette nach dem Vorbild von obsidian.md (live von der Seite abgelesen:
+  // Seiten-/Sidebar-Hintergrund rgb(15,15,15), Karten/Composer rgb(30,30,30),
+  // Fließtext rgb(238,238,238), gedämpfter Text rgb(188,188,188), Akzent-Lila
+  // rgb(124,58,237) für Buttons/aktive Zustände) statt der früheren
+  // claude.ai-Terracotta-Optik — eigenständiges, dunkles, reduziertes Design.
   const C = {
-    bg: '#151515',
-    bgSoft: '#151515',
-    bgSurface3: '#1f1f1e',
-    bgHover: 'rgba(255,255,255,.11)',
-    text: '#f0efe8',
-    textSoft: '#c3c0b4',
-    textDim: '#8a8680',
-    border: 'rgba(240,236,225,.14)',
-    borderStrong: 'rgba(240,236,225,.24)',
-    accent: '#d97757',                 // Claude-Terracotta
-    font: 'var(--font-anthropic-sans, system-ui, sans-serif)',
-    serif: 'var(--font-anthropic-serif, Georgia, serif)',
+    bg: '#0f0f0f',
+    bgSoft: '#131313',
+    bgSurface3: '#1e1e1e',
+    bgHover: 'rgba(255,255,255,.07)',
+    text: '#eeeeee',
+    textSoft: '#bcbcbc',
+    textDim: '#737373',
+    border: 'rgba(255,255,255,.09)',
+    borderStrong: 'rgba(255,255,255,.16)',
+    accent: '#7c3aed',                 // Obsidian-Lila
+    accentSoft: 'rgba(124,58,237,.14)',
+    font: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif",
+    serif: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif",
   };
 
   // Einstellungen-Panel: jede .env-Variable aus backend/config.py, die
@@ -1049,7 +1049,7 @@
       .js-navrow:not([disabled]):not(.js-artifacts):not(.js-customize):hover { background:${C.bgHover}; color:${C.text}; }
       .js-pill.active { color:${C.text} !important; }
       .js-pill:not(.active):hover { color:${C.text}; }
-      .js-note.on { color:${C.accent} !important; background:rgba(217,119,87,.12) !important; }
+      .js-note.on { color:${C.accent} !important; background:${C.accentSoft} !important; }
       .js-note.on svg { animation:js-note-pulse 1.4s ease-in-out infinite; }
       @keyframes js-note-pulse { 0%,100% { opacity:1; } 50% { opacity:.45; } }
       .js-speech.on { background:${C.accent} !important; border-color:${C.accent} !important; color:#fff !important; }
