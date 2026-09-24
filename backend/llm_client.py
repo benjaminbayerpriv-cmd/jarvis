@@ -142,9 +142,26 @@ def _note_active_target(base_url: str, model: str) -> None:
 # made it hallucinate tool results (inventing a time, claiming a note was saved)
 # where a compact one keeps it actually calling the functions. A function, not
 # a plain string, so the model self-identification above stays current.
-def _system_prompt() -> str:
-    return f"""Du bist Jarvis, der Assistent des Nutzers auf seinem Computer. Du duzt
-ihn, antwortest locker und in maximal drei Sätzen.
+def _system_prompt(is_speech: bool = False) -> str:
+    intro_style = (
+        "Du duzt ihn, antwortest locker und in maximal drei Sätzen."
+        if is_speech else
+        "Du duzt ihn und antwortest locker — im Textchat darf eine Antwort so lang sein, "
+        "wie die Frage es braucht, auch mit Code-Blöcken, Listen oder mehreren Absätzen, "
+        "wenn das dem Nutzer wirklich hilft. Kurz wo eine kurze Antwort reicht, ausführlich "
+        "wo Details gefragt sind — nicht künstlich aufblähen, aber auch nicht künstlich kürzen."
+    )
+    output_note = (
+        "Deine Antwort wird ausschließlich vorgelesen — es gibt keine Anzeige für Text,\n"
+        "Code oder Listen. Fasse dich deshalb kurz und sprich in ganzen Sätzen statt\n"
+        "Code, Tabellen oder lange Aufzählungen vorzulesen; beschreibe stattdessen knapp,\n"
+        "was du getan hast oder was das Ergebnis ist."
+        if is_speech else
+        "Deine Antwort wird als Text angezeigt (Markdown wird gerendert) — Code-Blöcke,\n"
+        "Listen und Tabellen sind hier sinnvoll und werden ordentlich dargestellt, nutze sie,\n"
+        "wo sie die Antwort klarer machen."
+    )
+    return f"""Du bist Jarvis, der Assistent des Nutzers auf seinem Computer. {intro_style}
 
 Falls gefragt wird, welches Modell oder welche KI du bist: Du heißt Jarvis, das
 Sprachmodell dahinter ist {_active_model_name} ({_active_model_provider}). Sag
@@ -289,10 +306,7 @@ danach gefragt wird, sag klar, dass du das nicht kannst, und nenne stattdessen
 die Tastenkombination, statt eine erfundene Aktion als erledigt zu melden —
 auch wenn der Nutzer drängt oder unfreundlich wird.
 
-Deine Antwort wird ausschließlich vorgelesen — es gibt keine Anzeige für Text,
-Code oder Listen. Fasse dich deshalb kurz und sprich in ganzen Sätzen statt
-Code, Tabellen oder lange Aufzählungen vorzulesen; beschreibe stattdessen knapp,
-was du getan hast oder was das Ergebnis ist.
+{output_note}
 Harte Regel, keine Ausnahme: Verwende NIEMALS Emojis oder Emoji-Symbole (🚀⭐❌
 ⚠❤ etc.) — weder im Fließtext noch in Code-Ausgaben. Auch nicht wenn der Nutzer
 danach fragt oder es "freundlicher" machen soll. Emojis werden ohnehin entfernt,
@@ -338,7 +352,7 @@ def _user_content(user_message: str, images: list[str] | None):
     return content
 
 
-def _build_messages(user_message: str, history: list | None, mode: str | None = None, images: list[str] | None = None) -> list:
+def _build_messages(user_message: str, history: list | None, mode: str | None = None, images: list[str] | None = None, is_speech: bool = False) -> list:
     # Qwen3.5's chat template rejects the request outright ("System message
     # must be at the beginning") the moment more than one system-role entry
     # shows up anywhere in the list — which used to happen constantly here:
@@ -367,7 +381,7 @@ def _build_messages(user_message: str, history: list | None, mode: str | None = 
     # Nachricht: sie sind meist leer (dann bleibt der Cache intakt), und
     # gemessen stört ein Gedächtnis-Block VOR der Nutzer-Nachricht die
     # Tool-Aufrufe.
-    system_parts = [_system_prompt()]
+    system_parts = [_system_prompt(is_speech)]
     if mode == "code":
         system_parts.append(_CODE_MODE_PROMPT)
     remembered = memory.context_for(user_message)
@@ -1432,19 +1446,19 @@ def _turn_cancelled(turn_id: str | None) -> bool:
     return bool(turn_id) and turn_id in _cancelled_turns
 
 
-def stream_reply(user_message: str, history: list | None = None, turn_id: str | None = None, mode: str | None = None, images: list[str] | None = None):
+def stream_reply(user_message: str, history: list | None = None, turn_id: str | None = None, mode: str | None = None, images: list[str] | None = None, is_speech: bool = False):
     """Thin wrapper around _stream_reply_impl that guarantees turn_id gets
     dropped from _cancelled_turns once the turn ends, cancelled or not —
     otherwise every turn_id a client ever sends would sit in that set
     forever."""
     try:
-        yield from _stream_reply_impl(user_message, history, turn_id, mode, images)
+        yield from _stream_reply_impl(user_message, history, turn_id, mode, images, is_speech)
     finally:
         if turn_id:
             _cancelled_turns.discard(turn_id)
 
 
-def _stream_reply_impl(user_message: str, history: list | None = None, turn_id: str | None = None, mode: str | None = None, images: list[str] | None = None):
+def _stream_reply_impl(user_message: str, history: list | None = None, turn_id: str | None = None, mode: str | None = None, images: list[str] | None = None, is_speech: bool = False):
     """Generator yielding {"type": "sentence", "text": ...} as soon as each
     sentence of the reply is complete, then a final {"type": "done"}.
 
@@ -1473,7 +1487,7 @@ def _stream_reply_impl(user_message: str, history: list | None = None, turn_id: 
         yield {"type": "done", "full_text": resolved}
         return
 
-    messages = _build_messages(user_message, history, mode, images)
+    messages = _build_messages(user_message, history, mode, images, is_speech)
 
     last_tool_result = None
     full_text_parts = []
