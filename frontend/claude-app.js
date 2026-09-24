@@ -872,6 +872,7 @@
               <div class="js-setup-lm-status" style="font-size:12px;color:${C.textDim};min-height:14px;"></div>
               <div style="display:flex;align-items:center;gap:8px;">
                 <button class="js-setup-scan" style="padding:6px 10px;border:1px solid ${C.border};border-radius:8px;background:none;color:${C.textSoft};font-size:12px;cursor:pointer;white-space:nowrap;font-family:${C.font};">Netzwerk durchsuchen</button>
+                <button class="js-setup-scan-extended" title="Prüft zusätzlich die Standardports von Ollama, text-generation-webui, koboldcpp & Co., nicht nur LM Studios 1234" style="padding:6px 10px;border:1px solid ${C.border};border-radius:8px;background:none;color:${C.textSoft};font-size:12px;cursor:pointer;white-space:nowrap;font-family:${C.font};">Erweiterte Suche</button>
                 <div class="js-setup-scan-bar-track" style="display:none;flex:1;height:6px;border-radius:3px;background:${C.bg};overflow:hidden;">
                   <div class="js-setup-scan-bar-fill" style="height:100%;width:0%;background:${C.accent};transition:width .12s linear;"></div>
                 </div>
@@ -2137,7 +2138,7 @@
     wireSetupField($('.js-setup-lmurl', uiEl), $('.js-setup-test-lm', uiEl), $('.js-setup-activate-lm', uiEl), $('.js-setup-lm-status', uiEl), 'lm_studio_base_url');
     wireSetupField($('.js-setup-apikey', uiEl), $('.js-setup-test-api', uiEl), $('.js-setup-activate-api', uiEl), $('.js-setup-api-status', uiEl), 'deepseek_api_key');
     wireNetworkScan(
-      $('.js-setup-scan', uiEl), $('.js-setup-scan-bar-track', uiEl), $('.js-setup-scan-bar-fill', uiEl),
+      $('.js-setup-scan', uiEl), $('.js-setup-scan-extended', uiEl), $('.js-setup-scan-bar-track', uiEl), $('.js-setup-scan-bar-fill', uiEl),
       $('.js-setup-scan-status', uiEl), $('.js-setup-scan-results', uiEl), $('.js-setup-lmurl', uiEl), $('.js-setup-test-lm', uiEl)
     );
     updateSendSlot();
@@ -2448,17 +2449,31 @@
   // teilen sich dieselbe Balkenbreite nacheinander (0-70% / 70-100%), damit
   // der Balken über den ganzen Vorgang gleichmäßig weiterläuft statt bei
   // Phasenwechsel zurückzuspringen.
-  function wireNetworkScan(scanBtn, barTrack, barFill, statusEl, resultsEl, urlInput, testBtn) {
+  // Ports gängiger lokaler LLM-Server neben LM Studios Standard 1234 (Ollama,
+  // text-generation-webui, koboldcpp, LocalAI, vLLM, ...) - siehe
+  // backend/main.py EXTENDED_SCAN_PORTS, dieselbe Liste noch einmal hier,
+  // damit das Frontend sie explizit mitschicken kann statt sich auf den
+  // Server-Default (nur 1234) zu verlassen.
+  const EXTENDED_SCAN_PORTS = [1234, 11434, 5000, 5001, 7860, 8000, 8080, 4891, 1337];
+
+  function wireNetworkScan(scanBtn, extendedBtn, barTrack, barFill, statusEl, resultsEl, urlInput, testBtn) {
     if (!scanBtn || !barTrack || !barFill || !urlInput) return;
-    scanBtn.addEventListener('click', async () => {
+    let scanning = false;
+    async function runScan(ports, label) {
+      if (scanning) return;
+      scanning = true;
       scanBtn.disabled = true;
+      if (extendedBtn) extendedBtn.disabled = true;
       barTrack.style.display = 'block';
       barFill.style.width = '0%';
       resultsEl.style.display = 'none';
       resultsEl.innerHTML = '';
-      if (statusEl) statusEl.textContent = 'Durchsuche Netzwerk…';
+      if (statusEl) statusEl.textContent = label + '…';
       try {
-        const resp = await fetch('/model/scan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+        const resp = await fetch('/model/scan', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ports }),
+        });
         if (!resp.ok) throw new Error('HTTP ' + resp.status);
         const reader = resp.body.getReader();
         const decoder = new TextDecoder();
@@ -2484,7 +2499,7 @@
               if (statusEl) {
                 statusEl.textContent = evt.phase === 'validate'
                   ? `Prüfe gefundene Geräte… (${evt.scanned}/${evt.total})`
-                  : `Durchsuche Netzwerk… (${evt.scanned}/${evt.total})`;
+                  : `${label}… (${evt.scanned}/${evt.total})`;
               }
             } else if (evt.type === 'found') {
               found.push(evt);
@@ -2503,8 +2518,8 @@
               barFill.style.width = '100%';
               if (statusEl) {
                 statusEl.textContent = found.length
-                  ? `${found.length} LM-Studio-Instanz(en) gefunden — anklicken zum Übernehmen.`
-                  : 'Nichts gefunden. Läuft LM Studio auf einem Gerät in diesem Netzwerk?';
+                  ? `${found.length} Instanz(en) gefunden — anklicken zum Übernehmen.`
+                  : 'Nichts gefunden. Läuft ein LLM-Server auf einem Gerät in diesem Netzwerk?';
               }
             }
           }
@@ -2512,10 +2527,16 @@
       } catch (e) {
         if (statusEl) statusEl.textContent = 'Scan fehlgeschlagen: ' + e.message;
       } finally {
+        scanning = false;
         scanBtn.disabled = false;
+        if (extendedBtn) extendedBtn.disabled = false;
         setTimeout(() => { barTrack.style.display = 'none'; }, 600);
       }
-    });
+    }
+    scanBtn.addEventListener('click', () => runScan([1234], 'Durchsuche Netzwerk'));
+    if (extendedBtn) {
+      extendedBtn.addEventListener('click', () => runScan(EXTENDED_SCAN_PORTS, 'Erweiterte Suche läuft'));
+    }
   }
 
   // Karte mit "Trotzdem laden" + "anderes Modell entladen" unter einer
@@ -3543,7 +3564,8 @@
       return;
     }
     for (const m of models) {
-      const publisher = String(m.id).includes('/') ? String(m.id).split('/')[0] : '';
+      const publisher = String(m.id).startsWith('deepseek:') ? 'DeepSeek · Cloud'
+        : String(m.id).includes('/') ? String(m.id).split('/')[0] : '';
       const row = document.createElement('div');
       row.style.cssText = 'display:flex;align-items:stretch;';
       const b = document.createElement('button');
@@ -3638,7 +3660,12 @@
   // e4b, 32b, 3.1 …) komplett in Großbuchstaben — ohne eine Lookup-Tabelle zu
   // pflegen, die bei jedem neuen Modell wieder veraltet wäre.
   function prettyModelName(id) {
-    const short = String(id).split('/').pop();
+    // Das synthetische "deepseek:<modell>"-Eintrag (siehe llm_client.
+    // list_models) hat kein "/" wie echte LM-Studio-Ids - Präfix vorher weg,
+    // sonst würde "deepseek:deepseek-chat" als ein einziges hässliches
+    // "Deepseek:deepseek Chat" gerendert statt schlicht "Deepseek Chat".
+    const withoutProvider = String(id).startsWith('deepseek:') ? String(id).slice('deepseek:'.length) : String(id);
+    const short = withoutProvider.split('/').pop();
     return short
       .split(/[-_]+/)
       .map((seg) => {

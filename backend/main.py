@@ -770,17 +770,35 @@ def _validate_lm_studio(ip: str, port: int) -> dict | None:
     return {"ip": ip, "url": f"http://{ip}:{port}/v1", "models": models}
 
 
+# Ports gängiger lokaler LLM-Server, für die "erweiterte Suche" (der
+# normale Scan prüft nur den LM-Studio-Standardport 1234 — reicht nicht,
+# wenn LM Studio auf einem anderen Port läuft oder ein anderer Server
+# gemeint ist). Alle unten sind bekannt dafür, eine OpenAI-kompatible
+# /v1/models-Route anzubieten (Ollama seit 0.1.26, text-generation-webuis
+# OpenAI-Extension, koboldcpp, LocalAI, vLLM, ...), sonst würde
+# _validate_lm_studio() sie ohnehin als "kein Treffer" verwerfen.
+EXTENDED_SCAN_PORTS = [1234, 11434, 5000, 5001, 7860, 8000, 8080, 4891, 1337]
+
+
 @app.post("/model/scan")
 async def model_scan(body: dict | None = None):
-    """Scans the local /24 subnet for a reachable LM Studio instance,
-    streaming NDJSON progress events so the frontend can show a real
-    progress bar instead of a blind spinner (see the js-scan-* wiring in
-    claude-app.js). Two phases: a fast concurrent TCP-connect sweep across
-    the whole subnet (~254 hosts, bounded concurrency), then an actual
-    GET /v1/models against every host whose port answered — there are only
-    ever a handful of those — to confirm it's really LM Studio and read its
-    model list."""
-    port = int((body or {}).get("port") or 1234)
+    """Scans the local /24 subnet for a reachable LM Studio (or other
+    OpenAI-compatible local LLM server) instance, streaming NDJSON progress
+    events so the frontend can show a real progress bar instead of a blind
+    spinner (see the js-scan-* wiring in claude-app.js). Two phases: a fast
+    concurrent TCP-connect sweep across every (host, port) combination
+    (bounded concurrency), then an actual GET /v1/models against every
+    target whose port answered — there are only ever a handful of those —
+    to confirm it's really an LLM server and read its model list.
+
+    body.ports (optional): which ports to probe per host. Defaults to just
+    the LM Studio default (1234, single quick scan); the frontend's
+    "Erweiterte Suche" button passes EXTENDED_SCAN_PORTS instead.
+    """
+    ports = (body or {}).get("ports")
+    if not ports:
+        ports = [int((body or {}).get("port") or 1234)]
+    ports = sorted({int(p) for p in ports})
     network = _local_subnet()
 
     async def gen():
@@ -788,44 +806,46 @@ async def model_scan(body: dict | None = None):
             yield json.dumps({"type": "error", "message": "Konnte das lokale Netzwerk nicht bestimmen."}) + "\n"
             return
         hosts = [str(h) for h in network.hosts()]
-        total = len(hosts)
-        yield json.dumps({"type": "start", "total": total, "subnet": str(network)}) + "\n"
+        targets = [(h, p) for h in hosts for p in ports]
+        total = len(targets)
+        yield json.dumps({"type": "start", "total": total, "subnet": str(network), "ports": ports}) + "\n"
 
         queue: asyncio.Queue = asyncio.Queue()
-        sem = asyncio.Semaphore(64)
+        sem = asyncio.Semaphore(96)
 
-        async def probe(ip: str) -> None:
+        async def probe(ip: str, port: int) -> None:
             async with sem:
                 ok = await _port_open(ip, port, 0.3)
-            await queue.put(ip if ok else None)
+            await queue.put((ip, port) if ok else None)
 
-        tasks = [asyncio.create_task(probe(ip)) for ip in hosts]
+        tasks = [asyncio.create_task(probe(ip, p)) for ip, p in targets]
         scanned = 0
-        open_hosts: list[str] = []
-        # Progress in kleinen Schuben statt bei jedem einzelnen Host - 254
-        # NDJSON-Zeilen für einen simplen Fortschrittsbalken wäre unnötig
-        # geschwätzig; alle 4 oder am Ende reicht für eine flüssige Anzeige.
+        open_targets: list[tuple[str, int]] = []
+        # Feste Anzahl Zwischen-Updates statt fixer Schrittweite - bei
+        # mehreren Ports (erweiterte Suche) sind das leicht über 2000 Ziele,
+        # "alle 4" wäre dort über 500 NDJSON-Zeilen für den Fortschrittsbalken.
+        step = max(1, total // 60)
         while scanned < total:
-            ip = await queue.get()
+            item = await queue.get()
             scanned += 1
-            if ip:
-                open_hosts.append(ip)
-            if scanned % 4 == 0 or scanned == total:
+            if item:
+                open_targets.append(item)
+            if scanned % step == 0 or scanned == total:
                 yield json.dumps({"type": "progress", "phase": "scan", "scanned": scanned, "total": total}) + "\n"
         await asyncio.gather(*tasks)
 
-        if not open_hosts:
+        if not open_targets:
             yield json.dumps({"type": "done", "found": []}) + "\n"
             return
 
         found = []
-        for i, ip in enumerate(open_hosts):
+        for i, (ip, port) in enumerate(open_targets):
             result = await asyncio.to_thread(_validate_lm_studio, ip, port)
             if result:
                 found.append(result)
                 yield json.dumps({"type": "found", **result}) + "\n"
             yield json.dumps(
-                {"type": "progress", "phase": "validate", "scanned": i + 1, "total": len(open_hosts)}
+                {"type": "progress", "phase": "validate", "scanned": i + 1, "total": len(open_targets)}
             ) + "\n"
         yield json.dumps({"type": "done", "found": found}) + "\n"
 
@@ -894,6 +914,14 @@ def update_settings(req: UpdateSettingsRequest):
 
 @app.get("/models")
 def list_models():
+    # Welches Modell gerade tatsächlich antwortet, spiegelt _request_targets()
+    # wider: "lmstudio" pinnt explizit auf LM Studio, alles andere ("auto"
+    # das Default-Verhalten, oder "deepseek" explizit) bevorzugt DeepSeek,
+    # sobald ein Key konfiguriert ist. Vorher stand hier immer
+    # LM_STUDIO_MODEL, auch wenn DeepSeek die Anfragen tatsächlich beantwortet
+    # hat - die Modellauswahl zeigte dann nie den wirklich aktiven Stand an.
+    active_is_deepseek = bool(config.DEEPSEEK_API_KEY) and config.ACTIVE_PROVIDER != "lmstudio"
+    current = f"{llm_client.DEEPSEEK_MODEL_ID_PREFIX}{config.DEEPSEEK_MODEL}" if active_is_deepseek else config.LM_STUDIO_MODEL
     try:
         model_ids = llm_client.list_models()
         caps = llm_client.list_model_capabilities()
@@ -901,23 +929,46 @@ def list_models():
             list(dict.fromkeys([*model_ids, config.LM_STUDIO_MODEL])),
             freeable_ids=[config.LM_STUDIO_MODEL],
         )
+        # DeepSeek ist eine Cloud-API, kein lokales Modell - hardware.py's
+        # Speicher-Check hat dazu nichts zu sagen, immer "passt".
+        if active_is_deepseek:
+            fit.setdefault(current, {"fits": True, "fits_now": True, "needed_bytes": 0})
         return {
             "models": model_ids,
-            "current": config.LM_STUDIO_MODEL,
+            "current": current,
             "model_caps": caps,
-            "current_caps": caps.get(config.LM_STUDIO_MODEL, []),
+            "current_caps": caps.get(current, []),
             "model_fit": fit,
-            "current_fit": {
-                "fits": not hardware.blocked_reason(config.LM_STUDIO_MODEL),
-                "message": hardware.blocked_reason(config.LM_STUDIO_MODEL),
-            },
+            "current_fit": (
+                {"fits": True, "message": None} if active_is_deepseek else
+                {
+                    "fits": not hardware.blocked_reason(config.LM_STUDIO_MODEL),
+                    "message": hardware.blocked_reason(config.LM_STUDIO_MODEL),
+                }
+            ),
         }
     except requests.RequestException as exc:
-        return {"models": [], "current": config.LM_STUDIO_MODEL, "error": str(exc)}
+        return {"models": [], "current": current, "error": str(exc)}
 
 
 @app.post("/models/select")
 def select_model(req: SelectModelRequest):
+    # DeepSeek ausgewählt (siehe llm_client.list_models/is_deepseek_model_id)
+    # - kein LM-Studio-Modell, also nichts von der Speicher-/Eject-Logik
+    # unten anwenden, nur explizit auf diesen Provider umschalten. Vorher
+    # gab es dafür gar keinen Auswahl-Weg: DeepSeek tauchte im Picker nicht
+    # auf, und ein LM-Studio-Pick änderte am tatsächlich aktiven Provider
+    # nichts, solange ein DeepSeek-Key konfiguriert war (ACTIVE_PROVIDER
+    # blieb immer "auto", das Default bevorzugt DeepSeek bedingungslos).
+    if llm_client.is_deepseek_model_id(req.model):
+        if not config.DEEPSEEK_API_KEY:
+            return {"ok": False, "error": "Kein DeepSeek-API-Key konfiguriert.", "current": config.LM_STUDIO_MODEL, "model": req.model}
+        config.set_provider("deepseek")
+        return {"ok": True}
+    # Ein echtes LM-Studio-Modell ausgewählt: explizit auf "lmstudio" pinnen,
+    # sonst würde ein weiterhin konfigurierter DeepSeek-Key diese Wahl im
+    # nächsten Request wieder überstimmen (siehe _request_targets).
+    config.set_provider("lmstudio")
     previous_model = config.LM_STUDIO_MODEL
     fit = hardware.check_model(req.model, freeable_ids=[previous_model])
     if not fit["fits"] and not req.force:

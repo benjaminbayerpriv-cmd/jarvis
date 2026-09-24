@@ -45,6 +45,17 @@ DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
 DEEPSEEK_BASE_URL = os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1")
 DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-chat")
 
+# Which text-generation backend actually answers, when both a DeepSeek key
+# and a reachable LM Studio are configured. "auto" (default, unchanged
+# legacy behaviour) always prefers DeepSeek when a key exists, only falling
+# back to LM Studio on a DeepSeek failure — which made the frontend's model
+# picker effectively dead as soon as a DeepSeek key was set: picking an LM
+# Studio model there had no effect, DeepSeek kept answering regardless.
+# Explicitly "deepseek" or "lmstudio" pins it to one, so a pick in the model
+# picker (see llm_client.list_models/select_model in main.py) actually takes
+# effect. See llm_client._request_targets for how this is applied.
+ACTIVE_PROVIDER = os.environ.get("ACTIVE_PROVIDER", "auto")
+
 # Gemini (Google AI Studio free tier). Only used by the experimental
 # backend/live_voice_test.py speech-to-speech proof-of-concept, not part of
 # the normal Jarvis pipeline.
@@ -145,4 +156,27 @@ def set_model(model: str) -> None:
             break
     else:
         lines.append(f"LM_STUDIO_MODEL={model}")
+    env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def set_provider(provider: str) -> None:
+    """Pin which text-generation backend _request_targets() tries first —
+    see ACTIVE_PROVIDER above. Called from main.py's /models/select whenever
+    the frontend's model picker chooses either the synthetic "deepseek:..."
+    entry or a real LM Studio one, so a pick there actually takes effect
+    instead of a configured DeepSeek key silently overriding it."""
+    global ACTIVE_PROVIDER
+    if provider not in ("auto", "deepseek", "lmstudio"):
+        raise ValueError(f"Unbekannter Provider: {provider!r}")
+    ACTIVE_PROVIDER = provider
+    env_path = ROOT_DIR / ".env"
+    if not env_path.exists():
+        return
+    lines = env_path.read_text(encoding="utf-8").splitlines()
+    for i, line in enumerate(lines):
+        if line.startswith("ACTIVE_PROVIDER="):
+            lines[i] = f"ACTIVE_PROVIDER={provider}"
+            break
+    else:
+        lines.append(f"ACTIVE_PROVIDER={provider}")
     env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")

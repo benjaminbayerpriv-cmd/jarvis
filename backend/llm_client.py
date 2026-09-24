@@ -412,18 +412,26 @@ def _build_messages(user_message: str, history: list | None, mode: str | None = 
 def _request_targets() -> list[tuple[str, str, dict, dict]]:
     """Ordered text-LLM endpoints to try, most preferred first.
 
-    Returns a list of (base_url, model, headers, extra_body). DeepSeek is
-    tried first when a key is configured, but a failed DeepSeek request
-    (expired/invalid key, quota, network) falls through to the local LM
-    Studio model instead of giving up — a working local model beats a canned
-    "can't reach my model" apology. DeepSeek's API is OpenAI-compatible but
-    needs an Authorization header and does not accept the `reasoning_effort`
-    field that LM Studio expects.
+    Returns a list of (base_url, model, headers, extra_body). Which one goes
+    first is controlled by config.ACTIVE_PROVIDER: "auto" (default, legacy
+    behaviour) always prefers DeepSeek when a key is configured, "deepseek"/
+    "lmstudio" pin it explicitly — set via the frontend's model picker (see
+    main.py select_model) picking the synthetic "deepseek:..." entry or a
+    real LM Studio one. Without this pin, picking an LM Studio model in the
+    picker had no effect at all whenever a DeepSeek key existed: DeepSeek
+    kept answering regardless, which is what "Modellauswahl funktioniert mit
+    Deepseek nicht" turned out to mean. Either way, a failed DeepSeek request
+    (expired/invalid key, quota, network) still falls through to the other
+    target instead of giving up — a working model beats a canned "can't
+    reach my model" apology. DeepSeek's API is OpenAI-compatible but needs an
+    Authorization header and does not accept the `reasoning_effort` field
+    that LM Studio expects.
     """
-    targets = []
+    deepseek_target = None
     if config.DEEPSEEK_API_KEY:
         headers = {"Authorization": f"Bearer {config.DEEPSEEK_API_KEY}"}
-        targets.append((config.DEEPSEEK_BASE_URL, config.DEEPSEEK_MODEL, headers, {}))
+        deepseek_target = (config.DEEPSEEK_BASE_URL, config.DEEPSEEK_MODEL, headers, {})
+
     # LM Studio loads a model just-in-time on the first request for it — so
     # a model too big for this PC must never be requested at all, or that
     # request is what triggers the crash.
@@ -442,10 +450,19 @@ def _request_targets() -> list[tuple[str, str, dict, dict]]:
             too_large = None
         else:
             too_large = fit.get("message", too_large)
+    lmstudio_target = None
     if not too_large:
-        targets.append((config.LM_STUDIO_BASE_URL, config.LM_STUDIO_MODEL, {}, {"reasoning_effort": "none"}))
-    elif not targets:
-        raise ModelTooLargeError(too_large)
+        lmstudio_target = (config.LM_STUDIO_BASE_URL, config.LM_STUDIO_MODEL, {}, {"reasoning_effort": "none"})
+
+    if config.ACTIVE_PROVIDER == "lmstudio":
+        ordered = [lmstudio_target, deepseek_target]
+    else:
+        # "deepseek" (explicit) and "auto" (legacy default) both prefer
+        # DeepSeek first when it's available.
+        ordered = [deepseek_target, lmstudio_target]
+    targets = [t for t in ordered if t is not None]
+    if not targets:
+        raise ModelTooLargeError(too_large or "Kein Modell verfügbar.")
     return targets
 
 
@@ -631,14 +648,35 @@ def generate_title(user_text: str, assistant_text: str) -> str:
     return ""
 
 
+# Prefix marking a synthetic model-picker entry as "DeepSeek", not an LM
+# Studio model id — LM Studio ids never contain a colon, so this can't
+# collide with a real one. See list_models()/select_model() in main.py.
+DEEPSEEK_MODEL_ID_PREFIX = "deepseek:"
+
+
+def is_deepseek_model_id(model_id: str) -> bool:
+    return str(model_id or "").startswith(DEEPSEEK_MODEL_ID_PREFIX)
+
+
 def list_models() -> list[str]:
     """Every model LM Studio currently reports via its OpenAI-compatible
-    /models endpoint — the same call model_health() below already relies
-    on, just returning the full list instead of checking one id against
-    it. Used by the frontend's model-picker dropdown."""
-    response = requests.get(f"{config.LM_STUDIO_BASE_URL}/models", timeout=5)
-    response.raise_for_status()
-    return sorted(entry.get("id") for entry in response.json().get("data", []) if entry.get("id"))
+    /models endpoint, plus a synthetic "deepseek:<model>" entry when a
+    DeepSeek key is configured — used by the frontend's model-picker
+    dropdown. Without this, DeepSeek never showed up there at all, and
+    picking an LM Studio model had no effect anyway (see
+    _request_targets(): a configured DeepSeek key always won, regardless of
+    what was picked) — the picker looked broken specifically for DeepSeek."""
+    try:
+        response = requests.get(f"{config.LM_STUDIO_BASE_URL}/models", timeout=5)
+        response.raise_for_status()
+        models = sorted(entry.get("id") for entry in response.json().get("data", []) if entry.get("id"))
+    except requests.RequestException:
+        # LM Studio unreachable must not hide DeepSeek from the picker too —
+        # DeepSeek can be perfectly healthy while LM Studio is down.
+        models = []
+    if config.DEEPSEEK_API_KEY:
+        models.insert(0, f"{DEEPSEEK_MODEL_ID_PREFIX}{config.DEEPSEEK_MODEL}")
+    return models
 
 
 # Substring fingerprint for vision-capable models. LM Studio doesn't guarantee
