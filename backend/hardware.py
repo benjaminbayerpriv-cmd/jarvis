@@ -125,6 +125,27 @@ def lm_studio_root() -> str:
     return base[: base.rfind("/v1")].rstrip("/") if base.endswith("/v1") else base.rstrip("/")
 
 
+_LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1", "0.0.0.0"}
+
+
+def is_remote_lm_studio() -> bool:
+    """Whether LM Studio's configured endpoint points at a different machine
+    than the one Jarvis's own backend runs on. Matters because _system_ram()/
+    _gpu_vram() below read THIS machine's memory via local OS calls
+    (ctypes/vm_stat/nvidia-smi) — there is no way to ask LM Studio's REST API
+    for the remote machine's RAM/VRAM (checked: no such endpoint exists), so
+    when LM Studio is remote, comparing a model's size against Jarvis's own
+    machine's memory is comparing against the wrong computer entirely. Live
+    observed: this produced a confidently wrong "nicht genug Speicher frei"
+    for a model that fit fine on the actual (remote) machine."""
+    try:
+        from urllib.parse import urlparse
+        host = urlparse(lm_studio_root()).hostname or ""
+    except ValueError:
+        return False
+    return host.lower() not in _LOCAL_HOSTS
+
+
 def _v1_models() -> list[dict] | None:
     """Full GET /api/v1/models response (LM Studio >= 0.4.0's native REST
     API) — every model on disk, with its size AND currently loaded
@@ -255,9 +276,17 @@ def check_models(model_ids: list[str], freeable_ids: list[str] | tuple = ()) -> 
     anything first), needed_bytes, and a German message when it doesn't fit.
     A model whose size or this PC's memory can't be determined is always
     allowed — the check must never block a model just because it's blind.
+    Also always allowed when LM Studio runs on a different machine (see
+    is_remote_lm_studio): THIS machine's memory says nothing about whether
+    it fits on the machine that actually loads it.
     """
     sizes = _model_sizes()
     loaded = _loaded_models()
+    if is_remote_lm_studio():
+        return {
+            model_id: {"fits": True, "fits_now": True, "needed_bytes": sizes.get(_model_key(model_id), 0)}
+            for model_id in model_ids
+        }
     ram_total, ram_free = _system_ram()
     vram_total, vram_free = _gpu_vram()
     capacity = ram_total + vram_total - _SYSTEM_RESERVE
