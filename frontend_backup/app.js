@@ -1,0 +1,1725 @@
+// Cmd+Shift+J on macOS, Ctrl+Shift+J elsewhere — matching
+// launcher/hotkey_listener.py's own platform check for the equivalent
+// global hotkey. Also decides whether the mic stream gets real echo
+// cancellation (see startBtn's handler and the VAD barge-in logic below).
+const IS_MAC = /Mac|iPod|iPhone|iPad/.test(navigator.platform);
+
+const stateLabel = document.getElementById("stateLabel");
+const hintEl = document.getElementById("hint");
+const logEl = document.getElementById("log");
+const inputEl = document.getElementById("input");
+const muteBtn = document.getElementById("muteBtn");
+const stopBtn = document.getElementById("stopBtn");
+const quitBtn = document.getElementById("quitBtn");
+const composerBar = document.getElementById("composerBar");
+const greetEl = document.getElementById("greeting");
+const greetTextEl = document.getElementById("greetingText");
+const attachBtn = document.getElementById("attachBtn");
+const fileInput = document.getElementById("fileInput");
+const dictateBtn = document.getElementById("dictateBtn");
+const speechSendBtn = document.getElementById("speechSendBtn");
+const modeSwitch = document.getElementById("modeSwitch");
+const modeOpts = [...document.querySelectorAll(".mode-opt")];
+const modelCapBadge = document.getElementById("modelCapBadge");
+
+// Ends the whole backend process (see /shutdown in backend/main.py), not
+// just this browser tab — window.close() is a best-effort extra for the
+// packaged desktop app's webview window, which normally treats it like
+// its own native close button; in a plain browser tab it's usually a
+// no-op (browsers only allow closing script-opened windows), which is
+// fine since the page going dead once the backend is gone already reads
+// as "the program quit" either way.
+quitBtn.addEventListener("click", () => {
+  fetch("/shutdown", { method: "POST" }).catch(() => {});
+  window.close();
+});
+
+// #log is the small chat panel (id="debugPanel", see index.html) —
+// collapsed by default, toggled open by chatToggleBtn below. Voice-only:
+// there's no text input, #log just mirrors the spoken conversation.
+const chatColumn = document.getElementById("debugPanel");
+const chatToggleBtn = document.getElementById("chatToggleBtn");
+
+chatToggleBtn.addEventListener("click", () => {
+  const collapsed = chatColumn.classList.toggle("collapsed");
+  // .open drives the bubble icon's slash (see style.css) — plain while
+  // expanded, crossed out while collapsed.
+  chatToggleBtn.classList.toggle("open", !collapsed);
+  chatToggleBtn.title = chatToggleBtn.ariaLabel =
+    collapsed ? "Chatfenster ausklappen" : "Chatfenster einklappen";
+  if (!collapsed) {
+    applySavedChatWidth();
+    loadConversationList();
+  } else {
+    // Clearing the inline size (rather than leaving it set) matters here:
+    // an inline style always beats the stylesheet's .collapsed width:0
+    // rule, so a leftover width would keep the panel visibly open.
+    chatColumn.style.width = "";
+    chatColumn.style.flexBasis = "";
+  }
+});
+
+/* ---------- resizable panel width ---------- */
+
+const resizeHandle = document.getElementById("resizeHandle");
+const CHAT_MIN_WIDTH = 200;
+const CHAT_MAX_WIDTH = 560;
+
+function setChatColumnWidth(px) {
+  const clamped = Math.min(CHAT_MAX_WIDTH, Math.max(CHAT_MIN_WIDTH, px));
+  chatColumn.style.width = `${clamped}px`;
+  chatColumn.style.flexBasis = `${clamped}px`;
+  return clamped;
+}
+
+function applySavedChatWidth() {
+  const saved = parseInt(localStorage.getItem("jarvis_chat_width"), 10);
+  if (saved) setChatColumnWidth(saved);
+}
+
+let resizingChat = false;
+
+resizeHandle.addEventListener("mousedown", (e) => {
+  resizingChat = true;
+  chatColumn.classList.add("resizing");
+  resizeHandle.classList.add("dragging");
+  document.body.style.userSelect = "none";
+  e.preventDefault();
+});
+
+window.addEventListener("mousemove", (e) => {
+  if (!resizingChat) return;
+  // The panel sits flush against the window's left edge, so its width is
+  // just the cursor's x position — no offset math needed.
+  setChatColumnWidth(e.clientX);
+});
+
+window.addEventListener("mouseup", () => {
+  if (!resizingChat) return;
+  resizingChat = false;
+  chatColumn.classList.remove("resizing");
+  resizeHandle.classList.remove("dragging");
+  document.body.style.userSelect = "";
+  const width = parseInt(chatColumn.style.width, 10);
+  if (width) localStorage.setItem("jarvis_chat_width", String(width));
+});
+
+let history = [];
+
+/* ---------- conversations (sidebar list, see backend/conversations.py) ---------- */
+
+const convListEl = document.getElementById("convList");
+const newChatBtn = document.getElementById("newChatBtn");
+
+function randomId() {
+  return crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+// Persisted across page reloads so re-opening the app continues the same
+// conversation instead of silently starting a new, empty one every time.
+let currentConversationId = localStorage.getItem("jarvis_conversation_id") || randomId();
+localStorage.setItem("jarvis_conversation_id", currentConversationId);
+
+// Each sidebar entry is its own little accordion: click the title to show
+// its transcript right underneath, click again to hide it — independent
+// of whichever conversation is actually live in #log. Fetched once per
+// entry (transcriptEl.dataset.loaded) and kept in the DOM afterwards, so
+// collapsing and re-expanding the same entry doesn't refetch it.
+async function toggleConversationEntry(id, entry) {
+  const transcriptEl = entry.querySelector(".conv-transcript");
+  const isOpen = entry.classList.toggle("expanded");
+  transcriptEl.classList.toggle("open", isOpen);
+  if (!isOpen || transcriptEl.dataset.loaded) return;
+  try {
+    const r = await fetch(`/conversations/${encodeURIComponent(id)}`);
+    if (!r.ok) return;
+    const { turns } = await r.json();
+    for (const t of turns || []) transcriptEl.appendChild(buildTurnEl(t.role, t.text));
+    transcriptEl.dataset.loaded = "1";
+  } catch (_) {}
+}
+
+function renderConversationList(list) {
+  convListEl.innerHTML = "";
+  for (const conv of list) {
+    const entry = document.createElement("div");
+    entry.className = "conv-entry";
+
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "conv-item";
+    // The one currently live in #log (voice conversation in progress),
+    // not whichever entry happens to be expanded right now.
+    if (conv.id === currentConversationId) btn.classList.add("active");
+    btn.textContent = conv.title || "Neuer Chat";
+    btn.title = btn.textContent;
+    btn.addEventListener("click", () => toggleConversationEntry(conv.id, entry));
+
+    const transcriptEl = document.createElement("div");
+    transcriptEl.className = "conv-transcript";
+
+    entry.append(btn, transcriptEl);
+    convListEl.appendChild(entry);
+  }
+}
+
+async function loadConversationList() {
+  try {
+    const r = await fetch("/conversations");
+    if (!r.ok) return;
+    const { conversations: list } = await r.json();
+    renderConversationList(list || []);
+  } catch (_) {}
+}
+
+function startNewChat() {
+  currentConversationId = randomId();
+  localStorage.setItem("jarvis_conversation_id", currentConversationId);
+  logEl.innerHTML = "";
+  history = [];
+  loadConversationList();
+}
+
+newChatBtn.addEventListener("click", startNewChat);
+
+// Restores the live conversation's turns into #log once on page load,
+// regardless of whether the panel is open yet — opening it should reveal
+// a chat that's already there, not trigger the fetch for the first time.
+(async () => {
+  try {
+    const r = await fetch(`/conversations/${encodeURIComponent(currentConversationId)}`);
+    if (!r.ok) return;
+    const { turns } = await r.json();
+    for (const t of turns || []) {
+      addTurn(t.role, t.text);
+      history.push({ role: t.role === "you" ? "user" : "assistant", content: t.text });
+    }
+  } catch (_) {}
+})();
+
+// Once the rolling history window fills up, the oldest chunk used to just
+// be dropped outright — mid-conversation amnesia with no trace left. Now
+// it's folded into a short summary via the backend instead, so at least
+// the gist of it (and any open task) survives past the cutoff.
+const HISTORY_CAP = 20; // entries (10 turns) kept verbatim
+const SUMMARIZE_CHUNK = 10; // oldest entries condensed into one summary line once the cap is hit
+
+async function trimHistory() {
+  if (history.length <= HISTORY_CAP) return;
+  const stale = history.slice(0, history.length - HISTORY_CAP + SUMMARIZE_CHUNK);
+  const rest = history.slice(stale.length);
+  let summary = "";
+  try {
+    const r = await fetch("/summarize", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ history: stale }),
+    });
+    if (r.ok) summary = ((await r.json()).summary || "").trim();
+  } catch (_) {}
+  history = summary
+    ? [{ role: "system", content: `Zusammenfassung des bisherigen Gesprächs: ${summary}` }, ...rest]
+    : rest; // summarizing failed — losing the old turns beats blocking the conversation on it
+}
+let micReady = false;
+let micStream = null;
+let muted = false;
+// True while a request is in flight or Jarvis is speaking. Recording is
+// off during this window (it would capture Jarvis's own voice); the
+// echo-cancelled VAD below is what listens for barge-in instead.
+let busy = false;
+let fillerUrls = [];
+
+// Two capture modes share one mic stream and one VAD loop (see ensureMic).
+// speechMode  — Jarvis's continuous voice mode: orb up, VAD auto-sends via
+//               handleUserMessage (the original startBtn behaviour).
+// dictationActive — a one-shot capture in chat mode: VAD inserts the
+//               transcribed text into #input instead of sending it.
+let speechMode = false;
+let dictationActive = false;
+let appMode = "chat";       // Chat | Code — visual only for now, no behaviour
+let pendingFiles = [];
+let modelCaps = {};         // model id -> capability tags, e.g. ["vision"]
+
+let activeTurn = null;
+let turnCounter = 0;
+
+// Filler ("Warte mal...") only fires if nothing has come back by now. With
+// sentence streaming that's rare — mostly during a tool round, where no
+// text streams until the tool resolves.
+const FILLER_DELAY_MS = 2200;
+
+fetch("/fillers")
+  .then((r) => r.json())
+  .then((d) => { fillerUrls = d.fillers || []; })
+  .catch(() => {});
+
+/* ---------- state ---------- */
+
+const HINTS = {
+  idle: "Tippe eine Nachricht oder nutze das Mikrofon.",
+  listening: "Hört zu — sprich einfach.",
+  thinking: "Arbeitet.",
+  speaking: "Sprich dazwischen, um zu unterbrechen.",
+  off: "Mikro ist aus. Tippen geht weiter.",
+};
+
+const LABELS = {
+  idle: "bereit",
+  listening: "hört zu",
+  thinking: "denkt nach",
+  speaking: "spricht",
+  off: "mikro aus",
+};
+
+function setState(state) {
+  document.body.dataset.state = state;
+  stateLabel.textContent = LABELS[state] || state;
+  hintEl.textContent = HINTS[state] || "";
+}
+
+// Drives the whole view: the greeting vs the orb depends on speechMode, and
+// the mute/stop buttons on micReady/busy. Idempotent and cheap — call it
+// whenever any of those change. renderOrb() early-returns on a 0×0 canvas, so
+// a hidden orb costs nothing while it's off (app.js:365).
+function updateView() {
+  document.body.dataset.view = speechMode ? "speech" : "chat";
+  greetEl.hidden = speechMode;
+  muteBtn.hidden = !(micReady && speechMode);
+  stopBtn.hidden = !busy;
+  dictateBtn.hidden = speechMode; // dictation is a chat-mode gesture only
+  dictateBtn.classList.toggle("active", dictationActive);
+  // resizeOrbCanvas() only runs on window resize/load. Since the orb is now
+  // display:none in the default chat view, that load-time call measured a 0×0
+  // rect and left the buffer at 1×1 — so when speech mode flips the orb to
+  // display:block, renderOrb keeps drawing into that 1×1 buffer and the orb
+  // renders blank. Re-measure here so a freshly shown orb gets a real buffer.
+  resizeOrbCanvas();
+}
+
+function renderGreeting() {
+  const h = new Date().getHours();
+  greetTextEl.textContent =
+    h >= 5 && h < 11 ? "Morgen, Chef" :
+    h >= 11 && h < 15 ? "Mittag, Chef" :
+    h >= 15 && h < 22 ? "Abend, Chef" : "Mondscheingespräch";
+}
+
+function restingState() {
+  if (!micReady) return "idle";
+  if (dictationActive) return "listening"; // capturing a dictation right now
+  if (!speechMode) return "idle";         // mic granted ≠ always listening
+  return muted ? "off" : "listening";
+}
+
+function settle() {
+  if (!busy) setState(restingState());
+  updateView();
+}
+
+/* ---------- the orb: a voice-reactive 3D wireframe mesh ---------- */
+//
+// A UV-sphere wireframe, hand-rotated and perspective-projected on a plain
+// 2D canvas — no WebGL/Three.js, so it stays dependency-free and works
+// fully offline like the rest of Jarvis. At rest it's a calm, slowly
+// turning sphere; audio level (voice in, Jarvis's own speech out) both
+// speeds the spin and ripples each vertex outward, so it visibly "listens"
+// and "speaks" instead of just pulsing a flat circle.
+
+const orbCanvas = document.getElementById("orb");
+const orbCtx = orbCanvas.getContext("2d");
+
+// A rotating 3D wireframe orb — an icosphere (subdivided icosahedron), so
+// every face is a genuine triangle that varies in size/orientation, unlike
+// a lat/long grid where each cell is really a quad with a diagonal drawn
+// in. Rendered at native (devicePixelRatio-aware) resolution — a flat,
+// pixel-textured "cloud" version was tried and just looked blurry.
+//
+// A cyan HUD-readout look instead of a plain rotating ball — reference:
+// a wireframe "flower of life" sphere at the centre, a segmented scanner
+// ring around it, and an uneven dust ring at the outer edge. One cyan for
+// every active state, same reasoning as before: a colour code barely
+// showed up floating over an arbitrary desktop background anyway. States
+// are told apart by motion instead: listening blinks (see LISTEN_PULSE
+// below), thinking sweeps top-to-bottom, speaking ripples with the actual
+// audio level. Grey is the one deliberate exception.
+const ORB_COLORS = {
+  idle: "#2be2e2",
+  listening: "#2be2e2",
+  thinking: "#2be2e2",
+  speaking: "#2be2e2",
+  off: "#9a9aa2",
+};
+
+const ORB_SWEEP_PERIOD = 1.6; // seconds per top-to-bottom pass while thinking
+// Lower than the old dot-cloud's 3 — this sphere is now only the inner HUD
+// element (the rings around it carry most of the screen area), and every
+// edge gets its own stroke() call for per-edge depth shading, so a finer
+// subdivision would cost real frame time for detail nobody sees at this size.
+const ORB_SUBDIVISIONS = 2;
+
+function normalize3([x, y, z]) {
+  const len = Math.hypot(x, y, z) || 1;
+  return [x / len, y / len, z / len];
+}
+
+// Returns { verts, edges }: edges is the deduplicated edge list of the
+// final subdivided mesh, needed to draw the sphere as a wireframe grid (the
+// "flower of life" look) instead of a plain dot cloud.
+function buildIcosphere(subdivisions) {
+  const PHI = (1 + Math.sqrt(5)) / 2;
+  let verts = [
+    [-1, PHI, 0], [1, PHI, 0], [-1, -PHI, 0], [1, -PHI, 0],
+    [0, -1, PHI], [0, 1, PHI], [0, -1, -PHI], [0, 1, -PHI],
+    [PHI, 0, -1], [PHI, 0, 1], [-PHI, 0, -1], [-PHI, 0, 1],
+  ].map(normalize3);
+
+  let faces = [
+    [0, 11, 5], [0, 5, 1], [0, 1, 7], [0, 7, 10], [0, 10, 11],
+    [1, 5, 9], [5, 11, 4], [11, 10, 2], [10, 7, 6], [7, 1, 8],
+    [3, 9, 4], [3, 4, 2], [3, 2, 6], [3, 6, 8], [3, 8, 9],
+    [4, 9, 5], [2, 4, 11], [6, 2, 10], [8, 6, 7], [9, 8, 1],
+  ];
+
+  for (let s = 0; s < subdivisions; s++) {
+    const midCache = new Map();
+    const midpoint = (a, b) => {
+      const key = a < b ? `${a}_${b}` : `${b}_${a}`;
+      if (midCache.has(key)) return midCache.get(key);
+      const va = verts[a], vb = verts[b];
+      const m = normalize3([(va[0] + vb[0]) / 2, (va[1] + vb[1]) / 2, (va[2] + vb[2]) / 2]);
+      const idx = verts.length;
+      verts.push(m);
+      midCache.set(key, idx);
+      return idx;
+    };
+    const nextFaces = [];
+    for (const [a, b, c] of faces) {
+      const ab = midpoint(a, b), bc = midpoint(b, c), ca = midpoint(c, a);
+      nextFaces.push([a, ab, ca], [b, bc, ab], [c, ca, bc], [ab, bc, ca]);
+    }
+    faces = nextFaces;
+  }
+
+  const edgeSet = new Set();
+  const edges = [];
+  for (const [a, b, c] of faces) {
+    for (const [i, j] of [[a, b], [b, c], [c, a]]) {
+      const key = i < j ? `${i}_${j}` : `${j}_${i}`;
+      if (!edgeSet.has(key)) {
+        edgeSet.add(key);
+        edges.push([i, j]);
+      }
+    }
+  }
+
+  return { verts, edges };
+}
+
+const orbMesh = buildIcosphere(ORB_SUBDIVISIONS);
+const orbVerts = orbMesh.verts.map(([x, y, z]) => ({ x, y, z }));
+const orbEdges = orbMesh.edges;
+// Reused per-frame projection buffer: renderOrb writes the transformed
+// vertex into these objects in place every frame instead of allocating a
+// fresh `{sx,sy,depth,sweep,x,y,z}` per vertex (162/frame). Per-frame
+// allocation there was a hidden GC churn source on top of the draw cost.
+const orbProjected = orbVerts.map(() => ({ sx: 0, sy: 0, depth: 0, sweep: 0, x: 0, y: 0, z: 0 }));
+
+// ---------- outer HUD rings: segmented scanner band + uneven dust ring ----
+//
+// Both flat 2D circles around the wireframe sphere, matching the reference
+// this was styled after — only the sphere itself uses the 3D tilt/spin
+// projection below.
+
+const RING_SEGMENTS = 56;
+const RING_GAP_DEG = 46; // open gap at the top, like a loading-ring readout
+// Fixed per-segment "brightness/length" seed, generated once — animated by
+// rotating the whole ring each frame rather than re-randomizing it, so
+// individual segments don't flicker in and out.
+const ringSegmentSeeds = Array.from({ length: RING_SEGMENTS }, () => 0.35 + Math.random() * 0.65);
+
+const DUST_COUNT = 220;
+// Same idea for the outer dust ring: fixed per-particle angle/size/twinkle
+// phase, so the jagged boundary holds its shape and only rotates/twinkles
+// rather than reshuffling every frame.
+const dustParticles = Array.from({ length: DUST_COUNT }, () => ({
+  angle: Math.random() * Math.PI * 2,
+  jitter: (Math.random() - 0.5) * 2,
+  size: 0.6 + Math.random() * 1.6,
+  twinklePhase: Math.random() * Math.PI * 2,
+}));
+// A few sine harmonics with fixed random phases give the dust ring's
+// silhouette organic, uneven "lobes" instead of a perfect circle or
+// uniformly random noise.
+const boundaryHarmonics = [3, 5, 8].map((freq) => ({
+  freq,
+  phase: Math.random() * Math.PI * 2,
+  amp: 0.5 + Math.random() * 0.5,
+}));
+
+function boundaryRadiusFactor(angle) {
+  let n = 0;
+  for (const h of boundaryHarmonics) n += Math.sin(angle * h.freq + h.phase) * h.amp;
+  return 1 + (n / boundaryHarmonics.length) * 0.09;
+}
+
+function drawDustRing(cx, cy, ringR, spin, color, alpha) {
+  const t = Date.now() / 1000;
+  // 220 dust motes as 220 separate arc+fill() calls — each with canvas
+  // shadowBlur — was another frame-cost spike. Batch them into a few alpha
+  // buckets (quantised twinkle) so it's ~10 fill() calls, and drop the
+  // per-mote shadowBlur (the outer halo below carries the glow).
+  const DUST_BUCKETS = 12;
+  const paths = Array.from({ length: DUST_BUCKETS }, () => new Path2D());
+  const bucketAlpha = new Float32Array(DUST_BUCKETS);
+  for (const p of dustParticles) {
+    const angle = p.angle + spin * 0.4;
+    const r = ringR * boundaryRadiusFactor(angle) * (1 + p.jitter * 0.05);
+    const twinkle = 0.5 + 0.5 * Math.sin(t * 1.5 + p.twinklePhase);
+    const a = alpha * (0.3 + twinkle * 0.7);
+    const k = Math.min(DUST_BUCKETS - 1, (a * DUST_BUCKETS) | 0);
+    const x = cx + Math.cos(angle) * r, y = cy + Math.sin(angle) * r;
+    paths[k].moveTo(x + p.size, y);
+    paths[k].arc(x, y, p.size, 0, Math.PI * 2);
+    bucketAlpha[k] = (k + 0.5) / DUST_BUCKETS;
+  }
+  orbCtx.save();
+  orbCtx.fillStyle = color;
+  for (let k = 0; k < DUST_BUCKETS; k++) {
+    if (!bucketAlpha[k]) continue;
+    orbCtx.globalAlpha = bucketAlpha[k];
+    orbCtx.fill(paths[k]);
+  }
+  orbCtx.restore();
+}
+
+function drawSegmentRing(cx, cy, ringR, spin, color, level, alpha) {
+  const t = Date.now() / 1000;
+  const startAngle = -Math.PI / 2 + (RING_GAP_DEG * Math.PI) / 360; // gap centred at top
+  const sweep = Math.PI * 2 - (RING_GAP_DEG * Math.PI) / 180;
+  orbCtx.save();
+  orbCtx.strokeStyle = color;
+  orbCtx.lineWidth = Math.max(1.5, ringR * 0.02);
+  orbCtx.lineCap = "round";
+  for (let i = 0; i < RING_SEGMENTS; i++) {
+    const angle = startAngle + (sweep * i) / RING_SEGMENTS + spin * 0.6;
+    const seed = ringSegmentSeeds[i];
+    const reactive = 0.5 + level * 1.2 * (0.4 + 0.6 * Math.sin(i * 1.7 + t * 3));
+    const len = ringR * 0.11 * seed * Math.max(0.4, reactive);
+    const rInner = ringR * 0.92;
+    orbCtx.globalAlpha = alpha * (0.4 + seed * 0.6);
+    orbCtx.beginPath();
+    orbCtx.moveTo(cx + Math.cos(angle) * rInner, cy + Math.sin(angle) * rInner);
+    orbCtx.lineTo(cx + Math.cos(angle) * (rInner + len), cy + Math.sin(angle) * (rInner + len));
+    orbCtx.stroke();
+  }
+  orbCtx.restore();
+}
+
+// Muted state: a smooth noise field of grey shades flows across the sphere
+// instead of one flat color — evaluated in object-space (x,y,z before
+// rotation) so it turns with the sphere.
+function mutedNoiseShade(x, y, z, t) {
+  const raw =
+    Math.sin(x * 3.0 + t * 0.31) * 0.4 +
+    Math.sin(y * 2.7 - t * 0.24) * 0.4 +
+    Math.sin(z * 3.3 + t * 0.27) * 0.3 +
+    Math.sin((x + y) * 1.9 - t * 0.19) * 0.3;
+  const n = (raw / 1.4 + 1) / 2; // ~0..1
+  const light = 40 + n * 28;
+  return `hsl(230, 4%, ${light}%)`;
+}
+
+function resizeOrbCanvas() {
+  const rect = orbCanvas.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  orbCanvas.width = Math.max(1, rect.width * dpr);
+  orbCanvas.height = Math.max(1, rect.height * dpr);
+  orbCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+window.addEventListener("resize", resizeOrbCanvas);
+resizeOrbCanvas();
+// The packaged desktop app's embedded webview (pywebview) doesn't always
+// report a correct viewport size on the very first layout pass — the orb
+// measured 0×0 and stayed blank until *something* fired a real resize
+// event. A real browser tab never needed this, but re-measuring a couple
+// of times shortly after load is a harmless no-op there and fixes it here.
+window.addEventListener("load", resizeOrbCanvas);
+setTimeout(resizeOrbCanvas, 300);
+
+let orbSpin = 0;
+
+function renderOrb(level, stateName) {
+  const rect = orbCanvas.getBoundingClientRect();
+  const w = rect.width, h = rect.height;
+  if (!w || !h) return;
+  orbCtx.clearRect(0, 0, w, h);
+
+  const cx = w / 2, cy = h / 2;
+  // outerR is the full HUD radius (dust ring); the wireframe sphere itself
+  // is a smaller element inside it, same proportions as the reference this
+  // was styled after.
+  const outerR = Math.min(w, h) * 0.48;
+  const baseR = outerR * 0.55;
+  const color = ORB_COLORS[stateName] || ORB_COLORS.idle;
+  const ringColor = stateName === "off" ? ORB_COLORS.off : color;
+  const t = Date.now() / 1000;
+  const muted = stateName === "off";
+  const thinking = stateName === "thinking";
+  const listening = stateName === "listening";
+  // Listening has no distinct colour anymore, so it needs its own motion to
+  // still read as "actively listening" rather than idle — a slow breathing
+  // blink, brightest right as it dips into shadow and back.
+  const listenPulse = listening ? 0.55 + 0.45 * Math.sin(t * 2.4) : 1;
+
+  // Keeps spinning at rest even while muted — muting only stops audio from
+  // being recorded, it doesn't pause Jarvis (a reply already in flight
+  // keeps going, typed messages still work), so freezing the orb here
+  // used to visually claim otherwise. The grey colour below is still the
+  // signal that the mic itself is off.
+  orbSpin += 0.0032 + level * 0.014;
+  const tilt = 0.32 + Math.sin(t / 4) * 0.06;
+  const cosY = Math.cos(orbSpin), sinY = Math.sin(orbSpin);
+  const cosX = Math.cos(tilt), sinX = Math.sin(tilt);
+
+  let sweepT = -1;
+  if (thinking) {
+    // Triangle wave: top→bottom→top continuously, no jump back to start.
+    const phase = (t % (ORB_SWEEP_PERIOD * 2)) / (ORB_SWEEP_PERIOD * 2);
+    sweepT = phase < 0.5 ? phase * 2 : 2 - phase * 2;
+  }
+
+  // Outer dust ring and segmented scanner ring first (furthest back) — both
+  // flat 2D circles, independent of the sphere's own 3D tilt/spin below.
+  // The dust ring's own jagged-boundary distortion (boundaryRadiusFactor)
+  // plus per-particle jitter can push individual dust motes up to ~14%
+  // past their nominal radius — at a base of outerR that overshoots the
+  // canvas edge and gets clipped at the sides, so it's drawn at 0.85x
+  // outerR instead of the full radius to leave room for that swing.
+  drawDustRing(cx, cy, outerR * 0.85, orbSpin, ringColor, 0.55 * listenPulse);
+  drawSegmentRing(cx, cy, outerR * 0.82, orbSpin, ringColor, level, 0.75 * listenPulse);
+
+  for (let i = 0; i < orbVerts.length; i++) {
+    const v = orbVerts[i];
+    const p = orbProjected[i];
+    const ripple = Math.sin(v.x * 4 + t * 1.6) * Math.cos(v.y * 4 - t * 1.1);
+    let sweep = 0;
+    if (thinking) {
+      const rowT = (1 - v.y) / 2;
+      sweep = Math.exp(-((Math.abs(rowT - sweepT) * 6) ** 2));
+    }
+    const r = 1 + level * 0.2 * ripple + sweep * 0.12;
+
+    const x = v.x * r, y = v.y * r, z = v.z * r;
+    const x1 = x * cosY + z * sinY;
+    const z1 = -x * sinY + z * cosY;
+    const y1 = y * cosX - z1 * sinX;
+    const z2 = y * sinX + z1 * cosX;
+
+    const perspective = 3.1 / (3.1 + z2);
+    p.sx = cx + x1 * baseR * perspective;
+    p.sy = cy + y1 * baseR * perspective;
+    p.depth = z2;
+    p.sweep = sweep;
+    p.x = v.x; p.y = v.y; p.z = v.z;
+  }
+
+  // The wireframe grid itself — the "flower of life" triangulated sphere.
+  // Edges are grouped into a few depth/sweep buckets (the block below) so
+  // each bucket is one shared path with a single alpha. The per-edge alpha
+  // of the old per-edge stroke() version is gone, but the bucketed
+  // front/back fade still reads as depth while costing ~8 stroke() calls
+  // instead of ~480.
+  const wireColor = muted ? ORB_COLORS.off : color;
+  // The wireframe is the frame's biggest canvas cost. Drawing ~480 edges as
+  // one beginPath/moveTo/lineTo/stroke() each — with a canvas shadowBlur on
+  // top — flushed the whole raster pipeline per edge and dominated the frame.
+  // Instead: group edges into a few depth+x-sweep "brightness" buckets, build
+  // one Path2D per bucket and stroke() once per bucket. The per-edge depth
+  // fade that motivated the individual strokes is preserved as a coarser,
+  // bucketed alpha, and the sweep (thinking) highlight is folded into the same
+  // brightness key. shadowBlur is dropped entirely — the outer radial halo
+  // (drawn below) already carries the glow.
+  const EDGE_BUCKETS = 8;
+  const edgePaths = Array.from({ length: EDGE_BUCKETS }, () => new Path2D());
+  const edgeAlpha = new Float32Array(EDGE_BUCKETS);
+  for (const [ia, ib] of orbEdges) {
+    const a = orbProjected[ia], b = orbProjected[ib];
+    const front = Math.max(0, 1 - (a.depth + b.depth + 2) / 4); // ~0 back .. ~1 front
+    const brightness = front * 0.5 + Math.max(a.sweep, b.sweep) * 0.5; // 0..~1
+    const k = Math.min(EDGE_BUCKETS - 1, (brightness * EDGE_BUCKETS) | 0);
+    edgePaths[k].moveTo(a.sx, a.sy);
+    edgePaths[k].lineTo(b.sx, b.sy);
+    edgeAlpha[k] = (k + 0.5) / EDGE_BUCKETS;
+  }
+  orbCtx.save();
+  orbCtx.lineCap = "round";
+  orbCtx.strokeStyle = wireColor;
+  orbCtx.lineWidth = Math.max(0.6, baseR * 0.008);
+  for (let k = 0; k < EDGE_BUCKETS; k++) {
+    const path = edgePaths[k];
+    if (!path || !edgeAlpha[k]) continue;
+    orbCtx.globalAlpha = (0.12 + edgeAlpha[k] * 0.55) * listenPulse;
+    orbCtx.stroke(path);
+  }
+  orbCtx.restore();
+
+  // A handful of the frontmost vertices get a small bright dot on top — the
+  // sparkle highlights visible in the reference — rather than every vertex,
+  // which would just look like the old dot cloud again.
+  const dotR = Math.max(1, baseR * 0.03);
+  orbCtx.save();
+  for (const p of orbProjected) {
+    if (p.depth > -0.55 && p.sweep < 0.5) continue;
+    const front = Math.max(0, (1 - (p.depth + 1) / 2));
+    orbCtx.globalAlpha = (0.5 + front * 0.5 + p.sweep * 0.5) * listenPulse;
+    orbCtx.fillStyle = muted ? mutedNoiseShade(p.x, p.y, p.z, t) : color;
+    orbCtx.beginPath();
+    orbCtx.arc(p.sx, p.sy, dotR, 0, Math.PI * 2);
+    orbCtx.fill();
+  }
+  orbCtx.restore();
+
+  const glow = orbCtx.createRadialGradient(cx, cy, 0, cx, cy, baseR * 1.3);
+  glow.addColorStop(0, `${color}33`);
+  glow.addColorStop(1, `${color}00`);
+  orbCtx.globalAlpha = (0.3 + level * 0.35) * listenPulse;
+  orbCtx.fillStyle = glow;
+  orbCtx.beginPath();
+  orbCtx.arc(cx, cy, baseR * 1.3, 0, Math.PI * 2);
+  orbCtx.fill();
+  orbCtx.globalAlpha = 1;
+}
+
+/* ---------- sub-orb: shows a background job (e.g. build_project) is running ---------- */
+//
+// build_project answers immediately and keeps working on its own thread —
+// without this, that work is invisible until it announces itself minutes
+// later. Every such job is tracked here by id (from the "task" panel
+// event) and rendered as a small second orb next to the main one for as
+// long as at least one is active.
+
+const backgroundTasks = new Map(); // id -> label
+const subOrbCanvas = document.getElementById("subOrb");
+const subOrbCtx = subOrbCanvas.getContext("2d");
+const subOrbVerts = buildIcosphere(1).verts.map(([x, y, z]) => ({ x, y, z }));
+
+function resizeSubOrbCanvas() {
+  const rect = subOrbCanvas.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  subOrbCanvas.width = Math.max(1, rect.width * dpr);
+  subOrbCanvas.height = Math.max(1, rect.height * dpr);
+  subOrbCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+window.addEventListener("resize", resizeSubOrbCanvas);
+
+let subOrbSpin = 0;
+
+function renderSubOrb() {
+  const rect = subOrbCanvas.getBoundingClientRect();
+  const w = rect.width, h = rect.height;
+  if (!w || !h) return;
+  subOrbCtx.clearRect(0, 0, w, h);
+
+  const cx = w / 2, cy = h / 2;
+  const baseR = Math.min(w, h) * 0.42;
+  const t = Date.now() / 1000;
+  const color = ORB_COLORS.thinking;
+
+  subOrbSpin += 0.045;
+  const cosY = Math.cos(subOrbSpin), sinY = Math.sin(subOrbSpin);
+  const cosX = Math.cos(0.5), sinX = Math.sin(0.5);
+  const pulse = 0.85 + Math.sin(t * 3) * 0.15;
+
+  const dotR = Math.max(1, baseR * 0.05);
+  for (const v of subOrbVerts) {
+    const x1 = v.x * cosY + v.z * sinY;
+    const z1 = -v.x * sinY + v.z * cosY;
+    const y1 = v.y * cosX - z1 * sinX;
+    const z2 = v.y * sinX + z1 * cosX;
+    const perspective = 3 / (3 + z2);
+    const sx = cx + x1 * baseR * perspective;
+    const sy = cy + y1 * baseR * perspective;
+    subOrbCtx.globalAlpha = Math.min(1, 0.35 + Math.max(0, (1 - (z2 + 1) / 2)) * 0.65);
+    subOrbCtx.fillStyle = color;
+    subOrbCtx.beginPath();
+    subOrbCtx.arc(sx, sy, dotR * pulse, 0, Math.PI * 2);
+    subOrbCtx.fill();
+  }
+
+  const glow = subOrbCtx.createRadialGradient(cx, cy, 0, cx, cy, baseR * 1.2);
+  glow.addColorStop(0, `${color}55`);
+  glow.addColorStop(1, `${color}00`);
+  subOrbCtx.globalAlpha = 0.5;
+  subOrbCtx.fillStyle = glow;
+  subOrbCtx.beginPath();
+  subOrbCtx.arc(cx, cy, baseR * 1.2, 0, Math.PI * 2);
+  subOrbCtx.fill();
+  subOrbCtx.globalAlpha = 1;
+}
+
+function updateSubOrbVisibility() {
+  const active = backgroundTasks.size > 0;
+  subOrbCanvas.hidden = !active;
+  subOrbCanvas.title = [...backgroundTasks.values()].join(", ");
+  if (active) resizeSubOrbCanvas();
+}
+
+function taskStarted(id, label) {
+  backgroundTasks.set(id, label || "Arbeitet im Hintergrund");
+  updateSubOrbVisibility();
+}
+
+function taskEnded(id) {
+  backgroundTasks.delete(id);
+  updateSubOrbVisibility();
+}
+
+let outputAnalyser = null; // set while Jarvis speaks
+let smoothed = 0;
+
+function rmsFrom(analyser, buf) {
+  analyser.getByteTimeDomainData(buf);
+  let sum = 0;
+  for (let i = 0; i < buf.length; i++) {
+    const v = (buf[i] - 128) / 128;
+    sum += v * v;
+  }
+  return Math.sqrt(sum / buf.length);
+}
+
+let outBuf = null;
+// Throttle the orb redraw. requestAnimationFrame fires at the display's
+// refresh rate (up to 120 Hz on ProMotion), but the orb is a slowly-rotating,
+// already-smooth visual — 30 fps is indistinguishable here and saves up to
+// ~4x of the expensive canvas work. The audio level itself is still computed
+// every frame so the meter stays responsive; only the draw is gated.
+const METER_RENDER_FPS = 30;
+let lastMeterRender = 0;
+
+function meterLoop() {
+  let level = 0;
+
+  if (outputAnalyser) {
+    if (!outBuf || outBuf.length !== outputAnalyser.fftSize) {
+      outBuf = new Uint8Array(outputAnalyser.fftSize);
+    }
+    level = Math.min(rmsFrom(outputAnalyser, outBuf) * 4.5, 1);
+  } else if (vadAnalyser && !muted && !busy) {
+    level = Math.min(Math.max(rmsFrom(vadAnalyser, vadData) - 0.006, 0) * 11, 1);
+  }
+
+  smoothed += (level - smoothed) * (level > smoothed ? 0.5 : 0.12);
+  const now = performance.now();
+  if (now - lastMeterRender >= 1000 / METER_RENDER_FPS) {
+    lastMeterRender = now;
+    renderOrb(smoothed, document.body.dataset.state);
+    if (backgroundTasks.size) renderSubOrb();
+  }
+
+  requestAnimationFrame(meterLoop);
+}
+requestAnimationFrame(meterLoop);
+
+/* ---------- conversation log ---------- */
+
+function buildTurnEl(who, text) {
+  const el = document.createElement("div");
+  el.className = `turn ${who}`;
+  const label = document.createElement("div");
+  label.className = "who";
+  label.textContent = who === "you" ? "du" : "jarvis";
+  const said = document.createElement("div");
+  said.className = "said";
+  said.textContent = text;
+  el.append(label, said);
+  return el;
+}
+
+function addTurn(who, text) {
+  const el = buildTurnEl(who, text);
+  logEl.appendChild(el);
+  logEl.scrollTop = logEl.scrollHeight;
+  return el.querySelector(".said");
+}
+
+/* ---------- inline tool output (Claude Code-style verbose log) ---------- */
+
+function escapeHtml(s) {
+  return s.replace(/[&<>"']/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])
+  );
+}
+
+// Deliberately tiny: panel text is model output, so it is escaped first and
+// only a fixed set of inline shapes is re-enabled afterwards.
+function miniMarkdown(src) {
+  const lines = escapeHtml(src).split("\n");
+  let html = "";
+  let inList = false;
+
+  const inline = (s) =>
+    s
+      .replace(/`([^`]+)`/g, "<code>$1</code>")
+      .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+
+  for (const line of lines) {
+    const t = line.trim();
+    const bullet = t.match(/^[-*]\s+(.*)$/);
+    const heading = t.match(/^(#{1,3})\s+(.*)$/);
+
+    if (bullet) {
+      if (!inList) { html += "<ul>"; inList = true; }
+      html += `<li>${inline(bullet[1])}</li>`;
+      continue;
+    }
+    if (inList) { html += "</ul>"; inList = false; }
+
+    if (heading) html += `<h3>${inline(heading[2])}</h3>`;
+    else if (t) html += `<p>${inline(t)}</p>`;
+  }
+  if (inList) html += "</ul>";
+  return html;
+}
+
+function addBlock(title, bodyNode) {
+  const block = document.createElement("div");
+  block.className = "block";
+  if (title) {
+    const h = document.createElement("div");
+    h.className = "block-title";
+    h.textContent = title;
+    block.appendChild(h);
+  }
+  block.appendChild(bodyNode);
+  logEl.appendChild(block);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+// Every "action" event for the same tool call shares item.id (first "läuft",
+// then "erfolgreich"/"fehlgeschlagen") — tracked here so the second event
+// updates the existing line instead of appending a duplicate.
+const toolLines = new Map();
+
+function toolArgSummary(target) {
+  if (!target || typeof target !== "object") return "";
+  const value = Object.values(target).find((v) => typeof v === "string" && v);
+  if (!value) return "";
+  return value.length > 60 ? value.slice(0, 57) + "…" : value;
+}
+
+function renderAction(item) {
+  let line = toolLines.get(item.id);
+  if (!line) {
+    line = document.createElement("div");
+    line.className = "tool";
+    line.innerHTML = `<div class="call"><span class="bullet">●</span><span class="name"></span></div><div class="result" hidden></div>`;
+    logEl.appendChild(line);
+    toolLines.set(item.id, line);
+  }
+
+  const status = item.status || "läuft";
+  line.className = `tool ${status === "erfolgreich" ? "ok" : status === "fehlgeschlagen" ? "fail" : "running"}`;
+  const arg = toolArgSummary(item.target);
+  line.querySelector(".name").textContent = arg ? `${item.action}(${arg})` : item.action || "Aktion";
+
+  const resultEl = line.querySelector(".result");
+  if (item.detail) {
+    resultEl.textContent = item.detail.length > 500 ? item.detail.slice(0, 500) + "…" : item.detail;
+    resultEl.hidden = false;
+  }
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+function renderPanelItem(item) {
+  if (item.kind === "action") {
+    renderAction(item);
+    return;
+  }
+
+  if (item.kind === "task") {
+    if (item.status === "started") taskStarted(item.id, item.label);
+    else taskEnded(item.id);
+    return;
+  }
+
+  if (item.kind === "notify") {
+    speakNotification(item.text);
+    addTurn("jarvis", item.text);
+    return;
+  }
+
+  if (item.kind === "image") {
+    const img = document.createElement("img");
+    img.src = item.data_url;
+    img.alt = item.title || "Screenshot";
+    addBlock(item.title || "Bild", img);
+    return;
+  }
+
+  if (item.kind === "code") {
+    const pre = document.createElement("pre");
+    pre.textContent = item.text;
+    addBlock(item.title || "Code", pre);
+    return;
+  }
+
+  if (item.kind === "markdown") {
+    const div = document.createElement("div");
+    div.className = "prose";
+    div.innerHTML = miniMarkdown(item.text || "");
+    addBlock(item.title || "", div);
+    return;
+  }
+
+  if (item.kind === "files") {
+    const wrap = document.createElement("div");
+    const ul = document.createElement("ul");
+    ul.className = "filelist";
+    (item.files || []).forEach((f) => {
+      const li = document.createElement("li");
+      li.textContent = f;
+      ul.appendChild(li);
+    });
+    const p = document.createElement("div");
+    p.className = "path";
+    p.textContent = item.path || "";
+    wrap.append(ul, p);
+    addBlock(item.title || "Dateien", wrap);
+    return;
+  }
+
+  if (item.kind === "link") {
+    const a = document.createElement("a");
+    a.href = item.url;
+    a.textContent = item.url;
+    a.target = "_blank";
+    a.rel = "noopener noreferrer";
+    addBlock(item.title || "Link", a);
+  }
+}
+
+/* ---------- audio ---------- */
+
+let audioCtx = null;
+
+function ensureCtx() {
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  return audioCtx;
+}
+
+function base64ToBlob(base64, mime) {
+  const bytes = atob(base64);
+  const arr = new Uint8Array(bytes.length);
+  for (let i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i);
+  return new Blob([arr], { type: mime });
+}
+
+function playFiller(turn) {
+  if (!fillerUrls.length || turn.aborted) return;
+  const audio = new Audio(fillerUrls[Math.floor(Math.random() * fillerUrls.length)]);
+  turn.fillerAudio = audio;
+  audio.play().catch(() => {});
+}
+
+function stopFiller(turn) {
+  if (turn.fillerAudio) { turn.fillerAudio.pause(); turn.fillerAudio = null; }
+  clearTimeout(turn.fillerTimer);
+}
+
+function playClip(blob, turn) {
+  const audio = new Audio(URL.createObjectURL(blob));
+  if (turn) turn.audio = audio;
+
+  const ctx = ensureCtx();
+  const src = ctx.createMediaElementSource(audio);
+  const analyser = ctx.createAnalyser();
+  analyser.fftSize = 512;
+  src.connect(analyser);
+  analyser.connect(ctx.destination);
+  outputAnalyser = analyser;
+  // audio.pause() alone leaves already-buffered samples playing out through
+  // the hardware for a beat — disconnecting the graph node is what actually
+  // makes a stop-button click silence things instantly (see interruptActiveTurn).
+  if (turn) turn.audioSrc = src;
+
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      if (outputAnalyser === analyser) outputAnalyser = null;
+      resolve();
+    };
+    audio.onended = finish;
+    audio.onpause = finish;   // also fires when a barge-in pauses it
+    audio.play().catch(finish);
+  });
+}
+
+// Background jobs (a finished build) announce themselves out of band.
+async function speakNotification(text) {
+  try {
+    const r = await fetch("/tts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reply: text }),
+    });
+    if (!r.ok) return;
+    const wasBusy = busy;
+    if (!wasBusy) setState("speaking");
+    await playClip(await r.blob(), null);
+    if (!wasBusy) settle();
+  } catch (_) {}
+}
+
+/* ---------- turns ---------- */
+
+function interruptActiveTurn() {
+  if (!activeTurn) return;
+  const turn = activeTurn;
+  turn.aborted = true;
+  stopFiller(turn);
+  if (turn.audioSrc) { try { turn.audioSrc.disconnect(); } catch (_) {} }
+  if (turn.audio) turn.audio.pause();
+  outputAnalyser = null;
+  activeTurn = null;
+  busy = false;
+  settle();
+  // Dropping the fetch only stops *this* side from listening — a tool call
+  // (open_url, ...) runs synchronously on the backend with no point in
+  // between where it'd notice the connection is gone, so it finishes
+  // regardless. This tells the backend explicitly to skip the next tool
+  // call for this turn instead, best-effort (nothing to do if it's too
+  // slow or fails — the fetch abort above is still the fast path for
+  // audio/UI).
+  fetch("/chat/cancel", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ turn_id: String(turn.id) }),
+  }).catch(() => {});
+}
+
+async function handleUserMessage(text) {
+  if (!text) return;
+
+  if (activeTurn) interruptActiveTurn();
+  cancelRecording();
+
+  addTurn("you", text);
+
+  const turn = { id: ++turnCounter, aborted: false, audio: null, fillerAudio: null, fillerTimer: null };
+  activeTurn = turn;
+  busy = true;
+  setState("thinking");
+  updateView(); // reveal the stop button while busy
+
+  turn.fillerTimer = setTimeout(() => playFiller(turn), FILLER_DELAY_MS);
+
+  const said = addTurn("jarvis", "");
+  said.parentElement.classList.add("pending");
+  const parts = [];
+  let fullText = "";
+
+  try {
+    const resp = await fetch("/chat/stream", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        message: text,
+        history,
+        turn_id: String(turn.id),
+        conversation_id: currentConversationId,
+      }),
+    });
+    if (turn.aborted) return;
+    if (!resp.ok) {
+      const detail = await resp.text().catch(() => "");
+      throw new Error(`Server antwortete mit ${resp.status}${detail ? `: ${detail.slice(0, 200)}` : ""}`);
+    }
+
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = "";
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (turn.aborted) { reader.cancel(); return; }
+      if (done) break;
+
+      buf += decoder.decode(value, { stream: true });
+      let nl;
+      while ((nl = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, nl).trim();
+        buf = buf.slice(nl + 1);
+        if (!line) continue;
+        const evt = JSON.parse(line);
+
+        if (evt.type === "sentence") {
+          stopFiller(turn);
+          setState("speaking");
+          parts.push(evt.text);
+          said.textContent = parts.join(" ");
+          logEl.scrollTop = logEl.scrollHeight;
+          if (turn.aborted) return;
+          if (evt.audio) await playClip(base64ToBlob(evt.audio, evt.mime || "audio/mpeg"), turn);
+        } else if (evt.type === "done") {
+          fullText = evt.full_text;
+        }
+      }
+    }
+
+    if (!turn.aborted) {
+      // A stream that ends without ever sending a sentence event is a
+      // backend bug, not silence — surface it instead of leaving the turn
+      // looking like Jarvis never heard the question at all.
+      if (!parts.length) said.textContent = "Keine Antwort erhalten. Bitte nochmal versuchen.";
+      const wasFirstTurn = history.length === 0;
+      history.push({ role: "user", content: text });
+      history.push({ role: "assistant", content: fullText || parts.join(" ") });
+      await trimHistory();
+      // The conversation now exists on disk (and, for a first turn, its
+      // title generation just started in the background) — refresh the
+      // sidebar so it shows up, then once more shortly after for the
+      // title, which finishes a beat behind the reply itself.
+      loadConversationList();
+      if (wasFirstTurn) setTimeout(loadConversationList, 2500);
+    }
+  } catch (err) {
+    if (!turn.aborted) {
+      console.error(err);
+      said.textContent = "Verbindung zum Server unterbrochen.";
+    }
+  } finally {
+    said.parentElement.classList.remove("pending");
+    if (!said.textContent) said.parentElement.remove();
+    stopFiller(turn);
+    if (activeTurn === turn) {
+      activeTurn = null;
+      busy = false;
+      settle();
+    }
+  }
+}
+
+/* ---------- local speech-to-text (record on VAD, transcribe via Whisper) ---------- */
+//
+// Chrome's Web Speech API was the previous mechanism here, but its German
+// recognition was unreliable enough to be a running complaint. This
+// records raw audio locally and posts it to the backend's /stt endpoint (a
+// local Whisper model — see backend/stt.py) once the same echo-cancelled
+// VAD used for barge-in below decides the person has stopped talking.
+// Nothing about voice input leaves the machine.
+//
+// Raw PCM via a ScriptProcessor, not MediaRecorder — a WebM/Opus stream
+// only carries its container header in the very first chunk it ever emits.
+// A continuously-running MediaRecorder feeding a rolling pre-roll buffer
+// (the previous approach here) eventually rotates that header chunk out,
+// leaving every later utterance a headerless, undecodable fragment — that
+// silently broke every single transcription. Building our own WAV file
+// from raw samples sidesteps the problem: every utterance is a complete,
+// self-contained file, pre-roll included.
+
+let pcmNode = null;
+let pcmSampleRate = 48000;
+let pcmRing = []; // rolling pre-roll buffer, Float32Array chunks
+let utterancePCM = null; // non-null while actively capturing an utterance
+let utteranceStartedAt = 0;
+let silenceStreak = 0;
+
+const PCM_BUFFER_SIZE = 4096;
+// Generous on purpose: onset-cutting persisted at 700ms because actual
+// detection latency (noise floor still adapting, a soft-spoken first
+// syllable, echo-cancellation's own ramp-in) can exceed a small window —
+// this is cheap (a couple seconds of Float32 samples) insurance against
+// that, not a precisely-tuned value.
+const PREROLL_MS = 1500;
+// ~960ms used to end the utterance, which cut people off mid-sentence during
+// completely normal speech (a thinking pause, searching for a word, a breath
+// before the next clause) — raised to ~2.2s of real silence.
+const RECORD_SILENCE_SUSTAIN = 28; // ~28 * VAD_CHECK_MS ≈ 2240ms of silence ends the utterance
+const RECORD_MIN_MS = 300; // ignore accidental blips shorter than this
+
+function startContinuousRecording() {
+  if (pcmNode || !micStream) return;
+  const ctx = ensureCtx();
+  pcmSampleRate = ctx.sampleRate;
+  const source = ctx.createMediaStreamSource(micStream);
+  pcmNode = ctx.createScriptProcessor(PCM_BUFFER_SIZE, 1, 1);
+  const preRollChunks = Math.ceil((PREROLL_MS / 1000) * pcmSampleRate / PCM_BUFFER_SIZE);
+
+  pcmNode.onaudioprocess = (e) => {
+    const data = new Float32Array(e.inputBuffer.getChannelData(0));
+    if (utterancePCM) {
+      utterancePCM.push(data);
+    } else {
+      pcmRing.push(data);
+      if (pcmRing.length > preRollChunks) pcmRing.shift();
+    }
+  };
+  // ScriptProcessor only fires once connected through to a destination —
+  // route through a silent gain so nothing is actually audible.
+  const silentGain = ctx.createGain();
+  silentGain.gain.value = 0;
+  source.connect(pcmNode);
+  pcmNode.connect(silentGain);
+  silentGain.connect(ctx.destination);
+}
+
+// Marks the start of an utterance, seeded with whatever's already in the
+// rolling pre-roll buffer so the trigger delay never costs real audio.
+function beginUtterance() {
+  if (utterancePCM) return;
+  utterancePCM = pcmRing.slice();
+  utteranceStartedAt = Date.now();
+}
+
+// Ends the utterance and sends it for transcription.
+function stopRecording() {
+  if (!utterancePCM) return;
+  const chunks = utterancePCM;
+  const startedAt = utteranceStartedAt;
+  utterancePCM = null;
+  pcmRing = [];
+  sendUtterance(chunks, startedAt);
+}
+
+// Ends the utterance and discards it — used when something else (typed
+// text, a barge-in) supersedes whatever was being captured.
+function cancelRecording() {
+  if (!utterancePCM) return;
+  utterancePCM = null;
+  pcmRing = [];
+}
+
+const isRecording = () => utterancePCM !== null;
+
+function concatFloat32(chunks) {
+  const total = chunks.reduce((n, c) => n + c.length, 0);
+  const out = new Float32Array(total);
+  let offset = 0;
+  for (const c of chunks) { out.set(c, offset); offset += c.length; }
+  return out;
+}
+
+function encodeWav(samples, sampleRate) {
+  const buffer = new ArrayBuffer(44 + samples.length * 2);
+  const view = new DataView(buffer);
+  const writeString = (offset, str) => {
+    for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
+  };
+  writeString(0, "RIFF");
+  view.setUint32(4, 36 + samples.length * 2, true);
+  writeString(8, "WAVE");
+  writeString(12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true); // PCM
+  view.setUint16(22, 1, true); // mono
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true); // byte rate
+  view.setUint16(32, 2, true); // block align
+  view.setUint16(34, 16, true); // bits per sample
+  writeString(36, "data");
+  view.setUint32(40, samples.length * 2, true);
+  let offset = 44;
+  for (let i = 0; i < samples.length; i++) {
+    const s = Math.max(-1, Math.min(1, samples[i]));
+    view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+    offset += 2;
+  }
+  return new Blob([view], { type: "audio/wav" });
+}
+
+async function sendUtterance(chunks, startedAt) {
+  if (!chunks.length || Date.now() - startedAt < RECORD_MIN_MS) return;
+  const samples = concatFloat32(chunks);
+  if (samples.length < pcmSampleRate * 0.2) return; // shorter than ~200ms
+  const blob = encodeWav(samples, pcmSampleRate);
+
+  try {
+    const form = new FormData();
+    form.append("audio", blob, "speech.wav");
+    const resp = await fetch("/stt", { method: "POST", body: form });
+    if (!resp.ok) return;
+    const data = await resp.json();
+    const text = (data.text || "").trim();
+    if (!text) return;
+    if (speechMode) {
+      handleUserMessage(text);            // voice mode: auto-send (as before)
+    } else {
+      inputEl.value = text;               // dictation: insert only, no send
+      inputEl.dispatchEvent(new Event("input")); // flips the send button
+    }
+  } catch (err) {
+    console.error(err);
+  }
+}
+
+/* ---------- VAD: drives recording, and (echo-cancelled) voice barge-in ---------- */
+//
+// Relies on the mic stream's own echoCancellation to subtract Jarvis's
+// speaker output back out of the signal — so a level spike while Jarvis is
+// talking reliably means a real person interrupting, not feedback. That's
+// only true where echoCancellation is actually on (see startBtn's handler:
+// off only on macOS, where it caused a worse problem — the mic getting
+// locked exclusively to Jarvis). On macOS a level spike while busy can't
+// be trusted, so barge-in there still only works via the hotkey
+// (Cmd/Ctrl+Shift+J) instead of talking over it.
+
+let vadAnalyser = null;
+let vadData = null;
+let vadNoiseFloor = 0.01;
+let vadAbove = 0;
+
+const VAD_CHECK_MS = 80;
+const VAD_MULTIPLIER = 2.4;
+const VAD_MIN_ABS = 0.025;
+const VAD_SUSTAIN = 2; // ~160ms — kept short since the pre-roll buffer, not this, is what protects the onset
+
+function vadTick() {
+  if (!vadAnalyser || muted) return;
+  const rms = rmsFrom(vadAnalyser, vadData);
+  const state = document.body.dataset.state;
+  const busy = state === "speaking" || state === "thinking";
+  // Barge-in while busy needs real echo cancellation to be trustworthy
+  // (see the comment above) — idle "listening" doesn't depend on that at
+  // all, since there's no Jarvis audio to confuse it with.
+  // "listening" covers speech-mode idle AND a live dictation capture. Barge-in
+  // while busy is gated on speechMode — in chat mode a typed send just goes
+  // through handleUserMessage with no voice loop beneath it.
+  const listenable = state === "listening" || (busy && !IS_MAC && speechMode);
+
+  if (!listenable) {
+    vadNoiseFloor = vadNoiseFloor * 0.98 + rms * 0.02;
+    vadAbove = 0;
+    if (isRecording()) cancelRecording();
+    return;
+  }
+
+  // Speech-onset detection, shared between idle listening and (when
+  // echo-cancelled) barging in on a reply already in progress. The
+  // VAD_SUSTAIN wait here is just a false-positive guard, not an audio-loss
+  // window — beginUtterance() below seeds itself from the pre-roll buffer,
+  // so whatever was said during this confirmation delay is not lost.
+  const threshold = Math.max(vadNoiseFloor * VAD_MULTIPLIER, VAD_MIN_ABS);
+  if (!isRecording()) {
+    if (rms > threshold) {
+      vadAbove++;
+      if (vadAbove >= VAD_SUSTAIN) {
+        vadAbove = 0;
+        // A real interruption: silence Jarvis immediately rather than
+        // waiting for this new utterance to finish and get transcribed —
+        // handleUserMessage() would eventually call this too, but only
+        // once STT comes back, which'd mean talking over him for a while.
+        if (busy) interruptActiveTurn();
+        beginUtterance();
+      }
+    } else {
+      vadAbove = 0;
+      vadNoiseFloor = vadNoiseFloor * 0.98 + rms * 0.02;
+    }
+  } else if (rms > threshold) {
+    silenceStreak = 0;
+  } else {
+    silenceStreak++;
+    if (silenceStreak >= RECORD_SILENCE_SUSTAIN) {
+      // One-shot dictation: drop out of "listening" *before* the async /stt
+      // round-trip, so VAD can't re-arm and grab a second utterance (voice
+      // mode stays armed — that's its job). settle() re-derives idle here
+      // because dictationActive is now false.
+      if (!speechMode) { dictationActive = false; settle(); }
+      stopRecording();
+    }
+  }
+}
+
+function setupVad(stream) {
+  const ctx = ensureCtx();
+  const source = ctx.createMediaStreamSource(stream);
+  vadAnalyser = ctx.createAnalyser();
+  vadAnalyser.fftSize = 512;
+  source.connect(vadAnalyser);
+  vadData = new Uint8Array(vadAnalyser.fftSize);
+  setInterval(vadTick, VAD_CHECK_MS);
+}
+
+/* ---------- controls ---------- */
+
+function setMuted(next) {
+  muted = next;
+  muteBtn.title = muted ? "Mikro aktivieren" : "Mikro stummschalten";
+  muteBtn.classList.toggle("off", muted);
+  if (muted) { cancelRecording(); dictationActive = false; }
+  settle();
+}
+
+// Acquires (once) the single mic stream + VAD loop shared by dictation and
+// speech mode. Idempotent — the first caller builds the stream/analyser, the
+// rest just get it back, so there's never a second stream or a second
+// interval (startContinuousRecording and setupVad each self-guard too).
+//
+// echoCancellation off only on macOS (see the VAD comment below) — with
+// built-in speakers + mic, macOS engages a "voice processing" audio path for
+// echo-cancelled input that claims the mic exclusively, so no other app can
+// use it at all while Jarvis is running. Everywhere else that trade-off
+// doesn't apply, so real AEC stays on — it's what lets vadTick tell a genuine
+// interruption apart from Jarvis's own voice bleeding into the mic while it
+// talks.
+async function ensureMic() {
+  if (micReady) return micStream;
+  const stream = await navigator.mediaDevices.getUserMedia({
+    audio: { echoCancellation: !IS_MAC, noiseSuppression: true, autoGainControl: true },
+  });
+  micReady = true;
+  micStream = stream;
+  setupVad(stream);
+  startContinuousRecording();
+  return stream;
+}
+
+function speechDenied() {
+  hintEl.textContent = "Mikrofon abgelehnt. Tippen funktioniert trotzdem.";
+}
+
+async function enterSpeechMode() {
+  try { await ensureMic(); } catch (_) { speechDenied(); return; }
+  speechMode = true;
+  setState("listening");
+  updateView();
+}
+
+function exitSpeechMode() {
+  speechMode = false;
+  cancelRecording();
+  settle();
+}
+
+// Shared wake gesture for the global hotkey (Cmd/Ctrl+Shift+J) and the
+// /trigger websocket wake: get Jarvis into continuous listening. Already in
+// speech mode → just unmute, or interrupt if he's mid-sentence. In chat mode
+// → enter speech mode (which acquires the mic on first use).
+function wakeJarvis() {
+  if (speechMode) {
+    if (muted) setMuted(false);
+    else if (busy) interruptActiveTurn();
+    return;
+  }
+  enterSpeechMode();
+}
+
+// The right-most button swaps its glyph with the field's content: a live-voice
+// waveform (speech-mode trigger) when empty, an up-arrow send when there's text.
+// The dictation button (#dictateBtn, in the HTML) keeps a plain mic, so the two
+// modes read differently at a glance — mic = dictate into the field, waveform =
+// continuous voice conversation.
+const SPEECH_SVG =
+  '<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">' +
+  '<line x1="2" y1="6.5" x2="2" y2="9.5"/>' +
+  '<line x1="5" y1="4" x2="5" y2="12"/>' +
+  '<line x1="8" y1="1.5" x2="8" y2="14.5"/>' +
+  '<line x1="11" y1="4" x2="11" y2="12"/>' +
+  '<line x1="14" y1="6.5" x2="14" y2="9.5"/></svg>';
+const SEND_SVG =
+  '<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">' +
+  '<path d="M8 13V3"/>' +
+  '<path d="M4.5 6.5 8 3l3.5 3.5"/></svg>';
+
+const MIC_SVG =
+  '<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">' +
+  '<rect x="5.5" y="1.3" width="5" height="8" rx="2.5"/>' +
+  '<path d="M3 7.3a5 5 0 0 0 10 0"/>' +
+  '<line x1="8" y1="12.3" x2="8" y2="14.3"/>' +
+  '<line x1="5" y1="14.3" x2="11" y2="14.3"/></svg>';
+
+function refreshSendButton() {
+  const has = !!inputEl.value.trim();
+  speechSendBtn.classList.toggle("send", has);
+  speechSendBtn.classList.toggle("speech", !has);
+  speechSendBtn.innerHTML = has ? SEND_SVG : SPEECH_SVG;
+  speechSendBtn.title = speechSendBtn.ariaLabel = has
+    ? "Senden"
+    : (speechMode ? "Sprechmodus verlassen" : "Sprechmodus");
+}
+
+function submitText() {
+  const text = inputEl.value.trim();
+  if (!text) return;
+  inputEl.value = "";
+  pendingFiles = [];
+  handleUserMessage(text);
+  refreshSendButton();
+}
+
+muteBtn.addEventListener("click", () => setMuted(!muted));
+stopBtn.addEventListener("click", () => { if (busy) interruptActiveTurn(); });
+
+// The right-most button: send when the field has text, otherwise toggle
+// speech mode. type="button" — clicking it with an empty field must trigger
+// speech mode, never a no-op submit.
+speechSendBtn.addEventListener("click", async () => {
+  if (inputEl.value.trim()) { submitText(); return; }
+  if (speechMode) { exitSpeechMode(); return; }
+  await enterSpeechMode();
+});
+
+// #input is a <textarea> now — grow it with its content rather than spinning
+// up a fixed-height scroll box. The CSS caps it at max-height: 40vh.
+function autosizeComposer() {
+  inputEl.style.height = "auto";
+  inputEl.style.height = Math.min(inputEl.scrollHeight, 320) + "px";
+}
+
+inputEl.addEventListener("input", () => { refreshSendButton(); autosizeComposer(); });
+
+// Enter sends. The composer was a <form> before, so its submit() listener
+// (and this being an implicit submit button) no longer exists — reimplemented
+// here, else Enter would stop working entirely.
+inputEl.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey) {
+    e.preventDefault();
+    submitText();
+  }
+});
+
+// Dictation: one-shot capture into #input (no auto-send). Voice mode is not
+// used here — this is a chat-mode gesture to get words into the field.
+dictateBtn.addEventListener("click", async () => {
+  if (speechMode) return;
+  try { await ensureMic(); } catch (_) { speechDenied(); return; }
+  cancelRecording();          // drop any stale utterance / pre-roll
+  dictateBtn.classList.add("active");
+  dictationActive = true;
+  setState("listening");      // lets vadTick's listenable branch arm
+  updateView();
+});
+
+/* ---------- mode slider (Chat | Code) — visual only for now ---------- */
+modeOpts.forEach((btn) => {
+  btn.addEventListener("click", () => {
+    appMode = btn.dataset.mode;
+    modeOpts.forEach((b) => b.classList.toggle("active", b === btn));
+  });
+});
+
+/* ---------- file attach (UI-first; wiring to a tool comes later) ---------- */
+attachBtn.addEventListener("click", () => fileInput.click());
+fileInput.addEventListener("change", () => {
+  pendingFiles = [...fileInput.files];
+  attachBtn.title = pendingFiles.length
+    ? `${pendingFiles.length} Datei(en) angehängt`
+    : "Datei anhängen";
+});
+
+/* ---------- model picker ---------- */
+//
+// Lets the model actually answering be switched from the running UI
+// instead of editing .env and restarting. Switching is a single click on
+// a model in the dropdown; the backend (see /models/select in
+// backend/main.py) both updates the live config and fires a minimal
+// completion request at LM Studio, which is what actually makes its own
+// just-in-time loading swap which model is resident in memory.
+
+const modelBtn = document.getElementById("modelBtn");
+const modelName = document.getElementById("modelName");
+const modelDropdown = document.getElementById("modelDropdown");
+let currentModel = null;
+
+function renderCapBadge(caps) {
+  const has = (caps || []).includes("vision");
+  modelCapBadge.hidden = !has;
+  modelCapBadge.textContent = has ? "Vision" : "";
+}
+
+function renderModelOptions(models) {
+  modelDropdown.innerHTML = "";
+  for (const id of models) {
+    const opt = document.createElement("button");
+    opt.type = "button";
+    opt.className = "model-option" + (id === currentModel ? " active" : "");
+    opt.textContent = id;
+    opt.title = id;
+    const caps = modelCaps[id];
+    if (caps && caps.includes("vision")) {
+      const badge = document.createElement("span");
+      badge.className = "cap-badge";
+      badge.textContent = "Vision";
+      opt.appendChild(badge);
+    }
+    opt.addEventListener("click", () => selectModel(id));
+    modelDropdown.appendChild(opt);
+  }
+}
+
+async function refreshModels() {
+  try {
+    const r = await fetch("/models");
+    if (!r.ok) return;
+    const data = await r.json();
+    currentModel = data.current;
+    modelCaps = data.model_caps || {};
+    modelName.textContent = currentModel || "Modell";
+    modelBtn.title = currentModel || "Modell wechseln";
+    renderCapBadge(data.current_caps || modelCaps[currentModel] || []);
+    renderModelOptions(data.models || []);
+  } catch (_) {}
+}
+
+async function selectModel(id) {
+  modelDropdown.classList.add("collapsed");
+  modelBtn.classList.remove("open");
+  if (id === currentModel) return;
+  currentModel = id;
+  // Optimistic — the actual load happens in the background on LM Studio's
+  // side and can take a while for a large model; nothing here waits on it.
+  modelName.textContent = id;
+  renderCapBadge(modelCaps[id]);
+  try {
+    await fetch("/models/select", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: id }),
+    });
+  } catch (_) {}
+}
+
+modelBtn.addEventListener("click", () => {
+  const collapsed = modelDropdown.classList.toggle("collapsed");
+  modelBtn.classList.toggle("open", !collapsed);
+  if (!collapsed) refreshModels();
+});
+
+document.addEventListener("keydown", (e) => {
+  const modifierPressed = IS_MAC ? e.metaKey : e.ctrlKey;
+  if (modifierPressed && e.shiftKey && e.key.toLowerCase() === "j") {
+    e.preventDefault();
+    wakeJarvis();
+  }
+});
+
+/* ---------- server channel ---------- */
+
+function connectWs() {
+  const proto = window.location.protocol === "https:" ? "wss" : "ws";
+  const ws = new WebSocket(`${proto}://${window.location.host}/ws`);
+
+  ws.onmessage = (event) => {
+    let msg;
+    try { msg = JSON.parse(event.data); } catch (_) { return; }
+
+    if (msg.type === "panel") {
+      renderPanelItem(msg.item);
+    } else if (msg.type === "wake") {
+      wakeJarvis();
+    }
+  };
+
+  ws.onclose = () => setTimeout(connectWs, 2000);
+}
+
+connectWs();
+updateView();
+refreshSendButton();
+autosizeComposer();
+renderGreeting();
+refreshModels();
+setState("idle");

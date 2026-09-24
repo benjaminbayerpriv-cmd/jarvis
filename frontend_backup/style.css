@@ -1,0 +1,720 @@
+/* Jarvis — Claude-styled frontend: a warm bone/black canvas, a serif greeting
+   beside a terracotta starburst, and a two-tier composer card. The design
+   tokens are lifted from the claude.ai snapshot (anthropic-sans/serif, the
+   clay accent #d97757, the warm gr ey scale). Functionally Jarvis keeps a
+   single blue→clay "active" colour for listening/thinking/speaking — the orb
+   still tells those apart by motion, not hue. */
+
+@font-face {
+  font-family: "anthropic-sans";
+  src: url("/static/fonts/anthropic-sans.woff2") format("woff2");
+  font-weight: 300 800;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "anthropic-serif";
+  src: url("/static/fonts/anthropic-serif.woff2") format("woff2");
+  font-weight: 300 800;
+  font-style: normal;
+  font-display: swap;
+}
+
+:root {
+  color-scheme: dark;
+
+  --ground: #1a1916;   /* page */
+  --housing: #211f1c;  /* surfaces (panel, composer card) */
+  --raised: #2a2824;   /* nested / pills / hover */
+  --line: #37342e;     /* borders */
+  --line-soft: #2c2a25;
+
+  --text: #efede8;
+  --dim: #a29c90;
+  --faint: #6b665b;
+
+  --sig-active: #d97757; /* the Claude clay accent — listening/thinking/speaking */
+  --muted: #8c877c;      /* mic off */
+  --alert: #e0644c;      /* destructive/error accents */
+
+  --font-sans: "anthropic-sans", "Avenir Next", system-ui, sans-serif;
+  --font-serif: "anthropic-serif", Georgia, "Times New Roman", serif;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: var(--ground);
+  color: var(--text);
+  font-family: var(--font-sans);
+  overflow: hidden;
+}
+
+button { font-family: inherit; cursor: pointer; }
+
+:focus-visible {
+  outline: 2px solid var(--sig-active);
+  outline-offset: 2px;
+}
+
+/* ---------- shell: chat panel on the left, orb/greeting centered ---------- */
+
+.stage {
+  height: 100vh;
+  display: flex;
+  align-items: stretch;
+  position: relative;
+}
+
+.jarvis-column {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+}
+
+.chat-column {
+  position: relative;
+  flex: 0 0 0;
+  width: 0;
+  min-width: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 0;
+  background: var(--housing);
+  border-right: 1px solid transparent;
+  transition: border-color 220ms ease;
+}
+
+/* Padding only applies once expanded — border-box can't shrink a box
+   below its own padding, so a "0 width" panel that still carried
+   left/right padding rendered at that padding's width instead of
+   actually vanishing. app.js overrides flex-basis/width inline once the
+   panel has been dragged to a custom size (see resizeHandle below) — an
+   inline style always wins over this vw default without needing !important.
+   flex-basis/width deliberately aren't transitioned (collapse/expand is an
+   instant snap, not a slide): Chromium was observed to get these stuck at
+   their pre-transition value — an inline override from app.js's resize
+   handler silently failing to ever take effect — whenever a transition is
+   declared on either property at the same time app.js changes them. */
+.chat-column:not(.collapsed) {
+  flex: 0 0 12.5vw;
+  width: 12.5vw;
+  min-width: 240px;
+  padding: 20px 16px 16px;
+  border-right-color: var(--line);
+}
+
+/* Drag left/right to resize (see app.js). A slim strip flush with the
+   panel's own right edge/border, widened only by :hover/.dragging so it
+   doesn't visually compete with the border the rest of the time. */
+.resize-handle {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 6px;
+  height: 100%;
+  cursor: ew-resize;
+  z-index: 6;
+  background: transparent;
+  transition: background-color 160ms;
+}
+.chat-column.collapsed .resize-handle { display: none; }
+.resize-handle:hover,
+.resize-handle.dragging {
+  background: color-mix(in srgb, var(--sig-active) 45%, transparent);
+}
+
+.chat-toggle-btn {
+  position: absolute;
+  top: 14px;
+  left: 14px;
+  z-index: 5;
+}
+
+.quit-btn {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  z-index: 5;
+}
+
+.deck-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 0 0 12px;
+  padding-left: 38px;
+}
+
+.wordmark {
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+
+.state-pill {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-sans);
+  font-size: 10.5px;
+  letter-spacing: .06em;
+  color: var(--faint);
+}
+
+.state-pill .dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--sig-active);
+}
+
+/* ---------- greeting + orb (view-driven, not state-driven) ---------- */
+
+/* Serif greeting beside the terracotta starburst, centered in the column. */
+.greeting {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5em;
+  font-family: var(--font-serif);
+  font-size: clamp(30px, 6vw, 56px);
+  font-weight: 500;
+  letter-spacing: -.02em;
+  color: #f2efe9;
+  user-select: none;
+}
+
+.starburst {
+  color: var(--sig-active);
+  flex: none;
+  transform: translateY(0.06em); /* optically center against the caps */
+}
+
+.orb-wrap {
+  position: relative;
+  width: min(71.5vh, 315px);
+  height: min(71.5vh, 315px);
+}
+
+#orb { width: 100%; height: 100%; }
+
+#subOrb {
+  position: absolute;
+  right: -4%;
+  bottom: 6%;
+  width: 22%;
+  height: 22%;
+  filter: drop-shadow(0 0 6px color-mix(in srgb, var(--sig-active) 55%, transparent));
+}
+
+/* Chat mode is the default: greeting centred, orb hidden. Speech mode flips
+   them via body[data-view]. renderOrb() early-returns on a 0×0 canvas, so
+   hiding the orb costs nothing while it's off. */
+.jarvis-column .orb-wrap { display: none; }
+
+body[data-view="speech"] .jarvis-column .orb-wrap { display: block; }
+body[data-view="speech"] .jarvis-column .greeting { display: none; }
+body[data-view="speech"] .jarvis-column { padding-bottom: 140px; }
+
+/* ---------- shared icon buttons ---------- */
+
+.icon-btn {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  background: none;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  color: var(--faint);
+  font-size: 15px;
+  line-height: 1;
+  opacity: .55;
+  transition: opacity 160ms, color 160ms, border-color 160ms, background 160ms;
+}
+
+.icon-btn:hover { opacity: 1; color: var(--text); border-color: var(--dim); background: var(--raised); }
+.icon-btn[hidden] { display: none; }
+.icon-btn svg { display: block; }
+
+.mic-slash { opacity: 0; transition: opacity 160ms; }
+.icon-btn#muteBtn.off .mic-slash { opacity: 1; }
+
+/* Sidebar-toggle icon's left panel: faint outline while collapsed (the
+   normal starting state), solid once chatToggleBtn.open is set by app.js
+   on expand — same idea as VS Code's sidebar-visibility icon. */
+.sidebar-fill { opacity: .35; transition: opacity 160ms; }
+.chat-toggle-btn.open .sidebar-fill { opacity: 1; }
+
+.icon-btn#muteBtn.off { color: var(--muted); border-color: color-mix(in srgb, var(--muted) 45%, var(--line)); opacity: 1; }
+.icon-btn#stopBtn:hover { color: var(--alert); border-color: color-mix(in srgb, var(--alert) 45%, var(--line)); }
+.icon-btn#quitBtn:hover { color: var(--alert); border-color: color-mix(in srgb, var(--alert) 45%, var(--line)); }
+
+.icon-btn#dictateBtn.active {
+  color: var(--sig-active);
+  border-color: color-mix(in srgb, var(--sig-active) 45%, var(--line));
+  opacity: 1;
+}
+
+/* ---------- Claude composer: a two-tier card ---------- */
+
+.composer {
+  position: absolute;
+  left: 50%;
+  bottom: 26px;
+  transform: translateX(-50%);
+  width: min(720px, calc(100vw - 32px));
+  background: var(--housing);
+  border: 1px solid var(--line);
+  border-radius: 24px;
+  box-shadow: 0 16px 60px rgb(0 0 0 / .45);
+  z-index: 8;
+  display: flex;
+  flex-direction: column;
+  padding: 12px 12px 10px;
+}
+
+.composer:focus-within { border-color: color-mix(in srgb, var(--sig-active) 45%, var(--line)); }
+
+.composer-input {
+  width: 100%;
+  min-height: 54px;
+  max-height: 40vh;
+  resize: none;
+  overflow-y: auto;
+  background: none;
+  border: 0;
+  outline: none;
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 15.5px;
+  line-height: 1.5;
+  padding: 10px 10px 6px;
+}
+
+.composer-input::placeholder { color: var(--faint); }
+
+.composer-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 2px 0;
+}
+
+.toolbar-spacer { flex: 1; }
+
+/* ---------- Chat | Code segmented pill ---------- */
+
+.mode-switch {
+  display: inline-flex;
+  padding: 3px;
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  flex: none;
+}
+
+.mode-opt {
+  border: 0;
+  background: none;
+  color: var(--dim);
+  font-family: var(--font-sans);
+  font-size: 12.5px;
+  font-weight: 500;
+  padding: 4px 14px;
+  border-radius: 999px;
+  letter-spacing: .02em;
+  transition: color 160ms, background 160ms;
+}
+
+.mode-opt.active {
+  background: var(--housing);
+  color: var(--text);
+  box-shadow: 0 1px 3px rgb(0 0 0 / .35);
+}
+
+/* ---------- model pill (e.g. "Sonnet 5 Mittel") ---------- */
+
+.model-picker { position: relative; }
+
+.model-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 190px;
+  padding: 5px 12px;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  color: var(--text);
+  transition: color 160ms, background 160ms, border-color 160ms;
+}
+
+.model-btn:hover { background: var(--raised); border-color: var(--line); }
+
+.model-name {
+  font-family: var(--font-sans);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-chevron { flex: none; color: var(--faint); transition: transform 160ms; }
+.model-btn.open .model-chevron { transform: rotate(180deg); }
+
+.model-dropdown {
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  margin-bottom: 8px;
+  min-width: 220px;
+  max-height: 240px;
+  overflow-y: auto;
+  background: var(--housing);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 4px;
+  z-index: 10;
+}
+.model-dropdown.collapsed { display: none; }
+
+.model-option {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 8px 11px;
+  border-radius: 8px;
+  background: none;
+  border: none;
+  color: var(--dim);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  cursor: pointer;
+}
+.model-option:hover { background: var(--raised); color: var(--text); }
+.model-option.active { color: var(--sig-active); }
+
+/* ---------- conversation sidebar ---------- */
+
+.conv-sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0 0 14px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--line-soft);
+  flex: none;
+}
+
+.conv-new-btn {
+  background: none;
+  border: 1px solid var(--line);
+  color: var(--dim);
+  border-radius: 8px;
+  padding: 7px 10px;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  letter-spacing: .03em;
+  text-align: left;
+  transition: color 160ms, border-color 160ms;
+}
+.conv-new-btn:hover { color: var(--text); border-color: var(--dim); }
+
+.conv-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 140px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
+}
+
+.conv-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: none;
+  border: none;
+  color: var(--dim);
+  font-family: var(--sans);
+  font-size: 12.5px;
+  line-height: 1.3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.conv-item:hover { background: var(--raised); color: var(--text); }
+.conv-item.active { background: var(--raised); color: var(--sig-active); }
+
+/* Each entry is its own little accordion — the item's title toggles a
+   transcript directly underneath it, collapsed by default. */
+.conv-entry { display: flex; flex-direction: column; }
+
+.conv-transcript {
+  display: none;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 220px;
+  overflow-y: auto;
+  padding: 8px 6px 4px 10px;
+  margin: 2px 0 4px;
+  border-left: 1px solid var(--line-soft);
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
+}
+.conv-transcript.open { display: flex; }
+.conv-transcript .said { font-size: 12.5px; line-height: 1.45; }
+.conv-transcript .who { font-size: 9px; }
+
+.hint {
+  margin: 0 0 16px;
+  text-align: center;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  letter-spacing: .04em;
+  color: var(--faint);
+  min-height: 16px;
+}
+
+.cap-badge {
+  display: inline-block;
+  margin-left: 7px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-family: var(--font-sans);
+  font-size: 9.5px;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--sig-active);
+  border: 1px solid color-mix(in srgb, var(--sig-active) 45%, transparent);
+}
+
+.model-option .cap-badge { margin-left: 8px; }
+
+/* ---------- speech-mode / send button (right-most) ---------- */
+
+#speechSendBtn.send { opacity: 1; color: var(--text); border-color: color-mix(in srgb, var(--sig-active) 40%, var(--line)); }
+
+/* ---------- conversation ---------- */
+
+.log {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 4px 2px 16px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
+}
+
+.turn { display: flex; flex-direction: column; gap: 5px; }
+
+.turn .who {
+  font-family: var(--font-sans);
+  font-size: 10px;
+  letter-spacing: .2em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+.turn .said {
+  font-size: 15.5px;
+  line-height: 1.55;
+  color: var(--text);
+}
+
+.turn.you .said { color: var(--dim); }
+.turn.you .who { color: color-mix(in srgb, var(--sig-active) 60%, var(--faint)); }
+.turn.jarvis .who { color: color-mix(in srgb, var(--sig-active) 60%, var(--faint)); }
+
+.turn.pending .said::after {
+  content: "";
+  display: inline-block;
+  width: 7px; height: 14px;
+  margin-left: 3px;
+  background: var(--sig-active);
+  vertical-align: text-bottom;
+  animation: caret 1s steps(2) infinite;
+}
+
+@keyframes caret { 0%,49% { opacity: 1 } 50%,100% { opacity: 0 } }
+
+/* ---------- controls ---------- */
+
+.controls { display: flex; gap: 8px; padding-top: 10px; }
+
+.ctrl {
+  flex: 1;
+  padding: 8px 12px;
+  background: none;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  color: var(--dim);
+  font-size: 11px;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  transition: color 160ms, border-color 160ms;
+}
+
+.ctrl:hover { color: var(--text); border-color: var(--dim); }
+.ctrl.off { color: var(--alert); border-color: color-mix(in srgb, var(--alert) 45%, var(--line)); }
+
+/* ---------- inline tool calls (Claude Code-style verbose log) ---------- */
+
+.tool {
+  font-family: var(--font-sans);
+  font-size: 12.5px;
+  line-height: 1.55;
+  animation: rise 200ms cubic-bezier(.22,.61,.36,1);
+}
+
+@keyframes rise {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: none; }
+}
+
+.tool .call { display: flex; gap: 7px; align-items: baseline; }
+.tool .bullet { color: var(--sig-active); }
+.tool.running .bullet { animation: breathe 1.1s ease-in-out infinite; }
+.tool.ok .bullet { color: var(--sig-active); }
+.tool.fail .bullet { color: #e77d7d; }
+.tool .name { color: var(--dim); }
+.tool.ok .name { color: var(--text); }
+.tool.fail .name { color: #e77d7d; }
+
+.tool .result {
+  margin: 3px 0 0 16px;
+  padding-left: 11px;
+  border-left: 1px solid var(--line);
+  color: var(--faint);
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 12px;
+}
+
+/* ---------- inline rich blocks (code, files, images, links) ---------- */
+
+.block {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--housing);
+  overflow: hidden;
+  animation: rise 260ms cubic-bezier(.22,.61,.36,1);
+}
+
+.block-title {
+  padding: 10px 13px;
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  color: var(--dim);
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.block img { display: block; width: 100%; }
+
+.block pre {
+  margin: 0;
+  padding: 14px;
+  overflow-x: auto;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--text);
+  white-space: pre;
+}
+
+.block .prose {
+  padding: 14px 16px;
+  font-size: 14.5px;
+  line-height: 1.65;
+}
+
+.block .prose h1, .block .prose h2, .block .prose h3 {
+  font-size: 15px;
+  margin: 14px 0 6px;
+  letter-spacing: .01em;
+}
+
+.block .prose code {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 12.5px;
+  background: var(--raised);
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+
+.block .prose li { margin: 3px 0; }
+.block .prose p { margin: 0 0 10px; }
+
+.filelist {
+  margin: 0;
+  padding: 10px 14px 14px;
+  list-style: none;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 12.5px;
+  color: var(--dim);
+  columns: 2;
+  column-gap: 22px;
+}
+
+.filelist li { padding: 2px 0; break-inside: avoid; }
+
+.block .path {
+  padding: 0 14px 12px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 11px;
+  color: var(--faint);
+  word-break: break-all;
+}
+
+.block a {
+  display: block;
+  padding: 13px 14px;
+  color: var(--sig-active);
+  font-family: var(--font-sans);
+  font-size: 12.5px;
+  text-decoration: none;
+  word-break: break-all;
+}
+
+.block a:hover { text-decoration: underline; }
+
+/* ---------- responsive ---------- */
+
+@media (max-width: 900px) {
+  html, body { overflow: auto; }
+  .stage { height: 100svh; }
+  .filelist { columns: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .001ms !important;
+  }
+}

@@ -29,6 +29,10 @@ app.add_middleware(
 )
 
 FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
+# Frozen copy of the UI from before a redesign (see /backup below) — kept as
+# a real, always-available fallback rather than a local-only, gitignored
+# folder, so it survives a fresh clone/deploy too.
+FRONTEND_BACKUP_DIR = Path(__file__).resolve().parent.parent / "frontend_backup"
 
 active_sockets: list[WebSocket] = []
 filler_urls: list[str] = []
@@ -226,22 +230,21 @@ def _freeze_snapshot(html: str) -> str:
     return html
 
 
-@app.get("/")
-def serve_index():
-    # The start page is the real claude.ai UI: the SSR snapshot of the
-    # Anthropic web client (frontend/claude.html), with every Anthropic asset
-    # localized under /static/vendor/ap/ and the client scripts stripped so the
-    # logged-in interface renders as static HTML+CSS instead of bouncing to a
-    # /login 404 (see _freeze_snapshot). The previous JARVIS UI still lives at
-    # frontend/index.html (with its own style.css/app.js) and remains reachable
-    # via the /static/* mount for reference, but is no longer served on /.
+def _render_app_shell(frontend_dir: Path, static_prefix: str) -> str:
+    """Build the claude.html-based app shell from the given frontend
+    directory, with the functional JS layer injected against the given
+    /static-style URL prefix. Shared by / (the live, constantly-redesigned
+    UI) and /backup (the frozen pre-redesign fallback, see FRONTEND_BACKUP_DIR)
+    so both stay byte-for-byte the same wiring, just pointed at different
+    asset trees.
     #
     # Explicit encoding matters here: Path.read_text() defaults to the OS
     # locale's preferred encoding, which is cp1252 on German Windows, not
     # UTF-8 — the file itself is UTF-8, so without this every special
     # character in it (observed live: the "≡" debug-toggle symbol) gets
     # silently mangled into mojibake before it's ever served to the browser.
-    html = (FRONTEND_DIR / "claude.html").read_text(encoding="utf-8")
+    """
+    html = (frontend_dir / "claude.html").read_text(encoding="utf-8")
     html = _freeze_snapshot(html)
     # The frozen snapshot must not let the Anthropic client boot (it would
     # bounce to a /login 404). It also must not be completely static: inject
@@ -253,13 +256,38 @@ def serve_index():
     # Der Code-Tab rendert die echte opencode-TUI in einem xterm.js-Terminal,
     # also lokal die xterm-Bundles (als static/*) direkt vor claude-app.js laden.
     assets = (
-        '    <link rel="stylesheet" href="/static/xterm.css?v={}\">\n'.format(_BUILD)
-        + '    <script src="/static/xterm.js?v={}"></script>\n'.format(_BUILD)
-        + '    <script src="/static/xterm-addon-fit.js?v={}"></script>\n'.format(_BUILD)
-        + '    <script src="/static/claude-app.js?v={}"></script>\n'.format(_BUILD)
+        '    <link rel="stylesheet" href="{p}/xterm.css?v={v}\">\n'.format(p=static_prefix, v=_BUILD)
+        + '    <script src="{p}/xterm.js?v={v}"></script>\n'.format(p=static_prefix, v=_BUILD)
+        + '    <script src="{p}/xterm-addon-fit.js?v={v}"></script>\n'.format(p=static_prefix, v=_BUILD)
+        + '    <script src="{p}/claude-app.js?v={v}"></script>\n'.format(p=static_prefix, v=_BUILD)
     )
-    html = html.replace("</body>", f"{assets}  </body>")
-    return HTMLResponse(html, headers=_NO_CACHE)
+    return html.replace("</body>", f"{assets}  </body>")
+
+
+@app.get("/")
+def serve_index():
+    # The start page is JARVIS's own functional UI layer (see claude-app.js's
+    # buildUi()), rendered over the frozen claude.html SSR snapshot (its
+    # Anthropic scripts stripped, see _freeze_snapshot — the snapshot itself
+    # is invisible, it only still supplies a couple of CSS font fallbacks).
+    # The previous JARVIS UI still lives at frontend/index.html (with its own
+    # style.css/app.js) and remains reachable via the /static/* mount for
+    # reference, but is no longer served on /. See /backup for a frozen
+    # snapshot of the UI from before the most recent redesign.
+    return HTMLResponse(_render_app_shell(FRONTEND_DIR, "/static"), headers=_NO_CACHE)
+
+
+@app.get("/backup")
+def serve_backup_ui():
+    """A frozen copy of the UI as it was before the most recent redesign,
+    always reachable at /backup regardless of what / currently looks like —
+    kept as a real fallback (and an easy before/after comparison) rather
+    than a local-only copy that only exists on whoever's machine happened to
+    make it. Talks to the exact same live backend as / (same /chat/stream,
+    /code/*, /settings, … endpoints), just with the older HTML/JS shell."""
+    if not (FRONTEND_BACKUP_DIR / "claude.html").exists():
+        raise HTTPException(status_code=404, detail="Kein UI-Backup vorhanden (frontend_backup/ fehlt).")
+    return HTMLResponse(_render_app_shell(FRONTEND_BACKUP_DIR, "/backup-static"), headers=_NO_CACHE)
 
 
 _JARVIS_FAVICON_PATH = FRONTEND_DIR / "assets" / "img" / "favicon.ico"
@@ -282,6 +310,8 @@ class NoCacheStatic(StaticFiles):
 
 
 app.mount("/static", NoCacheStatic(directory=FRONTEND_DIR), name="static")
+if FRONTEND_BACKUP_DIR.exists():
+    app.mount("/backup-static", NoCacheStatic(directory=FRONTEND_BACKUP_DIR), name="backup-static")
 
 
 @app.post("/chat", response_model=ChatResponse)
