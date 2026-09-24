@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import ipaddress
 import json
 import os
 import re
+import socket
 import subprocess
 import sys
 import threading
@@ -692,6 +694,116 @@ def model_test(req: UpdateSettingsRequest):
             "detail": f"Erreichbar — {config.LM_STUDIO_MODEL} ist dort aber nicht geladen. Geladen: {', '.join(models[:5])}",
         }
     return {"healthy": True, "detail": f"Erreichbar ({len(models)} Modell(e) geladen)."}
+
+
+def _local_subnet() -> ipaddress.IPv4Network | None:
+    """Best-effort guess at the LAN /24 this machine is on, via the classic
+    UDP-connect trick — connect() on a UDP socket never actually sends a
+    packet, it just makes the OS pick and report the source IP/interface it
+    WOULD use for that destination, which is exactly the LAN-facing IP we
+    want. 8.8.8.8 is only ever used as a routable-looking target, nothing is
+    sent to it."""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            s.connect(("8.8.8.8", 80))
+            ip = s.getsockname()[0]
+        finally:
+            s.close()
+        return ipaddress.ip_network(f"{ip}/24", strict=False)
+    except OSError:
+        return None
+
+
+async def _port_open(ip: str, port: int, timeout: float) -> bool:
+    """Fast concurrent reachability check — just the TCP handshake, no HTTP
+    yet. Cheap enough to run against all 254 hosts of a /24 at once."""
+    try:
+        _, writer = await asyncio.wait_for(asyncio.open_connection(ip, port), timeout=timeout)
+    except (OSError, asyncio.TimeoutError):
+        return False
+    writer.close()
+    try:
+        await writer.wait_closed()
+    except OSError:
+        pass
+    return True
+
+
+def _validate_lm_studio(ip: str, port: int) -> dict | None:
+    """Confirms a host with an open port is actually LM Studio (not some
+    unrelated service that happens to listen on 1234) by asking for its
+    model list — run via asyncio.to_thread since `requests` is synchronous
+    and this only ever runs for the handful of hosts whose port answered."""
+    try:
+        resp = requests.get(f"http://{ip}:{port}/v1/models", timeout=2.5)
+        resp.raise_for_status()
+        models = [m.get("id") for m in resp.json().get("data", []) if m.get("id")]
+    except (requests.RequestException, ValueError):
+        return None
+    return {"ip": ip, "url": f"http://{ip}:{port}/v1", "models": models}
+
+
+@app.post("/model/scan")
+async def model_scan(body: dict | None = None):
+    """Scans the local /24 subnet for a reachable LM Studio instance,
+    streaming NDJSON progress events so the frontend can show a real
+    progress bar instead of a blind spinner (see the js-scan-* wiring in
+    claude-app.js). Two phases: a fast concurrent TCP-connect sweep across
+    the whole subnet (~254 hosts, bounded concurrency), then an actual
+    GET /v1/models against every host whose port answered — there are only
+    ever a handful of those — to confirm it's really LM Studio and read its
+    model list."""
+    port = int((body or {}).get("port") or 1234)
+    network = _local_subnet()
+
+    async def gen():
+        if network is None:
+            yield json.dumps({"type": "error", "message": "Konnte das lokale Netzwerk nicht bestimmen."}) + "\n"
+            return
+        hosts = [str(h) for h in network.hosts()]
+        total = len(hosts)
+        yield json.dumps({"type": "start", "total": total, "subnet": str(network)}) + "\n"
+
+        queue: asyncio.Queue = asyncio.Queue()
+        sem = asyncio.Semaphore(64)
+
+        async def probe(ip: str) -> None:
+            async with sem:
+                ok = await _port_open(ip, port, 0.3)
+            await queue.put(ip if ok else None)
+
+        tasks = [asyncio.create_task(probe(ip)) for ip in hosts]
+        scanned = 0
+        open_hosts: list[str] = []
+        # Progress in kleinen Schuben statt bei jedem einzelnen Host - 254
+        # NDJSON-Zeilen für einen simplen Fortschrittsbalken wäre unnötig
+        # geschwätzig; alle 4 oder am Ende reicht für eine flüssige Anzeige.
+        while scanned < total:
+            ip = await queue.get()
+            scanned += 1
+            if ip:
+                open_hosts.append(ip)
+            if scanned % 4 == 0 or scanned == total:
+                yield json.dumps({"type": "progress", "phase": "scan", "scanned": scanned, "total": total}) + "\n"
+        await asyncio.gather(*tasks)
+
+        if not open_hosts:
+            yield json.dumps({"type": "done", "found": []}) + "\n"
+            return
+
+        found = []
+        for i, ip in enumerate(open_hosts):
+            result = await asyncio.to_thread(_validate_lm_studio, ip, port)
+            if result:
+                found.append(result)
+                yield json.dumps({"type": "found", **result}) + "\n"
+            yield json.dumps(
+                {"type": "progress", "phase": "validate", "scanned": i + 1, "total": len(open_hosts)}
+            ) + "\n"
+        yield json.dumps({"type": "done", "found": found}) + "\n"
+
+    return StreamingResponse(gen(), media_type="application/x-ndjson")
 
 
 @app.post("/settings")

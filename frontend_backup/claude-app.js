@@ -866,6 +866,14 @@
                 <button class="js-setup-activate-lm" disabled style="padding:8px 12px;border:none;border-radius:8px;background:${C.accent};color:#fff;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap;font-family:${C.font};opacity:.4;">Freischalten</button>
               </div>
               <div class="js-setup-lm-status" style="font-size:12px;color:${C.textDim};min-height:14px;"></div>
+              <div style="display:flex;align-items:center;gap:8px;">
+                <button class="js-setup-scan" style="padding:6px 10px;border:1px solid ${C.border};border-radius:8px;background:none;color:${C.textSoft};font-size:12px;cursor:pointer;white-space:nowrap;font-family:${C.font};">Netzwerk durchsuchen</button>
+                <div class="js-setup-scan-bar-track" style="display:none;flex:1;height:6px;border-radius:3px;background:${C.bg};overflow:hidden;">
+                  <div class="js-setup-scan-bar-fill" style="height:100%;width:0%;background:${C.accent};transition:width .12s linear;"></div>
+                </div>
+              </div>
+              <div class="js-setup-scan-status" style="font-size:12px;color:${C.textDim};min-height:14px;"></div>
+              <div class="js-setup-scan-results" style="display:none;flex-direction:column;gap:4px;"></div>
               <div style="height:1px;background:${C.border};margin:2px 0;"></div>
               <div style="display:flex;gap:8px;">
                 <input class="js-setup-apikey" type="password" placeholder="Oder: Cloud-API-Key (z.B. DeepSeek, sk-…)" spellcheck="false" style="flex:1;min-width:0;padding:8px 10px;background:${C.bg};border:1px solid ${C.border};border-radius:8px;color:${C.text};font-size:13px;outline:none;font-family:${C.font};" />
@@ -2127,6 +2135,10 @@
     }
     wireSetupField($('.js-setup-lmurl', uiEl), $('.js-setup-test-lm', uiEl), $('.js-setup-activate-lm', uiEl), $('.js-setup-lm-status', uiEl), 'lm_studio_base_url');
     wireSetupField($('.js-setup-apikey', uiEl), $('.js-setup-test-api', uiEl), $('.js-setup-activate-api', uiEl), $('.js-setup-api-status', uiEl), 'deepseek_api_key');
+    wireNetworkScan(
+      $('.js-setup-scan', uiEl), $('.js-setup-scan-bar-track', uiEl), $('.js-setup-scan-bar-fill', uiEl),
+      $('.js-setup-scan-status', uiEl), $('.js-setup-scan-results', uiEl), $('.js-setup-lmurl', uiEl), $('.js-setup-test-lm', uiEl)
+    );
     updateSendSlot();
     if (speechBtn) speechBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); speechMode ? exitSpeech() : enterSpeech(); });
     if (noteBtn) noteBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); setDictating(!dictating); });
@@ -2413,6 +2425,84 @@
         if (modelHealthy && statusEl) statusEl.textContent = 'Freigeschaltet.';
       } catch (e) {
         if (statusEl) statusEl.textContent = 'Fehlgeschlagen.';
+      }
+    });
+  }
+
+  // Netzwerk nach einer erreichbaren LM-Studio-Instanz durchsuchen (siehe
+  // POST /model/scan): NDJSON-Stream genau wie /chat/stream oben, nur hier
+  // getrieben von einem Fortschrittsbalken statt Chat-Text. Zwei Phasen -
+  // "scan" (schneller TCP-Connect-Sweep über das ganze /24) und "validate"
+  // (echter GET /v1/models nur gegen die paar Hosts mit offenem Port) -
+  // teilen sich dieselbe Balkenbreite nacheinander (0-70% / 70-100%), damit
+  // der Balken über den ganzen Vorgang gleichmäßig weiterläuft statt bei
+  // Phasenwechsel zurückzuspringen.
+  function wireNetworkScan(scanBtn, barTrack, barFill, statusEl, resultsEl, urlInput, testBtn) {
+    if (!scanBtn || !barTrack || !barFill || !urlInput) return;
+    scanBtn.addEventListener('click', async () => {
+      scanBtn.disabled = true;
+      barTrack.style.display = 'block';
+      barFill.style.width = '0%';
+      resultsEl.style.display = 'none';
+      resultsEl.innerHTML = '';
+      if (statusEl) statusEl.textContent = 'Durchsuche Netzwerk…';
+      try {
+        const resp = await fetch('/model/scan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        const reader = resp.body.getReader();
+        const decoder = new TextDecoder();
+        let buf = '';
+        const found = [];
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buf += decoder.decode(value, { stream: true });
+          let nl;
+          while ((nl = buf.indexOf('\n')) >= 0) {
+            const line = buf.slice(0, nl).trim();
+            buf = buf.slice(nl + 1);
+            if (!line) continue;
+            let evt;
+            try { evt = JSON.parse(line); } catch (e) { continue; }
+            if (evt.type === 'error') {
+              if (statusEl) statusEl.textContent = evt.message || 'Scan fehlgeschlagen.';
+            } else if (evt.type === 'progress') {
+              const frac = evt.total ? evt.scanned / evt.total : 0;
+              const pct = evt.phase === 'validate' ? 70 + frac * 30 : frac * 70;
+              barFill.style.width = pct.toFixed(1) + '%';
+              if (statusEl) {
+                statusEl.textContent = evt.phase === 'validate'
+                  ? `Prüfe gefundene Geräte… (${evt.scanned}/${evt.total})`
+                  : `Durchsuche Netzwerk… (${evt.scanned}/${evt.total})`;
+              }
+            } else if (evt.type === 'found') {
+              found.push(evt);
+              resultsEl.style.display = 'flex';
+              const row = document.createElement('button');
+              row.type = 'button';
+              row.style.cssText = `text-align:left;padding:7px 10px;border:1px solid ${C.border};border-radius:8px;background:${C.bgSurface3};color:${C.text};font-size:12px;cursor:pointer;font-family:${C.font};`;
+              const modelCount = (evt.models || []).length;
+              row.textContent = `${evt.url} — ${modelCount ? modelCount + ' Modell(e) geladen' : 'kein Modell geladen'}`;
+              row.addEventListener('click', () => {
+                urlInput.value = evt.url;
+                if (testBtn) testBtn.click();
+              });
+              resultsEl.appendChild(row);
+            } else if (evt.type === 'done') {
+              barFill.style.width = '100%';
+              if (statusEl) {
+                statusEl.textContent = found.length
+                  ? `${found.length} LM-Studio-Instanz(en) gefunden — anklicken zum Übernehmen.`
+                  : 'Nichts gefunden. Läuft LM Studio auf einem Gerät in diesem Netzwerk?';
+              }
+            }
+          }
+        }
+      } catch (e) {
+        if (statusEl) statusEl.textContent = 'Scan fehlgeschlagen: ' + e.message;
+      } finally {
+        scanBtn.disabled = false;
+        setTimeout(() => { barTrack.style.display = 'none'; }, 600);
       }
     });
   }
