@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import ipaddress
 import json
 import os
 import re
+import socket
 import subprocess
 import sys
 import threading
@@ -29,6 +31,10 @@ app.add_middleware(
 )
 
 FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
+# Frozen copy of the UI from before a redesign (see /backup below) — kept as
+# a real, always-available fallback rather than a local-only, gitignored
+# folder, so it survives a fresh clone/deploy too.
+FRONTEND_BACKUP_DIR = Path(__file__).resolve().parent.parent / "frontend_backup"
 
 active_sockets: list[WebSocket] = []
 filler_urls: list[str] = []
@@ -234,22 +240,21 @@ def _freeze_snapshot(html: str) -> str:
     return html
 
 
-@app.get("/")
-def serve_index():
-    # The start page is the real claude.ai UI: the SSR snapshot of the
-    # Anthropic web client (frontend/claude.html), with every Anthropic asset
-    # localized under /static/vendor/ap/ and the client scripts stripped so the
-    # logged-in interface renders as static HTML+CSS instead of bouncing to a
-    # /login 404 (see _freeze_snapshot). The previous JARVIS UI still lives at
-    # frontend/index.html (with its own style.css/app.js) and remains reachable
-    # via the /static/* mount for reference, but is no longer served on /.
+def _render_app_shell(frontend_dir: Path, static_prefix: str) -> str:
+    """Build the claude.html-based app shell from the given frontend
+    directory, with the functional JS layer injected against the given
+    /static-style URL prefix. Shared by / (the live, constantly-redesigned
+    UI) and /backup (the frozen pre-redesign fallback, see FRONTEND_BACKUP_DIR)
+    so both stay byte-for-byte the same wiring, just pointed at different
+    asset trees.
     #
     # Explicit encoding matters here: Path.read_text() defaults to the OS
     # locale's preferred encoding, which is cp1252 on German Windows, not
     # UTF-8 — the file itself is UTF-8, so without this every special
     # character in it (observed live: the "≡" debug-toggle symbol) gets
     # silently mangled into mojibake before it's ever served to the browser.
-    html = (FRONTEND_DIR / "claude.html").read_text(encoding="utf-8")
+    """
+    html = (frontend_dir / "claude.html").read_text(encoding="utf-8")
     html = _freeze_snapshot(html)
     # The frozen snapshot must not let the Anthropic client boot (it would
     # bounce to a /login 404). It also must not be completely static: inject
@@ -261,13 +266,38 @@ def serve_index():
     # Der Code-Tab rendert die echte opencode-TUI in einem xterm.js-Terminal,
     # also lokal die xterm-Bundles (als static/*) direkt vor claude-app.js laden.
     assets = (
-        '    <link rel="stylesheet" href="/static/xterm.css?v={}\">\n'.format(_BUILD)
-        + '    <script src="/static/xterm.js?v={}"></script>\n'.format(_BUILD)
-        + '    <script src="/static/xterm-addon-fit.js?v={}"></script>\n'.format(_BUILD)
-        + '    <script src="/static/claude-app.js?v={}"></script>\n'.format(_BUILD)
+        '    <link rel="stylesheet" href="{p}/xterm.css?v={v}\">\n'.format(p=static_prefix, v=_BUILD)
+        + '    <script src="{p}/xterm.js?v={v}"></script>\n'.format(p=static_prefix, v=_BUILD)
+        + '    <script src="{p}/xterm-addon-fit.js?v={v}"></script>\n'.format(p=static_prefix, v=_BUILD)
+        + '    <script src="{p}/claude-app.js?v={v}"></script>\n'.format(p=static_prefix, v=_BUILD)
     )
-    html = html.replace("</body>", f"{assets}  </body>")
-    return HTMLResponse(html, headers=_NO_CACHE)
+    return html.replace("</body>", f"{assets}  </body>")
+
+
+@app.get("/")
+def serve_index():
+    # The start page is JARVIS's own functional UI layer (see claude-app.js's
+    # buildUi()), rendered over the frozen claude.html SSR snapshot (its
+    # Anthropic scripts stripped, see _freeze_snapshot — the snapshot itself
+    # is invisible, it only still supplies a couple of CSS font fallbacks).
+    # The previous JARVIS UI still lives at frontend/index.html (with its own
+    # style.css/app.js) and remains reachable via the /static/* mount for
+    # reference, but is no longer served on /. See /backup for a frozen
+    # snapshot of the UI from before the most recent redesign.
+    return HTMLResponse(_render_app_shell(FRONTEND_DIR, "/static"), headers=_NO_CACHE)
+
+
+@app.get("/backup")
+def serve_backup_ui():
+    """A frozen copy of the UI as it was before the most recent redesign,
+    always reachable at /backup regardless of what / currently looks like —
+    kept as a real fallback (and an easy before/after comparison) rather
+    than a local-only copy that only exists on whoever's machine happened to
+    make it. Talks to the exact same live backend as / (same /chat/stream,
+    /code/*, /settings, … endpoints), just with the older HTML/JS shell."""
+    if not (FRONTEND_BACKUP_DIR / "claude.html").exists():
+        raise HTTPException(status_code=404, detail="Kein UI-Backup vorhanden (frontend_backup/ fehlt).")
+    return HTMLResponse(_render_app_shell(FRONTEND_BACKUP_DIR, "/backup-static"), headers=_NO_CACHE)
 
 
 _JARVIS_FAVICON_PATH = FRONTEND_DIR / "assets" / "img" / "favicon.ico"
@@ -290,6 +320,8 @@ class NoCacheStatic(StaticFiles):
 
 
 app.mount("/static", NoCacheStatic(directory=FRONTEND_DIR), name="static")
+if FRONTEND_BACKUP_DIR.exists():
+    app.mount("/backup-static", NoCacheStatic(directory=FRONTEND_BACKUP_DIR), name="backup-static")
 
 
 @app.post("/chat", response_model=ChatResponse)
@@ -624,6 +656,165 @@ def delete_project(project_id: str):
 @app.get("/settings")
 def get_settings():
     return {"lm_studio_base_url": config.LM_STUDIO_BASE_URL, **config.get_simple_settings()}
+
+
+@app.get("/model/health")
+def model_health():
+    """Whether any chat model is actually reachable right now (LM Studio or
+    the configured DeepSeek fallback) — checked live, not just once at
+    startup, so the frontend can grey out the composer whenever LM Studio
+    gets stopped or the endpoint/API key is wrong, and re-enable it the
+    moment the user fixes it in Settings without needing a page reload."""
+    healthy, detail = llm_client.model_health()
+    return {"healthy": healthy, "detail": detail}
+
+
+@app.post("/model/test")
+def model_test(req: UpdateSettingsRequest):
+    """Test-drives a CANDIDATE LM Studio endpoint or DeepSeek API key without
+    persisting it — backs the inline setup panel the composer shows when no
+    model is reachable ("Testen" button): the user can try a value before
+    committing to it via POST /settings ("Freischalten" in the frontend)."""
+    if req.deepseek_api_key and req.deepseek_api_key.strip():
+        base = (req.deepseek_base_url or config.DEEPSEEK_BASE_URL).rstrip("/")
+        try:
+            resp = requests.get(
+                f"{base}/models",
+                headers={"Authorization": f"Bearer {req.deepseek_api_key.strip()}"},
+                timeout=6,
+            )
+            resp.raise_for_status()
+            return {"healthy": True, "detail": "DeepSeek erreichbar."}
+        except requests.RequestException as exc:
+            return {"healthy": False, "detail": f"DeepSeek nicht erreichbar: {exc}"}
+
+    base = (req.lm_studio_base_url or config.LM_STUDIO_BASE_URL or "").strip().rstrip("/")
+    if not base:
+        return {"healthy": False, "detail": "Bitte einen Endpoint oder API-Key eintragen."}
+    try:
+        resp = requests.get(f"{base}/models", timeout=6)
+        resp.raise_for_status()
+        models = [entry.get("id") for entry in resp.json().get("data", []) if entry.get("id")]
+    except requests.RequestException as exc:
+        return {"healthy": False, "detail": f"Nicht erreichbar: {exc}"}
+    if not models:
+        return {"healthy": False, "detail": "Erreichbar, aber es ist kein Modell geladen."}
+    if config.LM_STUDIO_MODEL and config.LM_STUDIO_MODEL not in models:
+        return {
+            "healthy": True,
+            "detail": f"Erreichbar — {config.LM_STUDIO_MODEL} ist dort aber nicht geladen. Geladen: {', '.join(models[:5])}",
+        }
+    return {"healthy": True, "detail": f"Erreichbar ({len(models)} Modell(e) geladen)."}
+
+
+def _local_subnet() -> ipaddress.IPv4Network | None:
+    """Best-effort guess at the LAN /24 this machine is on, via the classic
+    UDP-connect trick — connect() on a UDP socket never actually sends a
+    packet, it just makes the OS pick and report the source IP/interface it
+    WOULD use for that destination, which is exactly the LAN-facing IP we
+    want. 8.8.8.8 is only ever used as a routable-looking target, nothing is
+    sent to it."""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            s.connect(("8.8.8.8", 80))
+            ip = s.getsockname()[0]
+        finally:
+            s.close()
+        return ipaddress.ip_network(f"{ip}/24", strict=False)
+    except OSError:
+        return None
+
+
+async def _port_open(ip: str, port: int, timeout: float) -> bool:
+    """Fast concurrent reachability check — just the TCP handshake, no HTTP
+    yet. Cheap enough to run against all 254 hosts of a /24 at once."""
+    try:
+        _, writer = await asyncio.wait_for(asyncio.open_connection(ip, port), timeout=timeout)
+    except (OSError, asyncio.TimeoutError):
+        return False
+    writer.close()
+    try:
+        await writer.wait_closed()
+    except OSError:
+        pass
+    return True
+
+
+def _validate_lm_studio(ip: str, port: int) -> dict | None:
+    """Confirms a host with an open port is actually LM Studio (not some
+    unrelated service that happens to listen on 1234) by asking for its
+    model list — run via asyncio.to_thread since `requests` is synchronous
+    and this only ever runs for the handful of hosts whose port answered."""
+    try:
+        resp = requests.get(f"http://{ip}:{port}/v1/models", timeout=2.5)
+        resp.raise_for_status()
+        models = [m.get("id") for m in resp.json().get("data", []) if m.get("id")]
+    except (requests.RequestException, ValueError):
+        return None
+    return {"ip": ip, "url": f"http://{ip}:{port}/v1", "models": models}
+
+
+@app.post("/model/scan")
+async def model_scan(body: dict | None = None):
+    """Scans the local /24 subnet for a reachable LM Studio instance,
+    streaming NDJSON progress events so the frontend can show a real
+    progress bar instead of a blind spinner (see the js-scan-* wiring in
+    claude-app.js). Two phases: a fast concurrent TCP-connect sweep across
+    the whole subnet (~254 hosts, bounded concurrency), then an actual
+    GET /v1/models against every host whose port answered — there are only
+    ever a handful of those — to confirm it's really LM Studio and read its
+    model list."""
+    port = int((body or {}).get("port") or 1234)
+    network = _local_subnet()
+
+    async def gen():
+        if network is None:
+            yield json.dumps({"type": "error", "message": "Konnte das lokale Netzwerk nicht bestimmen."}) + "\n"
+            return
+        hosts = [str(h) for h in network.hosts()]
+        total = len(hosts)
+        yield json.dumps({"type": "start", "total": total, "subnet": str(network)}) + "\n"
+
+        queue: asyncio.Queue = asyncio.Queue()
+        sem = asyncio.Semaphore(64)
+
+        async def probe(ip: str) -> None:
+            async with sem:
+                ok = await _port_open(ip, port, 0.3)
+            await queue.put(ip if ok else None)
+
+        tasks = [asyncio.create_task(probe(ip)) for ip in hosts]
+        scanned = 0
+        open_hosts: list[str] = []
+        # Progress in kleinen Schuben statt bei jedem einzelnen Host - 254
+        # NDJSON-Zeilen für einen simplen Fortschrittsbalken wäre unnötig
+        # geschwätzig; alle 4 oder am Ende reicht für eine flüssige Anzeige.
+        while scanned < total:
+            ip = await queue.get()
+            scanned += 1
+            if ip:
+                open_hosts.append(ip)
+            if scanned % 4 == 0 or scanned == total:
+                yield json.dumps({"type": "progress", "phase": "scan", "scanned": scanned, "total": total}) + "\n"
+        await asyncio.gather(*tasks)
+
+        if not open_hosts:
+            yield json.dumps({"type": "done", "found": []}) + "\n"
+            return
+
+        found = []
+        for i, ip in enumerate(open_hosts):
+            result = await asyncio.to_thread(_validate_lm_studio, ip, port)
+            if result:
+                found.append(result)
+                yield json.dumps({"type": "found", **result}) + "\n"
+            yield json.dumps(
+                {"type": "progress", "phase": "validate", "scanned": i + 1, "total": len(open_hosts)}
+            ) + "\n"
+        yield json.dumps({"type": "done", "found": found}) + "\n"
+
+    return StreamingResponse(gen(), media_type="application/x-ndjson")
 
 
 @app.post("/settings")
