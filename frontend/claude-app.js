@@ -1,7 +1,8 @@
-// JARVIS — eigene, funktionale UI-Schicht (#jsApp), von buildUi() komplett
-// per JS erzeugt und über das inerte SSR-Grundgerüst (frontend/claude.html,
-// Skripte gestrippt, React läuft nie) gelegt. Das Grundgerüst liefert nur
-// noch Font-Fallback-Variablen im Hintergrund, sonst nichts sichtbares.
+// JARVIS — funktionale Schicht über dem eingefrorenen claude.ai-SSR-DOM.
+// Der Snapshot (frontend/claude.html) ist inert: seine Anthropic-Skripte sind
+// in serve_index() gestrippt, React läuft nie. Seine CSS-Tokens/Fonts
+// (--font-anthropic-sans, --text-primary/…, Terracotta #d97757) behalten wir;
+// das tote DOM verdecken wir mit einer EIGENEN, funktionalen UI-Schicht (#jsApp):
 // Sidebar mit echten Chats + Einstellungen, Uhrzeit-Begrüßung, Chat/Code-Toggle,
 // Composer -> /chat/stream (NDJSON + TTS), Modell-Auswahl, Datei-Upload,
 // Diktat (Mikrofon) und Sprachmodus (mittiges graues Punktnetz, Canvas2D).
@@ -11,78 +12,25 @@
 
   const $ = (s, r = document) => r.querySelector(s);
 
-  // ------------------------------------------------ animiertes Grain (Rauschen)
-  // Ein kleines Canvas mit echtem Zufallsrauschen (nicht CSS-Noise-Trick),
-  // einmal beim Laden erzeugt und als Kachel-Textur wiederverwendet — die
-  // Bewegung kommt später rein billig über eine CSS-Animation der
-  // background-position, kein Neuzeichnen pro Frame nötig.
-  function makeGrainDataUrl(size) {
-    const cnv = document.createElement('canvas');
-    cnv.width = cnv.height = size;
-    const ctx = cnv.getContext('2d');
-    const img = ctx.createImageData(size, size);
-    for (let i = 0; i < img.data.length; i += 4) {
-      const v = Math.random() * 255;
-      img.data[i] = v; img.data[i + 1] = v; img.data[i + 2] = v;
-      // Voll deckende Pixel, statt über den Alpha-Kanal halbtransparent zu
-      // sein: die Sichtbarkeit steuert allein die CSS-opacity der Ebene
-      // (siehe .js-grain-overlay). Mit Alpha PLUS mix-blend-mode:overlay
-      // verschwand das Korn über schwarzen/dunklen Flächen fast komplett -
-      // overlay hellt Schatten kaum auf, egal wie deckend die Quelle ist.
-      img.data[i + 3] = 255;
-    }
-    ctx.putImageData(img, 0, 0);
-    return cnv.toDataURL();
-  }
-  const GRAIN_URL = makeGrainDataUrl(160);
-
-  // ------------------------------------------------ design-tokens (ObsidianUI)
-  // Palette nach dem Vorbild von obsidianui.dev (obsidianui.dev/components,
-  // live per computed style abgelesen: Seitenhintergrund reines Schwarz
-  // rgb(0,0,0), Karten dark:bg-[#0A0A0A] mit rounded-[20px] und
-  // border-neutral-800, Fließtext nahe Weiß, Primär-Buttons MONOCHROM
-  // (weißes bg-primary, dunkler Text — bewusst KEIN Farbakzent, das ist der
-  // ganze Punkt des Designs) statt der vorherigen claude.ai-Terracotta- bzw.
-  // Obsidian-app-Lila-Optik.
+  // ------------------------------------------------ claude-design-tokens
+  // Echte claude.ai-Dark-Palette (aus dem live-DOM extrahiert: --cds-surface-1
+  // #151515 für Seite/Sidebar, --cds-surface-3 #1f1f1e fürs Composer-Karten,
+  // --cds-gray-200/-350 für Sekundär-/Tertiärtext, ein HELLER Haarlinien-Rand
+  // bei ~10% Deckkraft statt eines dunklen Randtons — auf dunklem Grund liegt
+  // dort ein dezenter LICHTER Ring, kein brauner Schatten).
   const C = {
-    bg: '#000000',
-    bgFade: 'rgba(0,0,0,.72)',          // Ausblenden des Threads hinter dem schwebenden Composer, jetzt über dem Aurora-Hintergrund statt reinem Schwarz
-    bgSoft: '#050505',
-    bgSurface3: '#0a0a0a',
-    bgHover: 'rgba(255,255,255,.06)',
-    text: '#ededed',
-    textSoft: '#a3a3a3',
-    textDim: '#6b6b6b',
-    border: '#262626',                 // neutral-800
-    borderStrong: '#404040',           // neutral-700 (Hover-Zustand von Karten)
-    accent: '#ffffff',                 // monochrom: Primär-Buttons sind weiß auf schwarz
-    accentText: '#0a0a0a',             // Text/Icon-Farbe auf accent-Hintergrund
-    accentSoft: 'rgba(255,255,255,.09)',
-    // Liquid-Glass für Sidebar + Composer (siehe buildUi): wenig Tönung
-    // (niedrige Deckkraft) — die Aurora-Farben sollen DURCHSCHEINEN, nicht
-    // von der Füllfarbe kommen. url(#jsGlassDistort) referenziert den
-    // feTurbulence+feDisplacementMap-SVG-Filter (in buildUi definiert), der
-    // den Hintergrund an den Rändern leicht verzerrt — der "echte" Apple-
-    // Liquid-Glass-Lichtbrechungseffekt, nicht nur Weichzeichnen. saturate
-    // bewusst nur noch ein Hauch (die Aurora selbst ist jetzt kräftig genug;
-    // ein starker saturate-Boost machte das Glas sonst bunter/heller als der
-    // eigentliche Hintergrund, den es doch nur zeigen soll).
-    glassBlur: 'url(#jsGlassDistort) blur(32px) saturate(115%)',
-    // Zu hell/zu transparent gewesen: bei niedriger Deckkraft ist "Glas" nur
-    // eine verschwommene Kopie des Hintergrunds, kein eigenes Material, das
-    // darüber SCHWEBT. Ein Objekt aus echtem (auch dunkel getöntem) Glas ist
-    // spürbar dunkler/dichter als das, was dahinter liegt - deutlich höhere
-    // Deckkraft hier, kombiniert mit dem Tiefenschatten in glassShadow unten.
-    glassBg: 'rgba(4,4,8,.72)',
-    glassBorder: 'rgba(255,255,255,.16)',
-    // Specular-Highlight-Kante oben/links, wie Licht, das am Rand einer
-    // echten Glasscheibe bricht — zusammen mit glassBorder das, was aus
-    // "durchsichtig mit Blur" ein "Glas" macht statt eine trübe Milchscheibe.
-    glassShadow: 'inset 0 1px 0 rgba(255,255,255,.45), inset 1px 0 0 rgba(255,255,255,.14), inset 0 0 30px rgba(255,255,255,.03), 0 24px 60px rgba(0,0,0,.55), 0 4px 16px rgba(0,0,0,.4)',
-    radiusCard: '20px',
-    radiusControl: '12px',
-    font: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif",
-    serif: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif",
+    bg: '#151515',
+    bgSoft: '#151515',
+    bgSurface3: '#1f1f1e',
+    bgHover: 'rgba(255,255,255,.11)',
+    text: '#f0efe8',
+    textSoft: '#c3c0b4',
+    textDim: '#8a8680',
+    border: 'rgba(240,236,225,.14)',
+    borderStrong: 'rgba(240,236,225,.24)',
+    accent: '#d97757',                 // Claude-Terracotta
+    font: 'var(--font-anthropic-sans, system-ui, sans-serif)',
+    serif: 'var(--font-anthropic-serif, Georgia, serif)',
   };
 
   // Einstellungen-Panel: jede .env-Variable aus backend/config.py, die
@@ -127,7 +75,7 @@
         <div style="padding:4px 10px;display:flex;flex-direction:column;gap:10px;">
           ${rows}
           <div style="display:flex;align-items:center;gap:10px;">
-            <button class="js-set-save-${section.id}" style="align-self:flex-start;padding:7px 12px;border:none;border-radius:8px;background:${C.accent};color:${C.accentText};font-size:12px;cursor:pointer;font-family:${C.font};">Speichern</button>
+            <button class="js-set-save-${section.id}" style="align-self:flex-start;padding:7px 12px;border:none;border-radius:8px;background:${C.accent};color:#fff;font-size:12px;cursor:pointer;font-family:${C.font};">Speichern</button>
             <span class="js-set-status-${section.id}" style="font-size:11.5px;color:${C.textDim};"></span>
           </div>
         </div>
@@ -726,23 +674,8 @@
     uiEl.id = 'jsApp';
     uiEl.style.cssText = `position:fixed;inset:0;z-index:30;display:flex;background:${C.bg};color:${C.text};font-family:${C.font};`;
     uiEl.innerHTML = `
-      <div class="js-aurora-bg" style="position:absolute;inset:0;z-index:0;overflow:hidden;pointer-events:none;background:#000;">
-        <svg width="0" height="0" style="position:absolute;">
-          <filter id="jsGlassDistort" x="-20%" y="-20%" width="140%" height="140%">
-            <feTurbulence type="fractalNoise" baseFrequency="0.009 0.013" numOctaves="2" seed="7" result="jsNoise" />
-            <feGaussianBlur in="jsNoise" stdDeviation="2" result="jsNoiseBlur" />
-            <feDisplacementMap in="SourceGraphic" in2="jsNoiseBlur" scale="22" xChannelSelector="R" yChannelSelector="G" />
-          </filter>
-        </svg>
-        <div class="js-aurora-blob js-aurora-blob-1"></div>
-        <div class="js-aurora-blob js-aurora-blob-2"></div>
-        <div class="js-aurora-blob js-aurora-blob-3"></div>
-        <div class="js-aurora-blob js-aurora-blob-4"></div>
-        <div class="js-aurora-blob js-aurora-blob-5"></div>
-        <div class="js-grain-overlay" style="background-image:url(${GRAIN_URL});"></div>
-      </div>
       <button class="js-side-toggle-float" title="Sidebar einblenden" style="display:none;position:absolute;top:15px;left:12px;z-index:31;background:none;border:none;color:${C.textSoft};cursor:pointer;align-items:center;justify-content:center;width:30px;height:30px;border-radius:8px;">${ICONS.menu}</button>
-      <aside class="js-sidebar" style="width:308px;flex:0 0 308px;height:100%;display:flex;flex-direction:column;background:${C.glassBg};backdrop-filter:${C.glassBlur};-webkit-backdrop-filter:${C.glassBlur};border-right:1px solid ${C.glassBorder};box-shadow:${C.glassShadow};position:relative;">
+      <aside class="js-sidebar" style="width:308px;flex:0 0 308px;height:100%;display:flex;flex-direction:column;background:${C.bgSoft};border-right:1px solid ${C.border};position:relative;">
         <div class="js-sidebar-top" style="padding:16px 8px 6px;display:flex;flex-direction:column;gap:12px;">
           <div class="js-sidebar-header" style="display:flex;align-items:center;justify-content:space-between;padding-left:8px;">
             <span style="display:flex;align-items:center;gap:8px;">
@@ -867,7 +800,7 @@
                 </button>
                 <button class="js-pd-note" title="Diktieren" style="width:34px;height:34px;border-radius:9px;background:none;border:none;color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;">${jsIcon('0xe0ab', 20)}</button>
                 <button class="js-pd-speech" title="Sprachmodus" style="width:38px;height:38px;border-radius:50%;background:${C.bgHover};border:1px solid ${C.border};color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;">${ICONS.audio}</button>
-                <button class="js-pd-send" title="Senden" style="width:38px;height:38px;border-radius:50%;background:${C.accent};border:none;color:${C.accentText};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;">${jsIcon('0xe013', 22)}</button>
+                <button class="js-pd-send" title="Senden" style="width:38px;height:38px;border-radius:50%;background:${C.accent};border:none;color:#fff;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;">${jsIcon('0xe013', 22)}</button>
               </div>
             </div>
           </div>
@@ -890,7 +823,7 @@
                 <span style="font-size:12px;color:${C.textSoft};">LM Studio Endpoint</span>
                 <input class="js-lmstudio-url-input" type="text" placeholder="http://127.0.0.1:1234/v1" spellcheck="false" style="width:100%;box-sizing:border-box;padding:9px 10px;background:${C.bg};border:1px solid ${C.border};border-radius:8px;color:${C.text};font-size:13px;outline:none;font-family:${C.font};" />
                 <div style="display:flex;align-items:center;gap:10px;">
-                  <button class="js-lmstudio-url-save" style="align-self:flex-start;padding:7px 12px;border:none;border-radius:8px;background:${C.accent};color:${C.accentText};font-size:12px;cursor:pointer;font-family:${C.font};">Speichern</button>
+                  <button class="js-lmstudio-url-save" style="align-self:flex-start;padding:7px 12px;border:none;border-radius:8px;background:${C.accent};color:#fff;font-size:12px;cursor:pointer;font-family:${C.font};">Speichern</button>
                   <span class="js-lmstudio-url-status" style="font-size:11.5px;color:${C.textDim};"></span>
                 </div>
               </div>
@@ -900,16 +833,16 @@
               <div style="padding:4px 0;display:flex;flex-direction:column;gap:8px;">
                 <span style="font-size:12px;color:${C.textSoft};">Arbeitsverzeichnis für JARVIS Code</span>
                 <input class="js-code-dir-input" type="text" placeholder="~/Developer" spellcheck="false" style="width:100%;box-sizing:border-box;padding:9px 10px;background:${C.bg};border:1px solid ${C.border};border-radius:8px;color:${C.text};font-size:13px;outline:none;font-family:${C.font};" />
-                <button class="js-code-dir-save" style="align-self:flex-start;padding:7px 12px;border:none;border-radius:8px;background:${C.accent};color:${C.accentText};font-size:12px;cursor:pointer;font-family:${C.font};">Speichern</button>
+                <button class="js-code-dir-save" style="align-self:flex-start;padding:7px 12px;border:none;border-radius:8px;background:${C.accent};color:#fff;font-size:12px;cursor:pointer;font-family:${C.font};">Speichern</button>
               </div>
             </div>
             ${SETTINGS_SECTIONS.map((s) => settingsSectionHtml(s, false)).join('')}
           </div>
         </div>
       </div>
-      <div class="js-composer" style="position:absolute;left:308px;right:0;bottom:0;padding:0 24px 22px;background:linear-gradient(transparent,${C.bgFade} 55%);">
+      <div class="js-composer" style="position:absolute;left:308px;right:0;bottom:0;padding:0 24px 22px;background:linear-gradient(transparent,${C.bg} 55%);">
         <div style="max-width:672px;margin:0 auto;position:relative;">
-          <div style="background:${C.glassBg};backdrop-filter:${C.glassBlur};-webkit-backdrop-filter:${C.glassBlur};border-radius:20px;box-shadow:${C.glassShadow};">
+          <div style="background:${C.bgSurface3};border-radius:20px;box-shadow:0 4px 20px rgba(0,0,0,.18),0 0 0 1px ${C.borderStrong};">
             <div class="js-attach-preview" style="display:none;gap:8px;padding:14px 14px 0;flex-wrap:wrap;"></div>
             <div class="js-composer-content" style="padding:14px;display:flex;flex-direction:column;gap:12px;">
               <div class="js-editor" contenteditable="true" data-placeholder="Wie kann ich dir heute helfen?" style="min-height:48px;max-height:200px;overflow-y:auto;padding:6px 6px 0;color:${C.text};font-size:15px;line-height:1.5;outline:none;white-space:pre-wrap;word-break:break-word;"></div>
@@ -922,7 +855,7 @@
                 </button>
                 <button class="js-note" title="Diktieren" style="width:32px;height:32px;border-radius:8px;background:none;border:none;color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;transition:background .15s;flex:0 0 auto;">${jsIcon('0xe0ab', 24)}</button>
                 <button class="js-speech" title="Sprachmodus" style="width:32px;height:32px;border-radius:8px;background:none;border:none;color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;transition:background .15s;flex:0 0 auto;">${ICONS.audio}</button>
-                <button class="js-send" title="Senden" style="width:32px;height:32px;border-radius:8px;background:${C.accent};border:none;color:${C.accentText};cursor:pointer;display:none;align-items:center;justify-content:center;flex:0 0 auto;">${jsIcon('0xe013', 24)}</button>
+                <button class="js-send" title="Senden" style="width:32px;height:32px;border-radius:8px;background:${C.accent};border:none;color:#fff;cursor:pointer;display:none;align-items:center;justify-content:center;flex:0 0 auto;">${jsIcon('0xe013', 24)}</button>
               </div>
             </div>
             <div class="js-composer-setup" style="display:none;padding:16px;flex-direction:column;gap:10px;">
@@ -930,7 +863,7 @@
               <div style="display:flex;gap:8px;">
                 <input class="js-setup-lmurl" type="text" placeholder="http://127.0.0.1:1234/v1" spellcheck="false" style="flex:1;min-width:0;padding:8px 10px;background:${C.bg};border:1px solid ${C.border};border-radius:8px;color:${C.text};font-size:13px;outline:none;font-family:${C.font};" />
                 <button class="js-setup-test-lm" style="padding:8px 12px;border:1px solid ${C.border};border-radius:8px;background:none;color:${C.textSoft};font-size:12px;cursor:pointer;white-space:nowrap;font-family:${C.font};">Testen</button>
-                <button class="js-setup-activate-lm" disabled style="padding:8px 12px;border:none;border-radius:8px;background:${C.accent};color:${C.accentText};font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap;font-family:${C.font};opacity:.4;">Freischalten</button>
+                <button class="js-setup-activate-lm" disabled style="padding:8px 12px;border:none;border-radius:8px;background:${C.accent};color:#fff;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap;font-family:${C.font};opacity:.4;">Freischalten</button>
               </div>
               <div class="js-setup-lm-status" style="font-size:12px;color:${C.textDim};min-height:14px;"></div>
               <div style="display:flex;align-items:center;gap:8px;">
@@ -945,7 +878,7 @@
               <div style="display:flex;gap:8px;">
                 <input class="js-setup-apikey" type="password" placeholder="Oder: Cloud-API-Key (z.B. DeepSeek, sk-…)" spellcheck="false" style="flex:1;min-width:0;padding:8px 10px;background:${C.bg};border:1px solid ${C.border};border-radius:8px;color:${C.text};font-size:13px;outline:none;font-family:${C.font};" />
                 <button class="js-setup-test-api" style="padding:8px 12px;border:1px solid ${C.border};border-radius:8px;background:none;color:${C.textSoft};font-size:12px;cursor:pointer;white-space:nowrap;font-family:${C.font};">Testen</button>
-                <button class="js-setup-activate-api" disabled style="padding:8px 12px;border:none;border-radius:8px;background:${C.accent};color:${C.accentText};font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap;font-family:${C.font};opacity:.4;">Freischalten</button>
+                <button class="js-setup-activate-api" disabled style="padding:8px 12px;border:none;border-radius:8px;background:${C.accent};color:#fff;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap;font-family:${C.font};opacity:.4;">Freischalten</button>
               </div>
               <div class="js-setup-api-status" style="font-size:12px;color:${C.textDim};min-height:14px;"></div>
             </div>
@@ -1022,7 +955,7 @@
           </div>
           <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:4px;">
             <button class="js-newproject-cancel" style="padding:8px 14px;border:1px solid ${C.border};border-radius:8px;background:none;color:${C.textSoft};font-size:13px;cursor:pointer;font-family:${C.font};">Abbrechen</button>
-            <button class="js-newproject-create" style="padding:8px 14px;border:none;border-radius:8px;background:${C.accent};color:${C.accentText};font-size:13px;font-weight:600;cursor:pointer;font-family:${C.font};">Erstellen</button>
+            <button class="js-newproject-create" style="padding:8px 14px;border:none;border-radius:8px;background:${C.accent};color:#fff;font-size:13px;font-weight:600;cursor:pointer;font-family:${C.font};">Erstellen</button>
           </div>
         </div>
       </div>
@@ -1046,7 +979,7 @@
           <input class="js-renamechat-input" type="text" style="width:100%;box-sizing:border-box;padding:9px 10px;background:${C.bg};border:1px solid ${C.border};border-radius:8px;color:${C.text};font-size:13px;outline:none;font-family:${C.font};" />
           <div style="display:flex;justify-content:flex-end;gap:8px;">
             <button class="js-renamechat-cancel" style="padding:8px 14px;border:1px solid ${C.border};border-radius:8px;background:none;color:${C.textSoft};font-size:13px;cursor:pointer;font-family:${C.font};">Abbrechen</button>
-            <button class="js-renamechat-save" style="padding:8px 14px;border:none;border-radius:8px;background:${C.accent};color:${C.accentText};font-size:13px;font-weight:600;cursor:pointer;font-family:${C.font};">Speichern</button>
+            <button class="js-renamechat-save" style="padding:8px 14px;border:none;border-radius:8px;background:${C.accent};color:#fff;font-size:13px;font-weight:600;cursor:pointer;font-family:${C.font};">Speichern</button>
           </div>
         </div>
       </div>
@@ -1114,41 +1047,6 @@
     const s = document.createElement('style');
     s.id = 'jsAppCss';
     s.textContent = `
-      /* Aurora-Hintergrund: große, stark überlappende Farbbänder (nicht nur
-         Ecken-Blobs) nach dem vom Nutzer gezeigten Referenzbild — Blau/Cyan
-         an den äußeren Rändern, ein breites Violett-Pink-Band diagonal durch
-         die Mitte. Jeder Blob auf eigener langsamer Drift-Schleife
-         (unterschiedliche Dauer/Phase, nie repetitiv). mix-blend-mode:screen
-         addiert überlappende Farben statt sie zu verdecken. Frühere Version
-         war zu klein/blass (Ecken-Kreise mit frühem Transparent-Stop) und
-         wirkte dadurch überwiegend schwarz statt farbig wie im Referenzbild.*/
-      .js-aurora-blob { position:absolute; border-radius:50%; filter:blur(70px); mix-blend-mode:screen; will-change:transform; }
-      .js-aurora-blob-1 { width:78vmax; height:78vmax; top:-35vmax; right:-28vmax; background:radial-gradient(circle, #2e8bff 0%, #2e8bff 22%, rgba(46,139,255,0) 52%); opacity:.5; animation:jsAurora1 30s ease-in-out infinite; }
-      .js-aurora-blob-2 { width:68vmax; height:68vmax; top:-8vmax; right:-24vmax; background:radial-gradient(circle, #9b5cff 0%, #9b5cff 22%, rgba(155,92,255,0) 52%); opacity:.42; animation:jsAurora2 36s ease-in-out infinite; }
-      .js-aurora-blob-3 { width:78vmax; height:78vmax; bottom:-35vmax; left:-28vmax; background:radial-gradient(circle, #29b6ff 0%, #29b6ff 22%, rgba(41,182,255,0) 52%); opacity:.46; animation:jsAurora3 26s ease-in-out infinite; }
-      .js-aurora-blob-4 { width:62vmax; height:62vmax; top:16vmax; left:-8vmax; background:radial-gradient(circle, #b25cff 0%, #b25cff 20%, rgba(178,92,255,0) 50%); opacity:.36; animation:jsAurora4 33s ease-in-out infinite; }
-      .js-aurora-blob-5 { width:70vmax; height:70vmax; top:6vmax; left:14vmax; background:radial-gradient(circle, #ff8fe0 0%, #ff8fe0 18%, rgba(255,143,224,0) 48%); opacity:.3; animation:jsAurora5 29s ease-in-out infinite; }
-      @keyframes jsAurora1 { 0%,100% { transform:translate(0,0) scale(1); } 50% { transform:translate(-6%,5%) scale(1.08); } }
-      @keyframes jsAurora2 { 0%,100% { transform:translate(0,0) scale(1); } 50% { transform:translate(5%,-6%) scale(1.05); } }
-      @keyframes jsAurora3 { 0%,100% { transform:translate(0,0) scale(1); } 50% { transform:translate(5%,-4%) scale(1.1); } }
-      @keyframes jsAurora4 { 0%,100% { transform:translate(0,0) scale(1); } 50% { transform:translate(-5%,6%) scale(1.07); } }
-      @keyframes jsAurora5 { 0%,100% { transform:translate(0,0) scale(1); } 50% { transform:translate(4%,4%) scale(1.06); } }
-      /* Feines, bewegtes Filmkorn obendrauf (echtes Zufallsrauschen aus
-         GRAIN_URL, siehe makeGrainDataUrl) — steps() statt ease, damit es wie
-         flackerndes analoges Korn aussieht statt sanft zu gleiten. KEIN
-         mix-blend-mode:overlay: das hellt Schatten kaum auf, über den
-         schwarzen Flächen war das Korn dadurch praktisch unsichtbar. Normales
-         Blending bei niedriger Deckkraft zeigt es gleichmäßig auf jedem
-         Untergrund, hell oder dunkel. */
-      .js-grain-overlay { position:absolute; inset:-50%; width:200%; height:200%; background-repeat:repeat; opacity:.11; animation:jsGrain 1s steps(4) infinite; }
-      @keyframes jsGrain {
-        0% { transform:translate(0,0); } 25% { transform:translate(-3%,2%); }
-        50% { transform:translate(2%,-3%); } 75% { transform:translate(-2%,-2%); }
-        100% { transform:translate(0,0); }
-      }
-      @media (prefers-reduced-motion: reduce) {
-        .js-aurora-blob, .js-grain-overlay { animation:none !important; }
-      }
       body.js-app-active > :not(#jsApp):not(#jarvisOrb):not(#jarvisOrbHit):not(#jsSpeechTerm):not(#jsSpeechbar):not(#jsSpeechCaption):not(#jsSettingsSheet):not(#jsNewProjectSheet):not(#jsRenameChatSheet):not(#jsBtwWindow):not(script):not(style) { display:none !important; }
       body.js-app-active { overflow:hidden; }
       /* Echter claude.ai "Squish"-Press-Effekt (aus --cds-btn-spring extrahiert): schnelles
@@ -1191,10 +1089,10 @@
       .js-navrow:not([disabled]):not(.js-artifacts):not(.js-customize):hover { background:${C.bgHover}; color:${C.text}; }
       .js-pill.active { color:${C.text} !important; }
       .js-pill:not(.active):hover { color:${C.text}; }
-      .js-note.on { color:${C.accent} !important; background:${C.accentSoft} !important; }
+      .js-note.on { color:${C.accent} !important; background:rgba(217,119,87,.12) !important; }
       .js-note.on svg { animation:js-note-pulse 1.4s ease-in-out infinite; }
       @keyframes js-note-pulse { 0%,100% { opacity:1; } 50% { opacity:.45; } }
-      .js-speech.on { background:${C.accent} !important; border-color:${C.accent} !important; color:${C.accentText} !important; }
+      .js-speech.on { background:${C.accent} !important; border-color:${C.accent} !important; color:#fff !important; }
       .js-speech.on svg { animation:js-speech-pulse 1.3s ease-in-out infinite; }
       @keyframes js-speech-pulse { 0%,100% { transform:scale(1); } 50% { transform:scale(1.14); } }
       .js-chat-item { position:relative; display:flex; align-items:center; gap:9px; padding:7px 54px 7px 10px; border-radius:8px; cursor:pointer; font-size:14px; color:${C.textSoft}; }
@@ -1765,7 +1663,7 @@
   }
   function projectCardHtml(p) {
     return `
-      <div class="js-project-card" data-id="${p.id}" style="position:relative;border:1px solid ${C.border};border-radius:${C.radiusCard};padding:16px 18px;background:${C.bgSurface3};transition:border-color .15s;display:flex;flex-direction:column;min-height:110px;">
+      <div class="js-project-card" data-id="${p.id}" style="position:relative;border:1px solid ${C.border};border-radius:14px;padding:16px 18px;background:${C.bgSurface3};transition:border-color .15s;display:flex;flex-direction:column;min-height:110px;">
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px;padding-right:44px;">
           <span style="font-size:14px;font-weight:600;color:${C.text};">${escapeHtml(p.name)}</span>
           ${p.tag ? `<span style="font-size:11px;padding:2px 8px;border-radius:10px;background:${C.bgHover};color:${C.textSoft};">${escapeHtml(p.tag)}</span>` : ''}
@@ -3257,7 +3155,7 @@
     if (kind === 'link') {
       const b = document.createElement('button');
       b.textContent = item.title || 'Öffnen';
-      b.style.cssText = `align-self:flex-start;padding:8px 14px;border:none;border-radius:10px;background:${C.accent};color:${C.accentText};font-size:13px;cursor:pointer;font-family:${C.font};`;
+      b.style.cssText = `align-self:flex-start;padding:8px 14px;border:none;border-radius:10px;background:${C.accent};color:#fff;font-size:13px;cursor:pointer;font-family:${C.font};`;
       b.addEventListener('click', () => { try { window.open(item.url, '_blank'); } catch (e) {} });
       host.appendChild(b);
       scrollThread();
