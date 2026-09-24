@@ -509,6 +509,12 @@ def chat_stream(req: ChatRequest):
                 "Please check whether Gemma is loaded in LM Studio."
             )
             print(f"[model] Anfrage fehlgeschlagen: {exc}")
+            if isinstance(exc, llm_client.ModelTooLargeError):
+                # Structured event alongside the plain text, so the frontend
+                # can attach real "Trotzdem laden" / "Modell entladen"
+                # buttons instead of the user being stuck with an inert
+                # message every single turn until they dig into Settings.
+                yield json.dumps({"type": "hardware_block", "model": config.LM_STUDIO_MODEL}) + "\n"
             try:
                 audio_b64 = base64.b64encode(tts.synthesize(fallback)).decode("ascii")
                 yield json.dumps({"type": "sentence", "text": fallback, "audio": audio_b64}) + "\n"
@@ -815,6 +821,51 @@ async def model_scan(body: dict | None = None):
         yield json.dumps({"type": "done", "found": found}) + "\n"
 
     return StreamingResponse(gen(), media_type="application/x-ndjson")
+
+
+class UnloadModelRequest(BaseModel):
+    model: str
+
+
+@app.post("/model/force-load")
+def model_force_load():
+    """"Trotzdem laden" — the user overrides hardware.py's memory guard for
+    the currently configured model. Used from the chat's inline warning card
+    when the check turns out to be wrong for this machine (e.g. the model
+    actually fits fine in practice) or the user accepts the risk anyway.
+
+    Best-effort actively loads the model right now via LM Studio's own v1
+    REST API (POST /api/v1/models/load — works over the network just like
+    every other LM Studio call this app makes), instead of only clearing the
+    guard and hoping the next chat request's just-in-time load succeeds.
+    Failing that call is not fatal: unblock_all() always runs, so the normal
+    JIT-on-next-request path still gets a chance."""
+    try:
+        requests.post(
+            f"{hardware.lm_studio_root()}/api/v1/models/load",
+            json={"model": config.LM_STUDIO_MODEL}, timeout=120,
+        )
+    except requests.RequestException as exc:
+        print(f"[model] /api/v1/models/load für {config.LM_STUDIO_MODEL} fehlgeschlagen ({exc}), JIT-Laden bleibt als Fallback.")
+    hardware.unblock_all()
+    return {"ok": True}
+
+
+@app.get("/model/loaded")
+def model_loaded():
+    """Every model LM Studio currently has resident in memory, for the
+    "andere Modelle entladen" list next to the hardware-guard warning."""
+    return {"models": hardware.loaded_models_info()}
+
+
+@app.post("/model/unload")
+def model_unload(req: UnloadModelRequest):
+    """Ejects one loaded model to free memory (see hardware.loaded_models_info)
+    and re-opens the hardware guard afterwards, in case freeing it is now
+    enough for the model Jarvis actually wants to load."""
+    llm_client.eject_model(req.model)
+    hardware.unblock_all()
+    return {"ok": True}
 
 
 @app.post("/settings")
