@@ -11,24 +11,29 @@
 
   const $ = (s, r = document) => r.querySelector(s);
 
-  // ------------------------------------------------ design-tokens (Obsidian)
-  // Palette nach dem Vorbild von obsidian.md (live von der Seite abgelesen:
-  // Seiten-/Sidebar-Hintergrund rgb(15,15,15), Karten/Composer rgb(30,30,30),
-  // Fließtext rgb(238,238,238), gedämpfter Text rgb(188,188,188), Akzent-Lila
-  // rgb(124,58,237) für Buttons/aktive Zustände) statt der früheren
-  // claude.ai-Terracotta-Optik — eigenständiges, dunkles, reduziertes Design.
+  // ------------------------------------------------ design-tokens (ObsidianUI)
+  // Palette nach dem Vorbild von obsidianui.dev (obsidianui.dev/components,
+  // live per computed style abgelesen: Seitenhintergrund reines Schwarz
+  // rgb(0,0,0), Karten dark:bg-[#0A0A0A] mit rounded-[20px] und
+  // border-neutral-800, Fließtext nahe Weiß, Primär-Buttons MONOCHROM
+  // (weißes bg-primary, dunkler Text — bewusst KEIN Farbakzent, das ist der
+  // ganze Punkt des Designs) statt der vorherigen claude.ai-Terracotta- bzw.
+  // Obsidian-app-Lila-Optik.
   const C = {
-    bg: '#0f0f0f',
-    bgSoft: '#131313',
-    bgSurface3: '#1e1e1e',
-    bgHover: 'rgba(255,255,255,.07)',
-    text: '#eeeeee',
-    textSoft: '#bcbcbc',
-    textDim: '#737373',
-    border: 'rgba(255,255,255,.09)',
-    borderStrong: 'rgba(255,255,255,.16)',
-    accent: '#7c3aed',                 // Obsidian-Lila
-    accentSoft: 'rgba(124,58,237,.14)',
+    bg: '#000000',
+    bgSoft: '#050505',
+    bgSurface3: '#0a0a0a',
+    bgHover: 'rgba(255,255,255,.06)',
+    text: '#ededed',
+    textSoft: '#a3a3a3',
+    textDim: '#6b6b6b',
+    border: '#262626',                 // neutral-800
+    borderStrong: '#404040',           // neutral-700 (Hover-Zustand von Karten)
+    accent: '#ffffff',                 // monochrom: Primär-Buttons sind weiß auf schwarz
+    accentText: '#0a0a0a',             // Text/Icon-Farbe auf accent-Hintergrund
+    accentSoft: 'rgba(255,255,255,.09)',
+    radiusCard: '20px',
+    radiusControl: '12px',
     font: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif",
     serif: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif",
   };
@@ -75,7 +80,7 @@
         <div style="padding:4px 10px;display:flex;flex-direction:column;gap:10px;">
           ${rows}
           <div style="display:flex;align-items:center;gap:10px;">
-            <button class="js-set-save-${section.id}" style="align-self:flex-start;padding:7px 12px;border:none;border-radius:8px;background:${C.accent};color:#fff;font-size:12px;cursor:pointer;font-family:${C.font};">Speichern</button>
+            <button class="js-set-save-${section.id}" style="align-self:flex-start;padding:7px 12px;border:none;border-radius:8px;background:${C.accent};color:${C.accentText};font-size:12px;cursor:pointer;font-family:${C.font};">Speichern</button>
             <span class="js-set-status-${section.id}" style="font-size:11.5px;color:${C.textDim};"></span>
           </div>
         </div>
@@ -792,7 +797,7 @@
                 </button>
                 <button class="js-pd-note" title="Diktieren" style="width:34px;height:34px;border-radius:9px;background:none;border:none;color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;">${jsIcon('0xe0ab', 20)}</button>
                 <button class="js-pd-speech" title="Sprachmodus" style="width:38px;height:38px;border-radius:50%;background:${C.bgHover};border:1px solid ${C.border};color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;">${ICONS.audio}</button>
-                <button class="js-pd-send" title="Senden" style="width:38px;height:38px;border-radius:50%;background:${C.accent};border:none;color:#fff;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;">${jsIcon('0xe013', 22)}</button>
+                <button class="js-pd-send" title="Senden" style="width:38px;height:38px;border-radius:50%;background:${C.accent};border:none;color:${C.accentText};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;">${jsIcon('0xe013', 22)}</button>
               </div>
             </div>
           </div>
@@ -815,7 +820,7 @@
                 <span style="font-size:12px;color:${C.textSoft};">LM Studio Endpoint</span>
                 <input class="js-lmstudio-url-input" type="text" placeholder="http://127.0.0.1:1234/v1" spellcheck="false" style="width:100%;box-sizing:border-box;padding:9px 10px;background:${C.bg};border:1px solid ${C.border};border-radius:8px;color:${C.text};font-size:13px;outline:none;font-family:${C.font};" />
                 <div style="display:flex;align-items:center;gap:10px;">
-                  <button class="js-lmstudio-url-save" style="align-self:flex-start;padding:7px 12px;border:none;border-radius:8px;background:${C.accent};color:#fff;font-size:12px;cursor:pointer;font-family:${C.font};">Speichern</button>
+                  <button class="js-lmstudio-url-save" style="align-self:flex-start;padding:7px 12px;border:none;border-radius:8px;background:${C.accent};color:${C.accentText};font-size:12px;cursor:pointer;font-family:${C.font};">Speichern</button>
                   <span class="js-lmstudio-url-status" style="font-size:11.5px;color:${C.textDim};"></span>
                 </div>
               </div>
@@ -825,7 +830,7 @@
               <div style="padding:4px 0;display:flex;flex-direction:column;gap:8px;">
                 <span style="font-size:12px;color:${C.textSoft};">Arbeitsverzeichnis für JARVIS Code</span>
                 <input class="js-code-dir-input" type="text" placeholder="~/Developer" spellcheck="false" style="width:100%;box-sizing:border-box;padding:9px 10px;background:${C.bg};border:1px solid ${C.border};border-radius:8px;color:${C.text};font-size:13px;outline:none;font-family:${C.font};" />
-                <button class="js-code-dir-save" style="align-self:flex-start;padding:7px 12px;border:none;border-radius:8px;background:${C.accent};color:#fff;font-size:12px;cursor:pointer;font-family:${C.font};">Speichern</button>
+                <button class="js-code-dir-save" style="align-self:flex-start;padding:7px 12px;border:none;border-radius:8px;background:${C.accent};color:${C.accentText};font-size:12px;cursor:pointer;font-family:${C.font};">Speichern</button>
               </div>
             </div>
             ${SETTINGS_SECTIONS.map((s) => settingsSectionHtml(s, false)).join('')}
@@ -847,7 +852,7 @@
                 </button>
                 <button class="js-note" title="Diktieren" style="width:32px;height:32px;border-radius:8px;background:none;border:none;color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;transition:background .15s;flex:0 0 auto;">${jsIcon('0xe0ab', 24)}</button>
                 <button class="js-speech" title="Sprachmodus" style="width:32px;height:32px;border-radius:8px;background:none;border:none;color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;transition:background .15s;flex:0 0 auto;">${ICONS.audio}</button>
-                <button class="js-send" title="Senden" style="width:32px;height:32px;border-radius:8px;background:${C.accent};border:none;color:#fff;cursor:pointer;display:none;align-items:center;justify-content:center;flex:0 0 auto;">${jsIcon('0xe013', 24)}</button>
+                <button class="js-send" title="Senden" style="width:32px;height:32px;border-radius:8px;background:${C.accent};border:none;color:${C.accentText};cursor:pointer;display:none;align-items:center;justify-content:center;flex:0 0 auto;">${jsIcon('0xe013', 24)}</button>
               </div>
             </div>
           </div>
@@ -923,7 +928,7 @@
           </div>
           <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:4px;">
             <button class="js-newproject-cancel" style="padding:8px 14px;border:1px solid ${C.border};border-radius:8px;background:none;color:${C.textSoft};font-size:13px;cursor:pointer;font-family:${C.font};">Abbrechen</button>
-            <button class="js-newproject-create" style="padding:8px 14px;border:none;border-radius:8px;background:${C.accent};color:#fff;font-size:13px;font-weight:600;cursor:pointer;font-family:${C.font};">Erstellen</button>
+            <button class="js-newproject-create" style="padding:8px 14px;border:none;border-radius:8px;background:${C.accent};color:${C.accentText};font-size:13px;font-weight:600;cursor:pointer;font-family:${C.font};">Erstellen</button>
           </div>
         </div>
       </div>
@@ -947,7 +952,7 @@
           <input class="js-renamechat-input" type="text" style="width:100%;box-sizing:border-box;padding:9px 10px;background:${C.bg};border:1px solid ${C.border};border-radius:8px;color:${C.text};font-size:13px;outline:none;font-family:${C.font};" />
           <div style="display:flex;justify-content:flex-end;gap:8px;">
             <button class="js-renamechat-cancel" style="padding:8px 14px;border:1px solid ${C.border};border-radius:8px;background:none;color:${C.textSoft};font-size:13px;cursor:pointer;font-family:${C.font};">Abbrechen</button>
-            <button class="js-renamechat-save" style="padding:8px 14px;border:none;border-radius:8px;background:${C.accent};color:#fff;font-size:13px;font-weight:600;cursor:pointer;font-family:${C.font};">Speichern</button>
+            <button class="js-renamechat-save" style="padding:8px 14px;border:none;border-radius:8px;background:${C.accent};color:${C.accentText};font-size:13px;font-weight:600;cursor:pointer;font-family:${C.font};">Speichern</button>
           </div>
         </div>
       </div>
@@ -1052,7 +1057,7 @@
       .js-note.on { color:${C.accent} !important; background:${C.accentSoft} !important; }
       .js-note.on svg { animation:js-note-pulse 1.4s ease-in-out infinite; }
       @keyframes js-note-pulse { 0%,100% { opacity:1; } 50% { opacity:.45; } }
-      .js-speech.on { background:${C.accent} !important; border-color:${C.accent} !important; color:#fff !important; }
+      .js-speech.on { background:${C.accent} !important; border-color:${C.accent} !important; color:${C.accentText} !important; }
       .js-speech.on svg { animation:js-speech-pulse 1.3s ease-in-out infinite; }
       @keyframes js-speech-pulse { 0%,100% { transform:scale(1); } 50% { transform:scale(1.14); } }
       .js-chat-item { position:relative; display:flex; align-items:center; gap:9px; padding:7px 54px 7px 10px; border-radius:8px; cursor:pointer; font-size:14px; color:${C.textSoft}; }
@@ -1623,7 +1628,7 @@
   }
   function projectCardHtml(p) {
     return `
-      <div class="js-project-card" data-id="${p.id}" style="position:relative;border:1px solid ${C.border};border-radius:14px;padding:16px 18px;background:${C.bgSurface3};transition:border-color .15s;display:flex;flex-direction:column;min-height:110px;">
+      <div class="js-project-card" data-id="${p.id}" style="position:relative;border:1px solid ${C.border};border-radius:${C.radiusCard};padding:16px 18px;background:${C.bgSurface3};transition:border-color .15s;display:flex;flex-direction:column;min-height:110px;">
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px;padding-right:44px;">
           <span style="font-size:14px;font-weight:600;color:${C.text};">${escapeHtml(p.name)}</span>
           ${p.tag ? `<span style="font-size:11px;padding:2px 8px;border-radius:10px;background:${C.bgHover};color:${C.textSoft};">${escapeHtml(p.tag)}</span>` : ''}
@@ -2948,7 +2953,7 @@
     if (kind === 'link') {
       const b = document.createElement('button');
       b.textContent = item.title || 'Öffnen';
-      b.style.cssText = `align-self:flex-start;padding:8px 14px;border:none;border-radius:10px;background:${C.accent};color:#fff;font-size:13px;cursor:pointer;font-family:${C.font};`;
+      b.style.cssText = `align-self:flex-start;padding:8px 14px;border:none;border-radius:10px;background:${C.accent};color:${C.accentText};font-size:13px;cursor:pointer;font-family:${C.font};`;
       b.addEventListener('click', () => { try { window.open(item.url, '_blank'); } catch (e) {} });
       host.appendChild(b);
       scrollThread();
