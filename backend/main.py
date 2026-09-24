@@ -645,6 +645,17 @@ def get_settings():
     return {"lm_studio_base_url": config.LM_STUDIO_BASE_URL, **config.get_simple_settings()}
 
 
+@app.get("/model/health")
+def model_health():
+    """Whether any chat model is actually reachable right now (LM Studio or
+    the configured DeepSeek fallback) — checked live, not just once at
+    startup, so the frontend can grey out the composer whenever LM Studio
+    gets stopped or the endpoint/API key is wrong, and re-enable it the
+    moment the user fixes it in Settings without needing a page reload."""
+    healthy, detail = llm_client.model_health()
+    return {"healthy": healthy, "detail": detail}
+
+
 @app.post("/settings")
 def update_settings(req: UpdateSettingsRequest):
     if req.lm_studio_base_url is not None and req.lm_studio_base_url.strip():

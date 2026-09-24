@@ -546,6 +546,11 @@
   let uiEl = null, sidebarEl = null, chatListEl = null, chatRootEl = null, threadEl = null;
   let composerTray = null, composerInput = null, sendBtn = null, speechBtn = null, noteBtn = null;
   let uploadBtn = null, settingsBtn = null, modelEl = null, modelBtnEl = null, modelMenuEl = null, fileInput = null;
+  // Ob gerade irgendein Chat-Modell erreichbar ist (LM Studio oder der
+  // DeepSeek-Fallback, siehe GET /model/health) — false graut den Composer
+  // aus, statt eine Nachricht ins Leere laufen zu lassen. Siehe
+  // refreshModelHealth()/setComposerHealthy() weiter unten.
+  let modelHealthy = true;
   // Slash-Befehle im Composer (wie bei Claude selbst): "/" am Anfang der
   // Eingabe öffnet eine Liste ausführbarer Befehle statt eine Chat-Nachricht
   // zu tippen.
@@ -1069,6 +1074,8 @@
     injectSkinCss();
     wireUi();
     setMode('chat');
+    refreshModelHealth();
+    setInterval(refreshModelHealth, 20000);
   }
 
   function injectSkinCss() {
@@ -1134,6 +1141,12 @@
       .js-sidebar button:focus-visible, .js-main button:focus-visible { outline:2px solid ${C.accent}; outline-offset:2px; }
       .js-editor:empty::before, .js-editor.is-empty::before { content:attr(data-placeholder); color:${C.textDim}; pointer-events:none; }
       .js-editor:focus::before { opacity:.7; }
+      /* Kein Modell/keine API erreichbar (siehe refreshModelHealth) - der
+         Composer wird ausgegraut statt eine Nachricht kommentarlos ins Leere
+         laufen zu lassen; Klick auf das Feld öffnet direkt die Einstellungen. */
+      .js-composer-disabled { filter:grayscale(.85); opacity:.6; }
+      .js-composer-disabled .js-editor { cursor:pointer; }
+      .js-composer-disabled .js-editor::before { color:${C.textSoft}; }
       .js-side-toggle svg, .js-side-toggle-float svg, .js-new svg, .js-projects svg, .js-upload svg, .js-note svg, .js-speech svg, .js-settings svg, .js-navrow svg { width:16px; height:16px; display:block; flex:0 0 auto; }
       .js-side-toggle:hover, .js-side-toggle-float:hover { background:${C.bgHover}; color:${C.text}; }
       .js-search-toggle svg, .js-projects-pin-add svg, .js-chats-sort svg, .js-projects-pin-hint svg { width:15px; height:15px; display:block; flex:0 0 auto; }
@@ -2194,6 +2207,9 @@
         updateSlashMenu();
       });
       composerInput.addEventListener('blur', () => setTimeout(closeSlashMenu, 150));
+      composerInput.addEventListener('click', (e) => {
+        if (!modelHealthy) { e.preventDefault(); openSettings(); }
+      });
     }
     updateSendSlot();
     if (speechBtn) speechBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); speechMode ? exitSpeech() : enterSpeech(); });
@@ -2264,6 +2280,7 @@
           if (lmUrlStatus) lmUrlStatus.textContent = 'Gespeichert';
           lastModelsList = null;
           fetch('/models').then((r) => r.json()).then((j) => { applyModelCaps(j); if (j.current) setModelLabel(j.current); }).catch(() => {});
+          refreshModelHealth();
         } catch (e) { if (lmUrlStatus) lmUrlStatus.textContent = 'Fehlgeschlagen'; }
         setTimeout(() => { if (lmUrlStatus) lmUrlStatus.textContent = ''; }, 2500);
       });
@@ -2286,6 +2303,7 @@
         try {
           await fetch('/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
           if (statusEl) statusEl.textContent = 'Gespeichert';
+          refreshModelHealth();
         } catch (e) { if (statusEl) statusEl.textContent = 'Fehlgeschlagen'; }
         setTimeout(() => { if (statusEl) statusEl.textContent = ''; }, 2500);
       });
@@ -2402,9 +2420,44 @@
     if (sendBtn) { sendBtn.disabled = v; sendBtn.style.opacity = v ? '0.5' : '1'; }
   }
 
+  // Composer ausgrauen, wenn kein Modell/keine API erreichbar ist, statt
+  // eine Nachricht kommentarlos ins Leere laufen zu lassen. Klick auf das
+  // ausgegraute Feld öffnet direkt die Einstellungen (dort trägt man die
+  // LM-Studio-URL bzw. einen Cloud-API-Key ein, um Jarvis wieder nutzbar
+  // zu machen — siehe openSettings()).
+  function setComposerHealthy(healthy, detail) {
+    modelHealthy = healthy;
+    if (composerTray) composerTray.classList.toggle('js-composer-disabled', !healthy);
+    if (composerInput) {
+      composerInput.contentEditable = healthy ? 'true' : 'false';
+      if (!healthy) {
+        composerInput.innerText = '';
+        composerInput.classList.add('is-empty');
+      }
+      composerInput.setAttribute(
+        'data-placeholder',
+        healthy ? 'Wie kann ich dir heute helfen?' : 'Kein Modell erreichbar — hier klicken, um es in den Einstellungen einzurichten'
+      );
+    }
+    if (sendBtn) sendBtn.disabled = !healthy || busy;
+    if (speechBtn) speechBtn.disabled = !healthy;
+    if (noteBtn) noteBtn.disabled = !healthy;
+    if (!healthy && detail) console.warn('[jarvis] Kein Modell erreichbar:', detail);
+  }
+
+  async function refreshModelHealth() {
+    try {
+      const r = await fetch('/model/health');
+      const j = await r.json();
+      setComposerHealthy(!!j.healthy, j.detail || '');
+    } catch (e) {
+      setComposerHealthy(false, 'Server nicht erreichbar.');
+    }
+  }
+
   async function sendMessage(text) {
     text = (text || '').trim();
-    if ((!text && !pendingImages.length) || busy) return;
+    if ((!text && !pendingImages.length) || busy || !modelHealthy) return;
     // Sofort abgreifen und leeren: ein Bild, das während dieses laufenden
     // Requests noch angehängt wird, gehört zum NÄCHSTEN Turn, nicht zu
     // diesem hier.
@@ -3482,6 +3535,7 @@
   function closeSettings() {
     if (uiEl) uiEl.classList.remove('js-settings-active');
     updateNavActive();
+    refreshModelHealth();
   }
 
   // ---------------------------------------------------------------- sprache
