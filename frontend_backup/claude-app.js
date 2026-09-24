@@ -1382,9 +1382,6 @@
     el.dataset.id = conv.id;
     if (conv.project_id) el.dataset.projectId = conv.project_id;
     if (conv.id === currentConversationId) el.classList.add('selected');
-    const ico = document.createElement('span');
-    ico.className = 'js-ico';
-    ico.innerHTML = ICONS.bullet;
     const txt = document.createElement('span');
     txt.className = 'js-txt';
     txt.textContent = conv.title || 'Neu';
@@ -1394,7 +1391,6 @@
     menuBtn.className = 'js-chatitem-menu-btn';
     menuBtn.title = 'Optionen';
     menuBtn.innerHTML = jsIcon('0xe062', 20);
-    el.appendChild(ico);
     el.appendChild(txt);
     el.appendChild(menuBtn);
     el.addEventListener('click', (e) => {
@@ -1478,9 +1474,6 @@
     el.className = 'js-chat-item';
     el.dataset.id = session.id;
     if (session.id === codeSessionId) el.classList.add('selected');
-    const ico = document.createElement('span');
-    ico.className = 'js-ico';
-    ico.innerHTML = ICONS.bullet;
     const txt = document.createElement('span');
     txt.className = 'js-txt';
     txt.textContent = session.title || 'Session';
@@ -1513,7 +1506,6 @@
         }
       } catch (err) { delBtn.disabled = false; }
     });
-    el.appendChild(ico);
     el.appendChild(txt);
     el.appendChild(renameBtn);
     el.appendChild(delBtn);
