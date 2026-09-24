@@ -1053,6 +1053,11 @@
     s.textContent = `
       body.js-app-active > :not(#jsApp):not(#jarvisOrb):not(#jarvisOrbHit):not(#jsSpeechTerm):not(#jsSpeechbar):not(#jsSpeechCaption):not(#jsSettingsSheet):not(#jsNewProjectSheet):not(#jsRenameChatSheet):not(#jsBtwWindow):not(#jsNotice):not(script):not(style) { display:none !important; }
       body.js-app-active { overflow:hidden; }
+      /* Sanftes Einblenden bei jedem Stream-Update (siehe setAssistantText)
+         statt abruptem Aufploppen des neuen Texts. */
+      .js-text-fade { animation: jsTextFadeIn .32s ease-out; }
+      @keyframes jsTextFadeIn { from { opacity: .35; } to { opacity: 1; } }
+      @media (prefers-reduced-motion: reduce) { .js-text-fade { animation: none; } }
       /* Echter claude.ai "Squish"-Press-Effekt (aus --cds-btn-spring extrahiert): schnelles
          Einschrumpfen beim Klicken, dann sanftes Zurueckfedern. NUR auf echten Action-Icon-
          Buttons (data-cds="Button" im Original: Suchen, Sortieren, Mehr-Optionen, Senden,
@@ -2700,7 +2705,12 @@
       if (spoken) {
         history.push({ role: 'user', content: outgoingText });
         history.push({ role: 'assistant', content: spoken });
-        if (history.length > 40) history = history.slice(-40);
+        // Fire-and-forget: komprimiert bis zum NÄCHSTEN Turn, statt den
+        // aktuellen auf den /summarize-Roundtrip warten zu lassen. Vorher
+        // wurde hier stumm auf die letzten 40 Einträge gekappt (history =
+        // history.slice(-40)) — keine Zusammenfassung, alles Ältere war
+        // einfach weg.
+        if (history.length > 40) compactHistory();
       }
       setBusy(false);
       resumeListening();
@@ -2714,7 +2724,9 @@
     if (fullText) {
       history.push({ role: 'user', content: outgoingText });
       history.push({ role: 'assistant', content: fullText });
-      if (history.length > 40) history = history.slice(-40);
+      // Siehe Kommentar oben bei turnAborted — fire-and-forget, wirkt ab
+      // dem nächsten Turn.
+      if (history.length > 40) compactHistory();
     }
     setBusy(false);
     // Ohne Sprachausgabe (Text-/Diktatmodus) sofort wieder zuhören; im
@@ -2735,6 +2747,48 @@
     if (text || pendingImages.length) sendMessage(text);
   }
 
+  // Fasst ältere Nachrichten über das Backend zusammen (POST /summarize,
+  // schon lange vorhanden, aber von dieser UI bisher nie aufgerufen — der
+  // Verlauf wurde bei Erreichen des Limits nur stumm auf die letzten 40
+  // Einträge gekappt, ohne jede Zusammenfassung). KEEP_VERBATIM Einträge
+  // bleiben unangetastet am Ende stehen, alles Ältere wird zu einer
+  // System-Nachricht verdichtet. Gibt die Zusammenfassung zurück (oder ''
+  // bei Fehlschlag/zu wenig Verlauf), damit Aufrufer (z.B. der /compact-
+  // Befehl) dem Nutzer sichtbar Bescheid geben können.
+  const COMPACT_KEEP_VERBATIM = 6; // letzte 3 Turns bleiben wörtlich erhalten
+  async function compactHistory() {
+    if (history.length <= COMPACT_KEEP_VERBATIM) return '';
+    const stale = history.slice(0, history.length - COMPACT_KEEP_VERBATIM);
+    const rest = history.slice(stale.length);
+    let summary = '';
+    try {
+      const r = await fetch('/summarize', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ history: stale }),
+      });
+      if (r.ok) summary = ((await r.json()).summary || '').trim();
+    } catch (e) {}
+    history = summary
+      ? [{ role: 'system', content: `Zusammenfassung des bisherigen Gesprächs: ${summary}` }, ...rest]
+      : rest;  // Zusammenfassen fehlgeschlagen — lieber die alten Turns verlieren als den Chat daran blockieren
+    return summary;
+  }
+
+  // /compact — manuell ausgelöst, mit sichtbarer Rückmeldung im Chat statt
+  // des stillen Auto-Kappens oben.
+  async function runCompactCommand() {
+    if (history.length <= COMPACT_KEEP_VERBATIM) {
+      showNotice('Noch nicht genug Verlauf zum Komprimieren.');
+      return;
+    }
+    showNotice('Komprimiere Verlauf…');
+    const before = history.length;
+    const summary = await compactHistory();
+    showNotice(summary
+      ? `Verlauf komprimiert: ${before} → ${history.length} Einträge.`
+      : 'Komprimieren fehlgeschlagen — Verlauf unverändert (kein Modell erreichbar?).');
+  }
+
   // ------------------------------------------------------- Slash-Befehle
   // Liste der verfügbaren "/"-Befehle. Auswahl aus dem Menü (Klick, Enter
   // oder Tab) trägt den Befehl nur ins Composer-Feld ein — ausgeführt wird
@@ -2743,6 +2797,7 @@
   // kann, was gleich passiert, bevor es losgeht.
   const SLASH_COMMANDS = [
     { cmd: 'neu', label: 'Neue Unterhaltung', desc: 'Startet einen frischen Chat', run: () => startNewConversation() },
+    { cmd: 'compact', label: 'Verlauf komprimieren', desc: 'Fasst ältere Nachrichten zusammen, um Kontext freizugeben', run: () => runCompactCommand() },
     { cmd: 'projekte', label: 'Projekte', desc: 'Projektübersicht öffnen', run: () => openProjectsView() },
     { cmd: 'code', label: 'Code', desc: 'In den Code-Tab wechseln', run: () => setMode('code') },
     { cmd: 'sprachmodus', label: 'Sprachmodus', desc: 'Mit Jarvis sprechen', run: () => { if (!speechMode) enterSpeech(); } },
@@ -3095,6 +3150,16 @@
   function setAssistantText(el, text) {
     el.dataset.raw = text;
     el.innerHTML = renderMarkdown(text);
+    // Sanftes Einblenden statt abruptem Aufploppen bei jedem Stream-Update
+    // (partial/sentence-Events kommen alle paar hundert Millisekunden, jedes
+    // ersetzt bisher einfach kommentarlos das ganze innerHTML). Klasse erst
+    // entfernen und einen Reflow erzwingen, sonst spielt eine CSS-Animation
+    // beim erneuten Hinzufügen derselben Klasse nicht noch einmal ab — bei
+    // schnell aufeinanderfolgenden Updates ergibt das einen fließenden
+    // Überblend-Effekt statt einzelner Ruckler.
+    el.classList.remove('js-text-fade');
+    void el.offsetWidth;
+    el.classList.add('js-text-fade');
   }
 
   function openPanelSocket() {
