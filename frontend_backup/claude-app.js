@@ -2739,26 +2739,6 @@
     if (text || pendingImages.length) sendMessage(text);
   }
 
-  // Kurzlebiger Hinweis-Toast oben mittig — fehlte in dieser (älteren)
-  // Datei bisher komplett (existiert nur in claude-app.js, für die dortige
-  // "Modell zu groß"-Warnung); /compact braucht ihn für seine Rückmeldung.
-  let noticeEl = null;
-  let noticeTimer = null;
-  function showNotice(text) {
-    if (!noticeEl) {
-      noticeEl = document.createElement('div');
-      noticeEl.id = 'jsNotice';
-      noticeEl.setAttribute('role', 'alert');
-      noticeEl.title = 'Klicken zum Schließen';
-      noticeEl.addEventListener('click', () => { noticeEl.style.display = 'none'; });
-      document.body.appendChild(noticeEl);
-    }
-    noticeEl.style.cssText = `position:fixed;top:16px;left:50%;transform:translateX(-50%);z-index:10000;max-width:min(520px,calc(100vw - 32px));padding:12px 14px;border:1px solid ${C.border};border-left:3px solid #e5534b;border-radius:10px;background:${C.bgSurface3};color:${C.text};font-size:13.5px;line-height:1.45;box-shadow:0 6px 24px rgba(0,0,0,.25);cursor:pointer;display:block;`;
-    noticeEl.textContent = text;
-    clearTimeout(noticeTimer);
-    noticeTimer = setTimeout(() => { if (noticeEl) noticeEl.style.display = 'none'; }, 12000);
-  }
-
   // Fasst ältere Nachrichten über das Backend zusammen (POST /summarize,
   // schon lange vorhanden, aber von dieser UI bisher nie aufgerufen — der
   // Verlauf wurde bei Erreichen des Limits nur stumm auf die letzten 40
@@ -3387,10 +3367,149 @@
   // llm_client.list_model_capabilities) — modelCapsMap merkt sich das pro
   // Modell-Id, currentModelSupportsVision spiegelt das gerade aktive.
   let modelCapsMap = {};
+  let modelFitMap = {};
   let currentModelSupportsVision = false;
+  let startupFitWarningShown = false;
   function applyModelCaps(j) {
     modelCapsMap = j.model_caps || {};
+    modelFitMap = j.model_fit || {};
     currentModelSupportsVision = (j.current_caps || []).includes('vision');
+    if (!startupFitWarningShown && j.current_fit && j.current_fit.fits === false && j.current_fit.message) {
+      startupFitWarningShown = true;
+      showNotice(j.current_fit.message);
+    }
+  }
+  function modelTooLarge(id) {
+    const f = modelFitMap[id];
+    return f && f.fits === false ? (f.message || 'Dieses Modell ist zu groß für deinen PC.') : '';
+  }
+  async function requestModelSwitch(id, force) {
+    setModelLabel(id);
+    selectModelCaps(id);
+    try {
+      const r = await fetch('/models/select', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: id, force: !!force }) });
+      const j = await r.json();
+      if (j && j.ok === false) {
+        showModelFitBlockedNotice(j.model || id, j.error || 'Das Modell konnte nicht geladen werden.');
+        if (j.current) { setModelLabel(j.current); selectModelCaps(j.current); }
+      }
+    } catch (e) {}
+  }
+
+  // Wie renderHardwareBlockActions (siehe sendMessage) für den Fall, dass die
+  // Blockade nicht mitten im Chat, sondern beim Umschalten im Modell-Menü
+  // auftritt — showNotice() allein war nur ein nach 12s verschwindender
+  // Hinweistext ohne jede Handlungsmöglichkeit. Bleibt stehen, bis der
+  // Nutzer sie schließt oder eine der Aktionen erfolgreich war.
+  let modelFitNoticeEl = null;
+  async function showModelFitBlockedNotice(modelId, message) {
+    if (modelFitNoticeEl) modelFitNoticeEl.remove();
+    const box = document.createElement('div');
+    modelFitNoticeEl = box;
+    box.id = 'jsModelFitNotice';
+    box.style.cssText = `position:fixed;top:16px;left:50%;transform:translateX(-50%);z-index:10000;max-width:min(520px,calc(100vw - 32px));padding:12px 14px;border:1px solid ${C.border};border-left:3px solid #e5534b;border-radius:10px;background:${C.bgSurface3};color:${C.text};font-size:13.5px;line-height:1.45;box-shadow:0 6px 24px rgba(0,0,0,.25);display:flex;flex-direction:column;gap:8px;`;
+
+    const msgRow = document.createElement('div');
+    msgRow.style.cssText = 'display:flex;gap:10px;align-items:flex-start;';
+    const msgText = document.createElement('div');
+    msgText.style.cssText = 'flex:1;';
+    msgText.textContent = message;
+    const closeBtn = document.createElement('button');
+    closeBtn.type = 'button';
+    closeBtn.textContent = '×';
+    closeBtn.title = 'Schließen';
+    closeBtn.style.cssText = `flex:0 0 auto;background:none;border:none;color:${C.textSoft};font-size:16px;line-height:1;cursor:pointer;padding:0;`;
+    closeBtn.addEventListener('click', () => box.remove());
+    msgRow.appendChild(msgText);
+    msgRow.appendChild(closeBtn);
+    box.appendChild(msgRow);
+
+    const remove = () => { if (modelFitNoticeEl === box) modelFitNoticeEl = null; box.remove(); };
+
+    const topRow = document.createElement('div');
+    topRow.style.cssText = 'display:flex;gap:8px;flex-wrap:wrap;';
+    const forceBtn = document.createElement('button');
+    forceBtn.type = 'button';
+    forceBtn.textContent = 'Trotzdem laden';
+    forceBtn.style.cssText = `padding:7px 12px;border:none;border-radius:8px;background:${C.accent};color:#fff;font-size:12px;font-weight:600;cursor:pointer;font-family:${C.font};`;
+    forceBtn.addEventListener('click', async () => {
+      forceBtn.disabled = true;
+      forceBtn.textContent = 'Lade…';
+      remove();
+      await requestModelSwitch(modelId, true);
+    });
+    topRow.appendChild(forceBtn);
+    box.appendChild(topRow);
+
+    const listEl = document.createElement('div');
+    listEl.style.cssText = 'display:flex;flex-direction:column;gap:6px;';
+    box.appendChild(listEl);
+    document.body.appendChild(box);
+
+    try {
+      const r = await fetch('/model/loaded');
+      const j = await r.json();
+      const others = (j.models || []).filter((m) => !m.is_current);
+      if (others.length) {
+        const label = document.createElement('div');
+        label.style.cssText = `font-size:12px;color:${C.textSoft};`;
+        label.textContent = 'Oder ein anderes geladenes Modell entladen, um Platz zu schaffen:';
+        listEl.appendChild(label);
+        others.forEach((m) => {
+          const modelRow = document.createElement('div');
+          modelRow.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:8px;';
+          const sizeGb = m.size_bytes ? (m.size_bytes / (1024 ** 3)).toFixed(1).replace('.', ',') + ' GB' : '';
+          const lbl = document.createElement('span');
+          lbl.style.cssText = `font-size:12px;color:${C.text};`;
+          lbl.textContent = m.id + (sizeGb ? ` (${sizeGb})` : '');
+          const unloadBtn = document.createElement('button');
+          unloadBtn.type = 'button';
+          unloadBtn.textContent = 'Entladen';
+          unloadBtn.style.cssText = `padding:5px 10px;border:1px solid ${C.border};border-radius:7px;background:none;color:${C.textSoft};font-size:11px;cursor:pointer;font-family:${C.font};`;
+          unloadBtn.addEventListener('click', async () => {
+            unloadBtn.disabled = true;
+            unloadBtn.textContent = 'Entlade…';
+            try {
+              await fetch('/model/unload', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ model: m.id }),
+              });
+              remove();
+              await requestModelSwitch(modelId, false);
+            } catch (e) {
+              unloadBtn.disabled = false;
+              unloadBtn.textContent = 'Entladen';
+            }
+          });
+          modelRow.appendChild(lbl);
+          modelRow.appendChild(unloadBtn);
+          listEl.appendChild(modelRow);
+        });
+      }
+    } catch (e) {}
+  }
+  let noticeEl = null;
+  let noticeTimer = null;
+  function showNotice(text) {
+    if (!noticeEl) {
+      noticeEl = document.createElement('div');
+      noticeEl.id = 'jsNotice';
+      noticeEl.setAttribute('role', 'alert');
+      noticeEl.title = 'Klicken zum Schließen';
+      noticeEl.addEventListener('click', () => { noticeEl.style.display = 'none'; });
+      document.body.appendChild(noticeEl);
+    }
+    noticeEl.style.cssText = `position:fixed;top:16px;left:50%;transform:translateX(-50%);z-index:10000;max-width:min(520px,calc(100vw - 32px));padding:12px 14px;border:1px solid ${C.border};border-left:3px solid #e5534b;border-radius:10px;background:${C.bgSurface3};color:${C.text};font-size:13.5px;line-height:1.45;box-shadow:0 6px 24px rgba(0,0,0,.25);cursor:pointer;`;
+    noticeEl.textContent = text;
+    clearTimeout(noticeTimer);
+    noticeTimer = setTimeout(() => { if (noticeEl) noticeEl.style.display = 'none'; }, 12000);
+  }
+  function markTooLarge(btn, subText) {
+    btn.style.opacity = '0.5';
+    const warnEl = document.createElement('span');
+    warnEl.textContent = subText;
+    warnEl.style.cssText = `font-size:11.5px;font-weight:400;color:#e5534b;`;
+    btn.appendChild(warnEl);
   }
   function selectModelCaps(id) {
     currentModelSupportsVision = (modelCapsMap[id] || []).includes('vision');
@@ -3440,14 +3559,15 @@
         subEl.style.cssText = `font-size:11.5px;font-weight:400;color:${C.textDim};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;`;
         b.appendChild(subEl);
       }
+      const tooLarge = modelTooLarge(m.id);
+      if (tooLarge) markTooLarge(b, 'Zu groß für diesen PC');
       row.onmouseenter = () => { row.style.background = C.bgHover; };
       row.onmouseleave = () => { row.style.background = 'none'; };
       b.addEventListener('click', async (e) => {
         e.stopPropagation();
         modelMenuEl.style.display = 'none';
-        setModelLabel(m.id);
-        selectModelCaps(m.id);
-        try { await fetch('/models/select', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: m.id }) }); } catch (e2) {}
+        if (tooLarge) { showNotice(tooLarge); return; }
+        await requestModelSwitch(m.id);
       });
       row.appendChild(b);
       // Entladen-Button: nur für Modelle, die LM Studio gerade wirklich im
@@ -3781,12 +3901,13 @@
             subEl.style.cssText = `font-size:11.5px;font-weight:400;color:${C.textDim};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;`;
             b.appendChild(subEl);
           }
+          const tooLarge = modelTooLarge(m);
+          if (tooLarge) markTooLarge(b, 'Zu groß für diesen PC');
           b.onmouseenter = () => { b.style.background = C.bgHover; };
           b.onmouseleave = () => { b.style.background = 'none'; };
           b.addEventListener('click', () => {
-            setModelLabel(m);
-            selectModelCaps(m);
-            try { fetch('/models/select', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: m }) }); } catch (e2) {}
+            if (tooLarge) { showNotice(tooLarge); return; }
+            requestModelSwitch(m);
           });
           settingsModelsEl.appendChild(b);
         }
