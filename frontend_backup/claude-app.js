@@ -495,10 +495,13 @@
   let composerTray = null, composerInput = null, sendBtn = null, speechBtn = null, noteBtn = null;
   let uploadBtn = null, settingsBtn = null, modelEl = null, modelBtnEl = null, modelMenuEl = null, fileInput = null;
   // Ob gerade irgendein Chat-Modell erreichbar ist (LM Studio oder der
-  // DeepSeek-Fallback, siehe GET /model/health) — false graut den Composer
-  // aus, statt eine Nachricht ins Leere laufen zu lassen. Siehe
-  // refreshModelHealth()/setComposerHealthy() weiter unten.
+  // DeepSeek-Fallback, siehe GET /model/health) — false blendet den
+  // normalen Composer-Inhalt komplett aus und zeigt stattdessen nur das
+  // Einrichtungsmenü (js-composer-setup). Siehe refreshModelHealth()/
+  // setComposerHealthy() weiter unten.
   let modelHealthy = true;
+  let composerContentEl = null, composerSetupEl = null;
+  let setupLmUrlInput = null, setupApiKeyInput = null;
   // Slash-Befehle im Composer (wie bei Claude selbst): "/" am Anfang der
   // Eingabe öffnet eine Liste ausführbarer Befehle statt eine Chat-Nachricht
   // zu tippen.
@@ -841,7 +844,7 @@
         <div style="max-width:672px;margin:0 auto;position:relative;">
           <div style="background:${C.bgSurface3};border-radius:20px;box-shadow:0 4px 20px rgba(0,0,0,.18),0 0 0 1px ${C.borderStrong};">
             <div class="js-attach-preview" style="display:none;gap:8px;padding:14px 14px 0;flex-wrap:wrap;"></div>
-            <div style="padding:14px;display:flex;flex-direction:column;gap:12px;">
+            <div class="js-composer-content" style="padding:14px;display:flex;flex-direction:column;gap:12px;">
               <div class="js-editor" contenteditable="true" data-placeholder="Wie kann ich dir heute helfen?" style="min-height:48px;max-height:200px;overflow-y:auto;padding:6px 6px 0;color:${C.text};font-size:15px;line-height:1.5;outline:none;white-space:pre-wrap;word-break:break-word;"></div>
               <div style="display:flex;align-items:center;gap:8px;">
                 <button class="js-upload" title="Dateien anhängen" style="width:32px;height:32px;margin-left:2px;border-radius:8px;background:none;border:none;color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;transition:background .15s;flex:0 0 auto;">${ICONS.plus}</button>
@@ -854,6 +857,22 @@
                 <button class="js-speech" title="Sprachmodus" style="width:32px;height:32px;border-radius:8px;background:none;border:none;color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;transition:background .15s;flex:0 0 auto;">${ICONS.audio}</button>
                 <button class="js-send" title="Senden" style="width:32px;height:32px;border-radius:8px;background:${C.accent};border:none;color:#fff;cursor:pointer;display:none;align-items:center;justify-content:center;flex:0 0 auto;">${jsIcon('0xe013', 24)}</button>
               </div>
+            </div>
+            <div class="js-composer-setup" style="display:none;padding:16px;flex-direction:column;gap:10px;">
+              <div style="font-size:13px;color:${C.textSoft};">Kein Modell erreichbar — LM Studio-Endpoint oder Cloud-API-Key eintragen, testen und freischalten:</div>
+              <div style="display:flex;gap:8px;">
+                <input class="js-setup-lmurl" type="text" placeholder="http://127.0.0.1:1234/v1" spellcheck="false" style="flex:1;min-width:0;padding:8px 10px;background:${C.bg};border:1px solid ${C.border};border-radius:8px;color:${C.text};font-size:13px;outline:none;font-family:${C.font};" />
+                <button class="js-setup-test-lm" style="padding:8px 12px;border:1px solid ${C.border};border-radius:8px;background:none;color:${C.textSoft};font-size:12px;cursor:pointer;white-space:nowrap;font-family:${C.font};">Testen</button>
+                <button class="js-setup-activate-lm" disabled style="padding:8px 12px;border:none;border-radius:8px;background:${C.accent};color:#fff;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap;font-family:${C.font};opacity:.4;">Freischalten</button>
+              </div>
+              <div class="js-setup-lm-status" style="font-size:12px;color:${C.textDim};min-height:14px;"></div>
+              <div style="height:1px;background:${C.border};margin:2px 0;"></div>
+              <div style="display:flex;gap:8px;">
+                <input class="js-setup-apikey" type="password" placeholder="Oder: Cloud-API-Key (z.B. DeepSeek, sk-…)" spellcheck="false" style="flex:1;min-width:0;padding:8px 10px;background:${C.bg};border:1px solid ${C.border};border-radius:8px;color:${C.text};font-size:13px;outline:none;font-family:${C.font};" />
+                <button class="js-setup-test-api" style="padding:8px 12px;border:1px solid ${C.border};border-radius:8px;background:none;color:${C.textSoft};font-size:12px;cursor:pointer;white-space:nowrap;font-family:${C.font};">Testen</button>
+                <button class="js-setup-activate-api" disabled style="padding:8px 12px;border:none;border-radius:8px;background:${C.accent};color:#fff;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap;font-family:${C.font};opacity:.4;">Freischalten</button>
+              </div>
+              <div class="js-setup-api-status" style="font-size:12px;color:${C.textDim};min-height:14px;"></div>
             </div>
           </div>
           <div class="js-modelmenu" style="display:none;position:absolute;width:220px;max-height:280px;overflow-y:auto;background:${C.bgSurface3};border:1px solid ${C.border};border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.4);z-index:10;"></div>
@@ -966,6 +985,10 @@
     threadEl = $('.js-thread', uiEl);
     composerTray = $('.js-composer', uiEl);
     composerInput = $('.js-editor', uiEl);
+    composerContentEl = $('.js-composer-content', uiEl);
+    composerSetupEl = $('.js-composer-setup', uiEl);
+    setupLmUrlInput = $('.js-setup-lmurl', uiEl);
+    setupApiKeyInput = $('.js-setup-apikey', uiEl);
     sendBtn = $('.js-send', uiEl);
     speechBtn = $('.js-speech', uiEl);
     noteBtn = $('.js-note', uiEl);
@@ -1039,12 +1062,8 @@
       .js-sidebar button:focus-visible, .js-main button:focus-visible { outline:2px solid ${C.accent}; outline-offset:2px; }
       .js-editor:empty::before, .js-editor.is-empty::before { content:attr(data-placeholder); color:${C.textDim}; pointer-events:none; }
       .js-editor:focus::before { opacity:.7; }
-      /* Kein Modell/keine API erreichbar (siehe refreshModelHealth) - der
-         Composer wird ausgegraut statt eine Nachricht kommentarlos ins Leere
-         laufen zu lassen; Klick auf das Feld öffnet direkt die Einstellungen. */
-      .js-composer-disabled { filter:grayscale(.85); opacity:.6; }
-      .js-composer-disabled .js-editor { cursor:pointer; }
-      .js-composer-disabled .js-editor::before { color:${C.textSoft}; }
+      .js-setup-test-lm:hover, .js-setup-test-api:hover { border-color:${C.borderStrong}; color:${C.text}; }
+      .js-setup-activate-lm:disabled, .js-setup-activate-api:disabled { cursor:default; }
       .js-side-toggle svg, .js-side-toggle-float svg, .js-new svg, .js-projects svg, .js-upload svg, .js-note svg, .js-speech svg, .js-settings svg, .js-navrow svg { width:16px; height:16px; display:block; flex:0 0 auto; }
       .js-side-toggle:hover, .js-side-toggle-float:hover { background:${C.bgHover}; color:${C.text}; }
       .js-search-toggle svg, .js-projects-pin-add svg, .js-chats-sort svg, .js-projects-pin-hint svg { width:15px; height:15px; display:block; flex:0 0 auto; }
@@ -2105,10 +2124,9 @@
         updateSlashMenu();
       });
       composerInput.addEventListener('blur', () => setTimeout(closeSlashMenu, 150));
-      composerInput.addEventListener('click', (e) => {
-        if (!modelHealthy) { e.preventDefault(); openSettings(); }
-      });
     }
+    wireSetupField($('.js-setup-lmurl', uiEl), $('.js-setup-test-lm', uiEl), $('.js-setup-activate-lm', uiEl), $('.js-setup-lm-status', uiEl), 'lm_studio_base_url');
+    wireSetupField($('.js-setup-apikey', uiEl), $('.js-setup-test-api', uiEl), $('.js-setup-activate-api', uiEl), $('.js-setup-api-status', uiEl), 'deepseek_api_key');
     updateSendSlot();
     if (speechBtn) speechBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); speechMode ? exitSpeech() : enterSpeech(); });
     if (noteBtn) noteBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); setDictating(!dictating); });
@@ -2318,25 +2336,27 @@
     if (sendBtn) { sendBtn.disabled = v; sendBtn.style.opacity = v ? '0.5' : '1'; }
   }
 
-  // Composer ausgrauen, wenn kein Modell/keine API erreichbar ist, statt
-  // eine Nachricht kommentarlos ins Leere laufen zu lassen. Klick auf das
-  // ausgegraute Feld öffnet direkt die Einstellungen (dort trägt man die
-  // LM-Studio-URL bzw. einen Cloud-API-Key ein, um Jarvis wieder nutzbar
-  // zu machen — siehe openSettings()).
+  // Ist kein Modell/keine API erreichbar, wird im Composer NICHTS vom
+  // normalen Eingabefeld/Sprachmodus/etc. gezeigt (nicht nur ausgegraut) -
+  // stattdessen ausschließlich das kleine Einrichtungsmenü (js-composer-setup,
+  // siehe buildUi): Endpoint/API-Key eintragen, testen, freischalten. Kein
+  // Umweg über die Einstellungsseite.
+  let setupPrefilled = false;
   function setComposerHealthy(healthy, detail) {
     modelHealthy = healthy;
-    if (composerTray) composerTray.classList.toggle('js-composer-disabled', !healthy);
-    if (composerInput) {
-      composerInput.contentEditable = healthy ? 'true' : 'false';
-      if (!healthy) {
-        composerInput.innerText = '';
-        composerInput.classList.add('is-empty');
-      }
-      composerInput.setAttribute(
-        'data-placeholder',
-        healthy ? 'Wie kann ich dir heute helfen?' : 'Kein Modell erreichbar — hier klicken, um es in den Einstellungen einzurichten'
-      );
+    // 'flex' statt '' beim Wiederanzeigen: die ursprüngliche
+    // display:flex-Deklaration aus dem style-Attribut ist weg, sobald sie
+    // einmal per JS auf 'none' überschrieben wurde - '' würde auf den
+    // Block-Default zurückfallen, nicht das Flex-Layout wiederherstellen.
+    if (composerContentEl) composerContentEl.style.display = healthy ? 'flex' : 'none';
+    if (composerSetupEl) composerSetupEl.style.display = healthy ? 'none' : 'flex';
+    if (!healthy && !setupPrefilled) {
+      setupPrefilled = true;
+      fetch('/settings').then((r) => r.json()).then((j) => {
+        if (setupLmUrlInput && j.lm_studio_base_url) setupLmUrlInput.value = j.lm_studio_base_url;
+      }).catch(() => {});
     }
+    if (healthy) setupPrefilled = false;
     if (sendBtn) sendBtn.disabled = !healthy || busy;
     if (speechBtn) speechBtn.disabled = !healthy;
     if (noteBtn) noteBtn.disabled = !healthy;
@@ -2351,6 +2371,50 @@
     } catch (e) {
       setComposerHealthy(false, 'Server nicht erreichbar.');
     }
+  }
+
+  // Testen (ohne zu speichern) / Freischalten (speichert + prüft neu) für
+  // das Einrichtungsmenü — ein gemeinsamer Ablauf für den LM-Studio- und den
+  // API-Key-Zweig, nur mit anderem Request-Body.
+  function wireSetupField(input, testBtn, activateBtn, statusEl, bodyKey) {
+    if (!input || !testBtn || !activateBtn) return;
+    const setActivatable = (ok) => {
+      activateBtn.disabled = !ok;
+      activateBtn.style.opacity = ok ? '1' : '.4';
+    };
+    input.addEventListener('input', () => setActivatable(false));
+    testBtn.addEventListener('click', async () => {
+      const v = input.value.trim();
+      if (!v) { if (statusEl) statusEl.textContent = 'Bitte einen Wert eintragen.'; return; }
+      if (statusEl) statusEl.textContent = 'Teste…';
+      setActivatable(false);
+      try {
+        const r = await fetch('/model/test', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ [bodyKey]: v }),
+        });
+        const j = await r.json();
+        if (statusEl) statusEl.textContent = j.detail || (j.healthy ? 'Erreichbar.' : 'Nicht erreichbar.');
+        setActivatable(!!j.healthy);
+      } catch (e) {
+        if (statusEl) statusEl.textContent = 'Server nicht erreichbar.';
+      }
+    });
+    activateBtn.addEventListener('click', async () => {
+      const v = input.value.trim();
+      if (!v) return;
+      if (statusEl) statusEl.textContent = 'Schalte frei…';
+      try {
+        await fetch('/settings', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ [bodyKey]: v }),
+        });
+        await refreshModelHealth();
+        if (modelHealthy && statusEl) statusEl.textContent = 'Freigeschaltet.';
+      } catch (e) {
+        if (statusEl) statusEl.textContent = 'Fehlgeschlagen.';
+      }
+    });
   }
 
   async function sendMessage(text) {

@@ -656,6 +656,44 @@ def model_health():
     return {"healthy": healthy, "detail": detail}
 
 
+@app.post("/model/test")
+def model_test(req: UpdateSettingsRequest):
+    """Test-drives a CANDIDATE LM Studio endpoint or DeepSeek API key without
+    persisting it — backs the inline setup panel the composer shows when no
+    model is reachable ("Testen" button): the user can try a value before
+    committing to it via POST /settings ("Freischalten" in the frontend)."""
+    if req.deepseek_api_key and req.deepseek_api_key.strip():
+        base = (req.deepseek_base_url or config.DEEPSEEK_BASE_URL).rstrip("/")
+        try:
+            resp = requests.get(
+                f"{base}/models",
+                headers={"Authorization": f"Bearer {req.deepseek_api_key.strip()}"},
+                timeout=6,
+            )
+            resp.raise_for_status()
+            return {"healthy": True, "detail": "DeepSeek erreichbar."}
+        except requests.RequestException as exc:
+            return {"healthy": False, "detail": f"DeepSeek nicht erreichbar: {exc}"}
+
+    base = (req.lm_studio_base_url or config.LM_STUDIO_BASE_URL or "").strip().rstrip("/")
+    if not base:
+        return {"healthy": False, "detail": "Bitte einen Endpoint oder API-Key eintragen."}
+    try:
+        resp = requests.get(f"{base}/models", timeout=6)
+        resp.raise_for_status()
+        models = [entry.get("id") for entry in resp.json().get("data", []) if entry.get("id")]
+    except requests.RequestException as exc:
+        return {"healthy": False, "detail": f"Nicht erreichbar: {exc}"}
+    if not models:
+        return {"healthy": False, "detail": "Erreichbar, aber es ist kein Modell geladen."}
+    if config.LM_STUDIO_MODEL and config.LM_STUDIO_MODEL not in models:
+        return {
+            "healthy": True,
+            "detail": f"Erreichbar — {config.LM_STUDIO_MODEL} ist dort aber nicht geladen. Geladen: {', '.join(models[:5])}",
+        }
+    return {"healthy": True, "detail": f"Erreichbar ({len(models)} Modell(e) geladen)."}
+
+
 @app.post("/settings")
 def update_settings(req: UpdateSettingsRequest):
     if req.lm_studio_base_url is not None and req.lm_studio_base_url.strip():
