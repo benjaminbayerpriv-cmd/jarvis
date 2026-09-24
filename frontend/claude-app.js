@@ -24,7 +24,12 @@
     for (let i = 0; i < img.data.length; i += 4) {
       const v = Math.random() * 255;
       img.data[i] = v; img.data[i + 1] = v; img.data[i + 2] = v;
-      img.data[i + 3] = Math.random() * 60;
+      // Voll deckende Pixel, statt über den Alpha-Kanal halbtransparent zu
+      // sein: die Sichtbarkeit steuert allein die CSS-opacity der Ebene
+      // (siehe .js-grain-overlay). Mit Alpha PLUS mix-blend-mode:overlay
+      // verschwand das Korn über schwarzen/dunklen Flächen fast komplett -
+      // overlay hellt Schatten kaum auf, egal wie deckend die Quelle ist.
+      img.data[i + 3] = 255;
     }
     ctx.putImageData(img, 0, 0);
     return cnv.toDataURL();
@@ -54,11 +59,28 @@
     accentText: '#0a0a0a',             // Text/Icon-Farbe auf accent-Hintergrund
     accentSoft: 'rgba(255,255,255,.09)',
     // Liquid-Glass für Sidebar + Composer (siehe buildUi): wenig Tönung
-    // (niedrige Deckkraft), die eigentliche "Glas"-Wirkung kommt vom
-    // backdrop-filter blur+saturate darunter, nicht von der Füllfarbe.
-    glassBg: 'rgba(255,255,255,.05)',
-    glassBorder: 'rgba(255,255,255,.14)',
-    glassBlur: 'blur(28px) saturate(180%)',
+    // (niedrige Deckkraft) — die Aurora-Farben sollen DURCHSCHEINEN, nicht
+    // von der Füllfarbe kommen. url(#jsGlassDistort) referenziert den
+    // feTurbulence+feDisplacementMap-SVG-Filter (in buildUi definiert), der
+    // den Hintergrund an den Rändern leicht verzerrt — der "echte" Apple-
+    // Liquid-Glass-Lichtbrechungseffekt, nicht nur Weichzeichnen. saturate
+    // bewusst nur noch ein Hauch (die Aurora selbst ist jetzt kräftig genug;
+    // ein starker saturate-Boost machte das Glas sonst bunter/heller als der
+    // eigentliche Hintergrund, den es doch nur zeigen soll).
+    glassBlur: 'url(#jsGlassDistort) blur(24px) saturate(115%)',
+    // Rein weißes glassBg bei .05 Deckkraft dimmt die durchscheinende Aurora
+    // kaum - Blur verwischt Farbe, macht sie aber nicht dunkler. Text/Icons
+    // auf dem Composer wurden dadurch live unlesbar (helles Pink direkt
+    // hinter dem Editor). Ein neutraler, mäßig deckender Dunkel-Anteil
+    // dimmt genug für Kontrast, bleibt aber "Glas" (Farbe/Bewegung bleiben
+    // sichtbar) statt blickdicht zu werden - das ist weiterhin "wenig
+    // Tönung" im Sinne von "keine eigene Farbe", nicht "keine Dimmung".
+    glassBg: 'rgba(8,8,14,.46)',
+    glassBorder: 'rgba(255,255,255,.16)',
+    // Specular-Highlight-Kante oben/links, wie Licht, das am Rand einer
+    // echten Glasscheibe bricht — zusammen mit glassBorder das, was aus
+    // "durchsichtig mit Blur" ein "Glas" macht statt eine trübe Milchscheibe.
+    glassShadow: 'inset 0 1px 0 rgba(255,255,255,.5), inset 1px 0 0 rgba(255,255,255,.18), inset 0 0 40px rgba(255,255,255,.05), 0 8px 32px rgba(0,0,0,.35)',
     radiusCard: '20px',
     radiusControl: '12px',
     font: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif",
@@ -699,14 +721,22 @@
     uiEl.style.cssText = `position:fixed;inset:0;z-index:30;display:flex;background:${C.bg};color:${C.text};font-family:${C.font};`;
     uiEl.innerHTML = `
       <div class="js-aurora-bg" style="position:absolute;inset:0;z-index:0;overflow:hidden;pointer-events:none;background:#000;">
+        <svg width="0" height="0" style="position:absolute;">
+          <filter id="jsGlassDistort" x="-20%" y="-20%" width="140%" height="140%">
+            <feTurbulence type="fractalNoise" baseFrequency="0.009 0.013" numOctaves="2" seed="7" result="jsNoise" />
+            <feGaussianBlur in="jsNoise" stdDeviation="2" result="jsNoiseBlur" />
+            <feDisplacementMap in="SourceGraphic" in2="jsNoiseBlur" scale="22" xChannelSelector="R" yChannelSelector="G" />
+          </filter>
+        </svg>
         <div class="js-aurora-blob js-aurora-blob-1"></div>
         <div class="js-aurora-blob js-aurora-blob-2"></div>
         <div class="js-aurora-blob js-aurora-blob-3"></div>
         <div class="js-aurora-blob js-aurora-blob-4"></div>
+        <div class="js-aurora-blob js-aurora-blob-5"></div>
         <div class="js-grain-overlay" style="background-image:url(${GRAIN_URL});"></div>
       </div>
       <button class="js-side-toggle-float" title="Sidebar einblenden" style="display:none;position:absolute;top:15px;left:12px;z-index:31;background:none;border:none;color:${C.textSoft};cursor:pointer;align-items:center;justify-content:center;width:30px;height:30px;border-radius:8px;">${ICONS.menu}</button>
-      <aside class="js-sidebar" style="width:308px;flex:0 0 308px;height:100%;display:flex;flex-direction:column;background:${C.glassBg};backdrop-filter:${C.glassBlur};-webkit-backdrop-filter:${C.glassBlur};border-right:1px solid ${C.glassBorder};position:relative;">
+      <aside class="js-sidebar" style="width:308px;flex:0 0 308px;height:100%;display:flex;flex-direction:column;background:${C.glassBg};backdrop-filter:${C.glassBlur};-webkit-backdrop-filter:${C.glassBlur};border-right:1px solid ${C.glassBorder};box-shadow:${C.glassShadow};position:relative;">
         <div class="js-sidebar-top" style="padding:16px 8px 6px;display:flex;flex-direction:column;gap:12px;">
           <div class="js-sidebar-header" style="display:flex;align-items:center;justify-content:space-between;padding-left:8px;">
             <span style="display:flex;align-items:center;gap:8px;">
@@ -873,7 +903,7 @@
       </div>
       <div class="js-composer" style="position:absolute;left:308px;right:0;bottom:0;padding:0 24px 22px;background:linear-gradient(transparent,${C.bgFade} 55%);">
         <div style="max-width:672px;margin:0 auto;position:relative;">
-          <div style="background:${C.glassBg};backdrop-filter:${C.glassBlur};-webkit-backdrop-filter:${C.glassBlur};border-radius:20px;box-shadow:0 8px 32px rgba(0,0,0,.35),0 0 0 1px ${C.glassBorder};">
+          <div style="background:${C.glassBg};backdrop-filter:${C.glassBlur};-webkit-backdrop-filter:${C.glassBlur};border-radius:20px;box-shadow:${C.glassShadow};">
             <div class="js-attach-preview" style="display:none;gap:8px;padding:14px 14px 0;flex-wrap:wrap;"></div>
             <div style="padding:14px;display:flex;flex-direction:column;gap:12px;">
               <div class="js-editor" contenteditable="true" data-placeholder="Wie kann ich dir heute helfen?" style="min-height:48px;max-height:200px;overflow-y:auto;padding:6px 6px 0;color:${C.text};font-size:15px;line-height:1.5;outline:none;white-space:pre-wrap;word-break:break-word;"></div>
@@ -1048,23 +1078,33 @@
     const s = document.createElement('style');
     s.id = 'jsAppCss';
     s.textContent = `
-      /* Aurora-Hintergrund: mehrere weiche, farbige Blobs statt Pechschwarz,
-         jeder auf einer eigenen langsamen Drift-Schleife (unterschiedliche
-         Dauer/Phase, damit es nie repetitiv wirkt). mix-blend-mode:screen
-         lässt sich überlappende Farben addieren statt sich zu verdecken. */
-      .js-aurora-blob { position:absolute; border-radius:50%; filter:blur(90px); mix-blend-mode:screen; will-change:transform; }
-      .js-aurora-blob-1 { width:70vmax; height:70vmax; top:-30vmax; right:-22vmax; background:radial-gradient(circle, #4f8dff 0%, rgba(79,141,255,0) 70%); opacity:.8; animation:jsAurora1 28s ease-in-out infinite; }
-      .js-aurora-blob-2 { width:62vmax; height:62vmax; top:6vmax; right:-18vmax; background:radial-gradient(circle, #9b6bff 0%, rgba(155,107,255,0) 70%); opacity:.7; animation:jsAurora2 34s ease-in-out infinite; }
-      .js-aurora-blob-3 { width:58vmax; height:58vmax; bottom:-24vmax; left:-16vmax; background:radial-gradient(circle, #3fd0ff 0%, rgba(63,208,255,0) 70%); opacity:.65; animation:jsAurora3 24s ease-in-out infinite; }
-      .js-aurora-blob-4 { width:46vmax; height:46vmax; top:32vmax; left:2vmax; background:radial-gradient(circle, #ff7ad9 0%, rgba(255,122,217,0) 70%); opacity:.5; animation:jsAurora4 31s ease-in-out infinite; }
-      @keyframes jsAurora1 { 0%,100% { transform:translate(0,0) scale(1); } 50% { transform:translate(-7%,5%) scale(1.1); } }
-      @keyframes jsAurora2 { 0%,100% { transform:translate(0,0) scale(1); } 50% { transform:translate(6%,-7%) scale(1.06); } }
-      @keyframes jsAurora3 { 0%,100% { transform:translate(0,0) scale(1); } 50% { transform:translate(5%,-5%) scale(1.12); } }
-      @keyframes jsAurora4 { 0%,100% { transform:translate(0,0) scale(1); } 50% { transform:translate(-6%,6%) scale(1.08); } }
+      /* Aurora-Hintergrund: große, stark überlappende Farbbänder (nicht nur
+         Ecken-Blobs) nach dem vom Nutzer gezeigten Referenzbild — Blau/Cyan
+         an den äußeren Rändern, ein breites Violett-Pink-Band diagonal durch
+         die Mitte. Jeder Blob auf eigener langsamer Drift-Schleife
+         (unterschiedliche Dauer/Phase, nie repetitiv). mix-blend-mode:screen
+         addiert überlappende Farben statt sie zu verdecken. Frühere Version
+         war zu klein/blass (Ecken-Kreise mit frühem Transparent-Stop) und
+         wirkte dadurch überwiegend schwarz statt farbig wie im Referenzbild.*/
+      .js-aurora-blob { position:absolute; border-radius:50%; filter:blur(70px); mix-blend-mode:screen; will-change:transform; }
+      .js-aurora-blob-1 { width:95vmax; height:95vmax; top:-40vmax; right:-35vmax; background:radial-gradient(circle, #2e8bff 0%, #2e8bff 35%, rgba(46,139,255,0) 68%); opacity:.95; animation:jsAurora1 30s ease-in-out infinite; }
+      .js-aurora-blob-2 { width:85vmax; height:85vmax; top:-10vmax; right:-30vmax; background:radial-gradient(circle, #9b5cff 0%, #9b5cff 35%, rgba(155,92,255,0) 68%); opacity:.85; animation:jsAurora2 36s ease-in-out infinite; }
+      .js-aurora-blob-3 { width:95vmax; height:95vmax; bottom:-40vmax; left:-35vmax; background:radial-gradient(circle, #29b6ff 0%, #29b6ff 35%, rgba(41,182,255,0) 68%); opacity:.9; animation:jsAurora3 26s ease-in-out infinite; }
+      .js-aurora-blob-4 { width:80vmax; height:80vmax; top:20vmax; left:-10vmax; background:radial-gradient(circle, #b25cff 0%, #b25cff 35%, rgba(178,92,255,0) 68%); opacity:.75; animation:jsAurora4 33s ease-in-out infinite; }
+      .js-aurora-blob-5 { width:90vmax; height:90vmax; top:8vmax; left:18vmax; background:radial-gradient(circle, #ff8fe0 0%, #ff8fe0 32%, rgba(255,143,224,0) 66%); opacity:.7; animation:jsAurora5 29s ease-in-out infinite; }
+      @keyframes jsAurora1 { 0%,100% { transform:translate(0,0) scale(1); } 50% { transform:translate(-6%,5%) scale(1.08); } }
+      @keyframes jsAurora2 { 0%,100% { transform:translate(0,0) scale(1); } 50% { transform:translate(5%,-6%) scale(1.05); } }
+      @keyframes jsAurora3 { 0%,100% { transform:translate(0,0) scale(1); } 50% { transform:translate(5%,-4%) scale(1.1); } }
+      @keyframes jsAurora4 { 0%,100% { transform:translate(0,0) scale(1); } 50% { transform:translate(-5%,6%) scale(1.07); } }
+      @keyframes jsAurora5 { 0%,100% { transform:translate(0,0) scale(1); } 50% { transform:translate(4%,4%) scale(1.06); } }
       /* Feines, bewegtes Filmkorn obendrauf (echtes Zufallsrauschen aus
          GRAIN_URL, siehe makeGrainDataUrl) — steps() statt ease, damit es wie
-         flackerndes analoges Korn aussieht statt sanft zu gleiten. */
-      .js-grain-overlay { position:absolute; inset:-50%; width:200%; height:200%; background-repeat:repeat; opacity:.5; mix-blend-mode:overlay; animation:jsGrain 1s steps(4) infinite; }
+         flackerndes analoges Korn aussieht statt sanft zu gleiten. KEIN
+         mix-blend-mode:overlay: das hellt Schatten kaum auf, über den
+         schwarzen Flächen war das Korn dadurch praktisch unsichtbar. Normales
+         Blending bei niedriger Deckkraft zeigt es gleichmäßig auf jedem
+         Untergrund, hell oder dunkel. */
+      .js-grain-overlay { position:absolute; inset:-50%; width:200%; height:200%; background-repeat:repeat; opacity:.11; animation:jsGrain 1s steps(4) infinite; }
       @keyframes jsGrain {
         0% { transform:translate(0,0); } 25% { transform:translate(-3%,2%); }
         50% { transform:translate(2%,-3%); } 75% { transform:translate(-2%,-2%); }
