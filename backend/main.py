@@ -149,6 +149,11 @@ class ChatRequest(BaseModel):
     # conversations.append_turn) — verknüpft sie dauerhaft mit dem Projekt,
     # aus dessen Detailansicht heraus gesendet wurde.
     project_id: str | None = None
+    # Ob dieser Turn aus dem Sprachmodus kommt (siehe llm_client._system_prompt) —
+    # nur dann gilt "wird vorgelesen, fasse dich kurz". Ohne dieses Feld nahm
+    # der System-Prompt das für JEDEN Turn an, auch getippten Text im
+    # normalen Chat, und Jarvis antwortete dort unnötig einsilbig.
+    is_speech: bool = False
 
 
 class CancelRequest(BaseModel):
@@ -461,7 +466,7 @@ def chat_stream(req: ChatRequest):
     def generate():
         full_text = ""
         try:
-            for event in llm_client.stream_reply(req.message, req.history, turn_id=req.turn_id, mode=req.mode, images=req.images):
+            for event in llm_client.stream_reply(req.message, req.history, turn_id=req.turn_id, mode=req.mode, images=req.images, is_speech=req.is_speech):
                 if event["type"] == "sentence":
                     text = _strip_emojis(event["text"])
                     # Leere Sätze (löst ein Reasoning-Modell manchmal am Ende aus)

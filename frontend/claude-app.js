@@ -2628,7 +2628,7 @@
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         signal: abortController.signal,
-        body: JSON.stringify({ message: outgoingText, history, turn_id: currentTurnId, mode: activeMode, conversation_id: ensureConversationId(), images: imagesForThisTurn, project_id: currentProjectId }),
+        body: JSON.stringify({ message: outgoingText, history, turn_id: currentTurnId, mode: activeMode, conversation_id: ensureConversationId(), images: imagesForThisTurn, project_id: currentProjectId, is_speech: speechMode }),
       });
       if (!resp.ok) throw new Error('HTTP ' + resp.status);
       const reader = resp.body.getReader();
