@@ -2507,6 +2507,87 @@
     });
   }
 
+  // Karte mit "Trotzdem laden" + "anderes Modell entladen" unter einer
+  // hardware_block-Antwort (siehe /chat/stream) - der Speicher-Check kann
+  // sich irren (Live beobachtet: Modell war längst geladen, der Block war
+  // nur ein Startzeit-Artefakt) oder der Nutzer nimmt das Risiko bewusst in
+  // Kauf. Ein Klick behebt die Ursache und wiederholt automatisch dieselbe
+  // Nachricht, statt sie erneut eintippen zu müssen.
+  async function renderHardwareBlockActions(container, modelId, retryText) {
+    if (!container || container.querySelector('.js-hwblock')) return;
+    const box = document.createElement('div');
+    box.className = 'js-hwblock';
+    box.style.cssText = `margin-top:10px;padding:10px 12px;border:1px solid ${C.border};border-radius:10px;background:${C.bgSurface3};display:flex;flex-direction:column;gap:8px;`;
+
+    const retry = () => { box.remove(); if (retryText) sendMessage(retryText); };
+
+    const topRow = document.createElement('div');
+    topRow.style.cssText = 'display:flex;gap:8px;flex-wrap:wrap;';
+    const forceBtn = document.createElement('button');
+    forceBtn.type = 'button';
+    forceBtn.textContent = 'Trotzdem laden';
+    forceBtn.style.cssText = `padding:7px 12px;border:none;border-radius:8px;background:${C.accent};color:#fff;font-size:12px;font-weight:600;cursor:pointer;font-family:${C.font};`;
+    forceBtn.addEventListener('click', async () => {
+      forceBtn.disabled = true;
+      forceBtn.textContent = 'Lade…';
+      try {
+        await fetch('/model/force-load', { method: 'POST' });
+        retry();
+      } catch (e) {
+        forceBtn.disabled = false;
+        forceBtn.textContent = 'Trotzdem laden';
+      }
+    });
+    topRow.appendChild(forceBtn);
+    box.appendChild(topRow);
+
+    const listEl = document.createElement('div');
+    listEl.style.cssText = 'display:flex;flex-direction:column;gap:6px;';
+    box.appendChild(listEl);
+    container.appendChild(box);
+
+    try {
+      const r = await fetch('/model/loaded');
+      const j = await r.json();
+      const others = (j.models || []).filter((m) => !m.is_current);
+      if (others.length) {
+        const label = document.createElement('div');
+        label.style.cssText = `font-size:12px;color:${C.textSoft};`;
+        label.textContent = 'Oder ein anderes geladenes Modell entladen, um Platz zu schaffen:';
+        listEl.appendChild(label);
+        others.forEach((m) => {
+          const modelRow = document.createElement('div');
+          modelRow.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:8px;';
+          const sizeGb = m.size_bytes ? (m.size_bytes / (1024 ** 3)).toFixed(1).replace('.', ',') + ' GB' : '';
+          const lbl = document.createElement('span');
+          lbl.style.cssText = `font-size:12px;color:${C.text};`;
+          lbl.textContent = m.id + (sizeGb ? ` (${sizeGb})` : '');
+          const unloadBtn = document.createElement('button');
+          unloadBtn.type = 'button';
+          unloadBtn.textContent = 'Entladen';
+          unloadBtn.style.cssText = `padding:5px 10px;border:1px solid ${C.border};border-radius:7px;background:none;color:${C.textSoft};font-size:11px;cursor:pointer;font-family:${C.font};`;
+          unloadBtn.addEventListener('click', async () => {
+            unloadBtn.disabled = true;
+            unloadBtn.textContent = 'Entlade…';
+            try {
+              await fetch('/model/unload', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ model: m.id }),
+              });
+              retry();
+            } catch (e) {
+              unloadBtn.disabled = false;
+              unloadBtn.textContent = 'Entladen';
+            }
+          });
+          modelRow.appendChild(lbl);
+          modelRow.appendChild(unloadBtn);
+          listEl.appendChild(modelRow);
+        });
+      }
+    } catch (e) {}
+  }
+
   async function sendMessage(text) {
     text = (text || '').trim();
     if ((!text && !pendingImages.length) || busy || !modelHealthy) return;
@@ -2580,6 +2661,8 @@
             if (speechMode) enqueueClip(base64ToBlob(evt.audio, evt.mime || 'audio/mpeg'));
           } else if (evt.type === 'done') {
             fullText = evt.full_text || '';
+          } else if (evt.type === 'hardware_block') {
+            renderHardwareBlockActions(said.parentElement, evt.model, outgoingText);
           }
         }
       }

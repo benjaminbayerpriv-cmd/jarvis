@@ -414,6 +414,20 @@ def _request_targets() -> list[tuple[str, str, dict, dict]]:
     # a model too big for this PC must never be requested at all, or that
     # request is what triggers the crash.
     too_large = hardware.blocked_reason(config.LM_STUDIO_MODEL)
+    if too_large:
+        # A block set once (typically at startup, before LM Studio had even
+        # finished reporting its own state) must never stick around forever
+        # — re-verify right now instead of trusting a stale verdict. Live
+        # observed: the model was already loaded seconds later (LM Studio's
+        # /api/v0/models just hadn't answered yet at boot), but every
+        # request kept getting the boot-time "not enough memory" message
+        # since nothing ever re-checked or cleared it.
+        fit = hardware.check_model(config.LM_STUDIO_MODEL)
+        if fit["fits"]:
+            hardware.unblock_all()
+            too_large = None
+        else:
+            too_large = fit.get("message", too_large)
     if not too_large:
         targets.append((config.LM_STUDIO_BASE_URL, config.LM_STUDIO_MODEL, {}, {"reasoning_effort": "none"}))
     elif not targets:

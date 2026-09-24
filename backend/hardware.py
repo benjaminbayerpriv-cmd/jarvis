@@ -145,18 +145,38 @@ def _model_sizes() -> dict[str, int]:
     return sizes
 
 
-def _loaded_models() -> set[str]:
+def _loaded_models_raw() -> list[dict]:
+    """Full /api/v0/models entries currently in the "loaded" state (real ids,
+    not the normalized keys _loaded_models() reduces them to)."""
     base = config.LM_STUDIO_BASE_URL
     root = base[: base.rfind("/v1")].rstrip("/") if base.endswith("/v1") else base.rstrip("/")
     try:
         resp = requests.get(f"{root}/api/v0/models", timeout=4)
         resp.raise_for_status()
-        return {
-            _model_key(e["id"]) for e in resp.json().get("data", [])
-            if e.get("id") and e.get("state") == "loaded"
-        }
+        return [e for e in resp.json().get("data", []) if e.get("id") and e.get("state") == "loaded"]
     except (requests.RequestException, ValueError):
-        return set()
+        return []
+
+
+def _loaded_models() -> set[str]:
+    return {_model_key(e["id"]) for e in _loaded_models_raw()}
+
+
+def loaded_models_info() -> list[dict]:
+    """Loaded models for the "andere Modelle entladen" UI: id + size (if
+    known from `lms ls`) + whether it's the one Jarvis is currently
+    configured to chat with (that one isn't offered for unloading, unloading
+    your own active model out from under yourself makes no sense here)."""
+    sizes = _model_sizes()
+    current = _model_key(config.LM_STUDIO_MODEL)
+    return [
+        {
+            "id": e["id"],
+            "size_bytes": sizes.get(_model_key(e["id"]), 0),
+            "is_current": _model_key(e["id"]) == current,
+        }
+        for e in _loaded_models_raw()
+    ]
 
 
 def _gb(n: float) -> str:
