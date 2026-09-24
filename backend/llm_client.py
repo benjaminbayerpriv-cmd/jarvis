@@ -725,16 +725,34 @@ def list_model_capabilities() -> dict[str, list[str]]:
 
 
 def eject_model(model_id: str) -> None:
-    """Unloads a model via `lms unload` so switching models actually
-    replaces the one in VRAM instead of leaving both loaded at once — the
-    OpenAI-compatible HTTP API has no unload endpoint, and just-in-time
-    loading alone was observed to leave a previous model resident."""
+    """Unloads a model so switching models actually replaces the one in VRAM
+    instead of leaving both loaded at once (just-in-time loading alone was
+    observed to leave a previous model resident).
+
+    Tries LM Studio's own REST API first (POST /api/v1/models/unload, LM
+    Studio >= 0.4.0) — a plain HTTP call to the same origin Jarvis already
+    chats with, so it works exactly as well when LM Studio runs on a
+    different machine on the network. Falls back to the local `lms unload`
+    CLI (only ever effective when LM Studio runs on THIS machine) for older
+    LM Studio versions that don't have the v1 API yet.
+    """
+    try:
+        resp = requests.post(
+            f"{hardware.lm_studio_root()}/api/v1/models/unload",
+            json={"instance_id": model_id}, timeout=10,
+        )
+        if resp.status_code < 400:
+            return
+        print(f"[model] POST /api/v1/models/unload für {model_id} lieferte {resp.status_code}, versuche 'lms unload'.")
+    except requests.RequestException as exc:
+        print(f"[model] /api/v1/models/unload nicht erreichbar ({exc}), versuche lokales 'lms unload'.")
+
     lms = hardware.find_lms_cli()
     if not lms:
         print(
-            f"[model] 'lms'-CLI nicht gefunden — {model_id} bleibt in LM Studio geladen. "
-            "Einmalig 'lms bootstrap' in LM Studio ausführen, damit alte Modelle beim "
-            "Wechsel automatisch entladen werden."
+            f"[model] Weder die v1-REST-API noch das 'lms'-CLI konnten {model_id} entladen "
+            "— es bleibt in LM Studio geladen. Läuft LM Studio auf diesem Rechner, einmalig "
+            "'lms bootstrap' ausführen; läuft es entfernt, prüfen, ob es auf Version >= 0.4.0 ist."
         )
         return
     try:

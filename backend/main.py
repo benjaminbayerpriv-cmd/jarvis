@@ -832,7 +832,21 @@ def model_force_load():
     """"Trotzdem laden" — the user overrides hardware.py's memory guard for
     the currently configured model. Used from the chat's inline warning card
     when the check turns out to be wrong for this machine (e.g. the model
-    actually fits fine in practice) or the user accepts the risk anyway."""
+    actually fits fine in practice) or the user accepts the risk anyway.
+
+    Best-effort actively loads the model right now via LM Studio's own v1
+    REST API (POST /api/v1/models/load — works over the network just like
+    every other LM Studio call this app makes), instead of only clearing the
+    guard and hoping the next chat request's just-in-time load succeeds.
+    Failing that call is not fatal: unblock_all() always runs, so the normal
+    JIT-on-next-request path still gets a chance."""
+    try:
+        requests.post(
+            f"{hardware.lm_studio_root()}/api/v1/models/load",
+            json={"model": config.LM_STUDIO_MODEL}, timeout=120,
+        )
+    except requests.RequestException as exc:
+        print(f"[model] /api/v1/models/load für {config.LM_STUDIO_MODEL} fehlgeschlagen ({exc}), JIT-Laden bleibt als Fallback.")
     hardware.unblock_all()
     return {"ok": True}
 
