@@ -145,6 +145,11 @@ class ChatRequest(BaseModel):
     # Data-URLs ("data:image/jpeg;base64,...") vom Datei-Anhang im Frontend —
     # nur an vision-fähige Modelle weitergereicht, siehe llm_client._build_messages.
     images: list[str] | None = None
+    # Kleine (96px) Miniaturen derselben Bilder, nur zur dauerhaften Anzeige
+    # im Gesprächsverlauf (siehe conversations.append_turn) — getrennt von
+    # `images` oben, damit die Konversationsdatei nicht die vollen, ans
+    # Modell geschickten Bilder speichert.
+    image_thumbnails: list[str] | None = None
     # Nur relevant, wenn diese Nachricht die Konversation neu anlegt (siehe
     # conversations.append_turn) — verknüpft sie dauerhaft mit dem Projekt,
     # aus dessen Detailansicht heraus gesendet wurde.
@@ -518,7 +523,10 @@ def chat_stream(req: ChatRequest):
                     ) + "\n"
             if full_text:
                 transcript_log.log_turn(req.message, full_text, req.mode)
-                conv = conversations.append_turn(conv_id, req.message, full_text, req.project_id, chats_base_dir)
+                conv = conversations.append_turn(
+                    conv_id, req.message, full_text, req.project_id, chats_base_dir,
+                    images=req.image_thumbnails,
+                )
                 if conv.get("title") is None and len(conv.get("turns", [])) == 2:
                     _generate_title_in_background(req.message, full_text)
         except (requests.RequestException, llm_client.ModelError, KeyError, IndexError) as exc:
