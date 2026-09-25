@@ -56,6 +56,16 @@ DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-chat")
 # effect. See llm_client._request_targets for how this is applied.
 ACTIVE_PROVIDER = os.environ.get("ACTIVE_PROVIDER", "auto")
 
+# Hard on/off switch for DeepSeek, independent of ACTIVE_PROVIDER above:
+# even with ACTIVE_PROVIDER="lmstudio" pinned, DeepSeek still sat in
+# llm_client._request_targets() as a fallback for when LM Studio fails —
+# meaning it could still get called (and billed) even though the user
+# believed they had switched away from it. DEEPSEEK_ENABLED=false removes
+# it from the target list entirely (see _request_targets), no fallback, no
+# accidental cost, while keeping the key/settings in place so turning it
+# back on needs no re-entering anything.
+DEEPSEEK_ENABLED = os.environ.get("DEEPSEEK_ENABLED", "true").strip().lower() != "false"
+
 # Gemini (Google AI Studio free tier). Only used by the experimental
 # backend/live_voice_test.py speech-to-speech proof-of-concept, not part of
 # the normal Jarvis pipeline.
@@ -180,3 +190,12 @@ def set_provider(provider: str) -> None:
     else:
         lines.append(f"ACTIVE_PROVIDER={provider}")
     env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def set_deepseek_enabled(enabled: bool) -> None:
+    """Toggle DeepSeek on/off, see DEEPSEEK_ENABLED above. Takes effect on
+    the very next chat request — llm_client._request_targets() reads it
+    fresh every time — no restart needed."""
+    global DEEPSEEK_ENABLED
+    DEEPSEEK_ENABLED = bool(enabled)
+    _persist_env("DEEPSEEK_ENABLED", "true" if enabled else "false")

@@ -179,6 +179,11 @@ class UpdateSettingsRequest(BaseModel):
     deepseek_api_key: str | None = None
     deepseek_base_url: str | None = None
     deepseek_model: str | None = None
+    # Hart aus/an, unabhängig von den Feldern oben — siehe
+    # config.DEEPSEEK_ENABLED/set_deepseek_enabled. Bool statt der
+    # generischen _SIMPLE_SETTINGS-Strings, weil es eine echte
+    # Typkonvertierung braucht.
+    deepseek_enabled: bool | None = None
     tavily_api_key: str | None = None
 
 
@@ -670,7 +675,11 @@ def delete_project(project_id: str):
 
 @app.get("/settings")
 def get_settings():
-    return {"lm_studio_base_url": config.LM_STUDIO_BASE_URL, **config.get_simple_settings()}
+    return {
+        "lm_studio_base_url": config.LM_STUDIO_BASE_URL,
+        "deepseek_enabled": config.DEEPSEEK_ENABLED,
+        **config.get_simple_settings(),
+    }
 
 
 @app.get("/model/health")
@@ -909,7 +918,13 @@ def update_settings(req: UpdateSettingsRequest):
         stt.reset_model()
     if req.supertonic_voice is not None and req.supertonic_voice.strip():
         tts.reset_supertonic_voice()
-    return {"lm_studio_base_url": config.LM_STUDIO_BASE_URL, **config.get_simple_settings()}
+    if req.deepseek_enabled is not None:
+        config.set_deepseek_enabled(req.deepseek_enabled)
+    return {
+        "lm_studio_base_url": config.LM_STUDIO_BASE_URL,
+        "deepseek_enabled": config.DEEPSEEK_ENABLED,
+        **config.get_simple_settings(),
+    }
 
 
 @app.get("/models")
@@ -920,7 +935,7 @@ def list_models():
     # sobald ein Key konfiguriert ist. Vorher stand hier immer
     # LM_STUDIO_MODEL, auch wenn DeepSeek die Anfragen tatsächlich beantwortet
     # hat - die Modellauswahl zeigte dann nie den wirklich aktiven Stand an.
-    active_is_deepseek = bool(config.DEEPSEEK_API_KEY) and config.ACTIVE_PROVIDER != "lmstudio"
+    active_is_deepseek = bool(config.DEEPSEEK_API_KEY) and config.DEEPSEEK_ENABLED and config.ACTIVE_PROVIDER != "lmstudio"
     current = f"{llm_client.DEEPSEEK_MODEL_ID_PREFIX}{config.DEEPSEEK_MODEL}" if active_is_deepseek else config.LM_STUDIO_MODEL
     try:
         model_ids = llm_client.list_models()
@@ -963,6 +978,8 @@ def select_model(req: SelectModelRequest):
     if llm_client.is_deepseek_model_id(req.model):
         if not config.DEEPSEEK_API_KEY:
             return {"ok": False, "error": "Kein DeepSeek-API-Key konfiguriert.", "current": config.LM_STUDIO_MODEL, "model": req.model}
+        if not config.DEEPSEEK_ENABLED:
+            return {"ok": False, "error": "DeepSeek ist gerade ausgeschaltet — in den Einstellungen wieder aktivieren.", "current": config.LM_STUDIO_MODEL, "model": req.model}
         config.set_provider("deepseek")
         return {"ok": True}
     # Ein echtes LM-Studio-Modell ausgewählt: explizit auf "lmstudio" pinnen,

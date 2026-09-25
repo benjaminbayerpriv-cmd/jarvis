@@ -51,11 +51,23 @@
     { id: 'spracherkennung', title: 'Spracherkennung', fields: [
       { key: 'whisper_model', label: 'Whisper-Modell (tiny/base/small/medium/large-v3)', placeholder: 'medium' },
     ] },
-    { id: 'cloud-llm', title: 'Cloud-LLM (optional, sonst LM Studio)', fields: [
-      { key: 'deepseek_api_key', label: 'DeepSeek API-Key', placeholder: 'sk-…', type: 'password' },
-      { key: 'deepseek_base_url', label: 'DeepSeek Endpoint', placeholder: 'https://api.deepseek.com/v1' },
-      { key: 'deepseek_model', label: 'DeepSeek Modell', placeholder: 'deepseek-chat' },
-    ] },
+    {
+      id: 'cloud-llm', title: 'Cloud-LLM (optional, sonst LM Studio)',
+      // Hart aus/an, unabhängig von den Feldern unten — wirkt sofort beim
+      // Umschalten (kein Speichern-Klick nötig), damit "ausschalten"
+      // wirklich sofort keine Anfrage mehr an DeepSeek gehen lässt, auch
+      // nicht als Ausweich-Option, wenn LM Studio mal nicht erreichbar ist.
+      toggle: {
+        key: 'deepseek_enabled',
+        label: 'DeepSeek verwenden',
+        hint: 'Aus verhindert jede Anfrage an DeepSeek (keine Kosten) — auch nicht als Ausweich-Option, wenn LM Studio gerade nicht erreichbar ist.',
+      },
+      fields: [
+        { key: 'deepseek_api_key', label: 'DeepSeek API-Key', placeholder: 'sk-…', type: 'password' },
+        { key: 'deepseek_base_url', label: 'DeepSeek Endpoint', placeholder: 'https://api.deepseek.com/v1' },
+        { key: 'deepseek_model', label: 'DeepSeek Modell', placeholder: 'deepseek-chat' },
+      ],
+    },
     { id: 'gedaechtnis', title: 'Gedächtnis', fields: [
       { key: 'embedding_model', label: 'Embedding-Modell (semantische Suche, in LM Studio geladen)', placeholder: 'text-embedding-nomic-embed-text-v1.5' },
     ] },
@@ -69,10 +81,24 @@
             <span style="font-size:12px;color:${C.textSoft};">${f.label}</span>
             <input class="js-set-${f.key}" type="${f.type || 'text'}" placeholder="${f.placeholder || ''}" spellcheck="false" style="width:100%;box-sizing:border-box;padding:9px 10px;background:${C.bg};border:1px solid ${C.border};border-radius:8px;color:${C.text};font-size:13px;outline:none;font-family:${C.font};" />
           </div>`).join('');
+    const toggleHtml = section.toggle ? `
+          <div style="display:flex;flex-direction:column;gap:4px;">
+            <label style="display:flex;align-items:center;justify-content:space-between;gap:10px;cursor:pointer;">
+              <span style="font-size:13px;color:${C.text};">${section.toggle.label}</span>
+              <span style="position:relative;display:inline-block;width:38px;height:22px;flex:0 0 auto;">
+                <input class="js-set-toggle-${section.toggle.key}" type="checkbox" style="opacity:0;width:100%;height:100%;position:absolute;margin:0;cursor:pointer;" />
+                <span class="js-toggle-track-${section.toggle.key}" style="position:absolute;inset:0;background:${C.border};border-radius:11px;transition:background .15s;pointer-events:none;"></span>
+                <span class="js-toggle-thumb-${section.toggle.key}" style="position:absolute;top:2px;left:2px;width:18px;height:18px;border-radius:50%;background:#fff;transition:left .15s;pointer-events:none;"></span>
+              </span>
+            </label>
+            ${section.toggle.hint ? `<span style="font-size:11px;color:${C.textDim};line-height:1.4;">${section.toggle.hint}</span>` : ''}
+            <span class="js-set-toggle-status-${section.toggle.key}" style="font-size:11.5px;color:${C.textDim};"></span>
+          </div>` : '';
     return `
       <div style="padding:12px 6px ${isLast ? '16px' : '12px'};border-top:1px solid ${C.border};">
         <div style="padding:6px 10px;font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:${C.textDim};">${section.title}</div>
         <div style="padding:4px 10px;display:flex;flex-direction:column;gap:10px;">
+          ${toggleHtml}
           ${rows}
           <div style="display:flex;align-items:center;gap:10px;">
             <button class="js-set-save-${section.id}" style="align-self:flex-start;padding:7px 12px;border:none;border-radius:8px;background:${C.accent};color:#fff;font-size:12px;cursor:pointer;font-family:${C.font};">Speichern</button>
@@ -830,6 +856,21 @@
                   <button class="js-lmstudio-url-save" style="align-self:flex-start;padding:7px 12px;border:none;border-radius:8px;background:${C.accent};color:#fff;font-size:12px;cursor:pointer;font-family:${C.font};">Speichern</button>
                   <span class="js-lmstudio-url-status" style="font-size:11.5px;color:${C.textDim};"></span>
                 </div>
+                <!-- Netzwerksuche auch hier verfügbar, unabhängig davon, ob
+                     gerade schon eine LM-Studio-Verbindung steht - z.B. um
+                     eine ANDERE Instanz im Netz zu finden, ohne die
+                     bestehende erst zu trennen. Das Einrichtungsmenü im
+                     Composer zeigt dieselbe Suche nur, wenn nichts
+                     erreichbar ist. -->
+                <div style="display:flex;align-items:center;gap:8px;margin-top:4px;">
+                  <button class="js-settings-scan" style="padding:6px 10px;border:1px solid ${C.border};border-radius:8px;background:none;color:${C.textSoft};font-size:12px;cursor:pointer;white-space:nowrap;font-family:${C.font};">Netzwerk durchsuchen</button>
+                  <button class="js-settings-scan-extended" title="Prüft zusätzlich die Standardports von Ollama, text-generation-webui, koboldcpp & Co., nicht nur LM Studios 1234" style="padding:6px 10px;border:1px solid ${C.border};border-radius:8px;background:none;color:${C.textSoft};font-size:12px;cursor:pointer;white-space:nowrap;font-family:${C.font};">Erweiterte Suche</button>
+                  <div class="js-settings-scan-bar-track" style="display:none;flex:1;height:6px;border-radius:3px;background:${C.bg};overflow:hidden;">
+                    <div class="js-settings-scan-bar-fill" style="height:100%;width:0%;background:${C.accent};transition:width .12s linear;"></div>
+                  </div>
+                </div>
+                <div class="js-settings-scan-status" style="font-size:12px;color:${C.textDim};min-height:14px;"></div>
+                <div class="js-settings-scan-results" style="display:none;flex-direction:column;gap:4px;"></div>
               </div>
             </div>
             <div style="padding:12px 0;border-top:1px solid ${C.border};">
@@ -2141,6 +2182,14 @@
       $('.js-setup-scan', uiEl), $('.js-setup-scan-extended', uiEl), $('.js-setup-scan-bar-track', uiEl), $('.js-setup-scan-bar-fill', uiEl),
       $('.js-setup-scan-status', uiEl), $('.js-setup-scan-results', uiEl), $('.js-setup-lmurl', uiEl), $('.js-setup-test-lm', uiEl)
     );
+    // Dieselbe Suche auch in den Einstellungen, unabhängig vom aktuellen
+    // Verbindungsstatus (siehe Kommentar im Markup oben) - "testBtn" ist
+    // hier der echte Speichern-Button: ein Klick auf ein gefundenes Gerät
+    // übernimmt die URL UND speichert sie sofort, statt erst zu testen.
+    wireNetworkScan(
+      $('.js-settings-scan', uiEl), $('.js-settings-scan-extended', uiEl), $('.js-settings-scan-bar-track', uiEl), $('.js-settings-scan-bar-fill', uiEl),
+      $('.js-settings-scan-status', uiEl), $('.js-settings-scan-results', uiEl), $('.js-lmstudio-url-input', uiEl), $('.js-lmstudio-url-save', uiEl)
+    );
     updateSendSlot();
     if (speechBtn) speechBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); speechMode ? exitSpeech() : enterSpeech(); });
     if (noteBtn) noteBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); setDictating(!dictating); });
@@ -2235,6 +2284,40 @@
           if (statusEl) statusEl.textContent = 'Gespeichert';
           refreshModelHealth();
         } catch (e) { if (statusEl) statusEl.textContent = 'Fehlgeschlagen'; }
+        setTimeout(() => { if (statusEl) statusEl.textContent = ''; }, 2500);
+      });
+    }
+
+    // Sektions-Toggles (z.B. "DeepSeek verwenden") — im Gegensatz zu den
+    // Feldern oben nicht hinter "Speichern" versteckt, sondern feuern sofort
+    // bei jedem Klick, weil ein An-/Ausschalter sich sofort auswirken soll.
+    for (const section of SETTINGS_SECTIONS) {
+      if (!section.toggle) continue;
+      const key = section.toggle.key;
+      const toggleInput = $(`.js-set-toggle-${key}`, settingsSheetEl);
+      const track = $(`.js-toggle-track-${key}`, settingsSheetEl);
+      const thumb = $(`.js-toggle-thumb-${key}`, settingsSheetEl);
+      const statusEl = $(`.js-set-toggle-status-${key}`, settingsSheetEl);
+      if (!toggleInput) continue;
+      const paint = () => {
+        if (track) track.style.background = toggleInput.checked ? C.accent : C.border;
+        if (thumb) thumb.style.left = toggleInput.checked ? '18px' : '2px';
+      };
+      paint();
+      toggleInput.addEventListener('change', async () => {
+        paint();
+        if (statusEl) statusEl.textContent = 'Speichert…';
+        try {
+          await fetch('/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ [key]: toggleInput.checked }) });
+          if (statusEl) statusEl.textContent = 'Gespeichert';
+          lastModelsList = null;
+          fetch('/models').then((r) => r.json()).then((j) => { applyModelCaps(j); if (j.current) setModelLabel(j.current); }).catch(() => {});
+          refreshModelHealth();
+        } catch (e) {
+          toggleInput.checked = !toggleInput.checked;
+          paint();
+          if (statusEl) statusEl.textContent = 'Fehlgeschlagen';
+        }
         setTimeout(() => { if (statusEl) statusEl.textContent = ''; }, 2500);
       });
     }
@@ -3892,6 +3975,17 @@
         for (const f of section.fields) {
           const input = $(`.js-set-${f.key}`, settingsSheetEl);
           if (input && j[f.key] != null) input.value = j[f.key];
+        }
+        if (section.toggle) {
+          const key = section.toggle.key;
+          const toggleInput = $(`.js-set-toggle-${key}`, settingsSheetEl);
+          if (toggleInput && j[key] != null) {
+            toggleInput.checked = !!j[key];
+            const track = $(`.js-toggle-track-${key}`, settingsSheetEl);
+            const thumb = $(`.js-toggle-thumb-${key}`, settingsSheetEl);
+            if (track) track.style.background = toggleInput.checked ? C.accent : C.border;
+            if (thumb) thumb.style.left = toggleInput.checked ? '18px' : '2px';
+          }
         }
       }
     } catch (e) {}
