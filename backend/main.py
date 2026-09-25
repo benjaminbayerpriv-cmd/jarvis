@@ -12,23 +12,79 @@ import sys
 import threading
 import time
 from pathlib import Path
+from urllib.parse import urlparse
 
 import requests
 from fastapi import FastAPI, File, HTTPException, Response, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import browser_agent, config, conversations, fillers, hardware, llm_client, memory, opencode_agent, panel, projects, stt, transcript_log, tts, vector_memory
 
+# Jarvis exposes run_shell, file writes and a live coding-agent terminal over
+# plain local HTTP/WebSocket. With CORS open to "*" and no origin check on the
+# websockets, any web page open in the user's browser could drive all of that
+# in the background (fetch to /chat/stream, keystrokes into /code/tty/ws).
+# Only the app itself (same origin) and the Chrome extension may talk to it;
+# requests without an Origin header come from non-browser clients (hotkey
+# listener, scripts) and stay allowed.
+_EXTENSION_ORIGIN_RE = re.compile(r"^chrome-extension://[a-p]{32}$")
+
+
+def _host_is_trusted(host: str) -> bool:
+    # The app is only ever addressed by IP or "localhost" — a domain name in
+    # Host means a DNS-rebinding page (attacker domain resolving to 127.0.0.1).
+    hostname = (urlparse(f"//{host}").hostname or "").lower()
+    if hostname == "localhost":
+        return True
+    try:
+        ipaddress.ip_address(hostname)
+    except ValueError:
+        return False
+    return True
+
+
+def _request_allowed(origin: str | None, host: str | None) -> bool:
+    if host and not _host_is_trusted(host):
+        return False
+    if not origin:
+        return True
+    if _EXTENSION_ORIGIN_RE.match(origin):
+        return True
+    parsed = urlparse(origin)
+    return parsed.scheme in ("http", "https") and bool(host) and parsed.netloc == host
+
+
+class _OriginGuard:
+    """Plain ASGI middleware (not BaseHTTPMiddleware) so it covers websockets
+    too and never buffers the streaming chat responses."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] in ("http", "websocket"):
+            headers = {k.decode("latin-1").lower(): v.decode("latin-1") for k, v in scope.get("headers", [])}
+            if not _request_allowed(headers.get("origin"), headers.get("host")):
+                print(f"[security] Anfrage abgelehnt: origin={headers.get('origin')!r} host={headers.get('host')!r} {scope.get('path')}")
+                if scope["type"] == "http":
+                    await JSONResponse({"detail": "Anfrage von fremder Herkunft abgelehnt."}, status_code=403)(scope, receive, send)
+                else:
+                    await send({"type": "websocket.close", "code": 1008})
+                return
+        await self.app(scope, receive, send)
+
+
 app = FastAPI(title="Jarvis")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # local Chrome extension uses a generated chrome-extension:// origin
+    allow_origin_regex=_EXTENSION_ORIGIN_RE.pattern,
     allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
+app.add_middleware(_OriginGuard)
 
 FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
 # Frozen copy of the UI from before a redesign (see /backup below) — kept as
@@ -487,6 +543,11 @@ def chat_stream(req: ChatRequest):
                     # Synthese fehl, ist trotzdem der Text da (nie den Satz
                     # verschlucken, nur den Ton).
                     yield json.dumps({"type": "sentence", "text": text, "audio": ""}) + "\n"
+                    # Outside speech mode the frontend throws audio away — and
+                    # synthesizing it here holds up the next sentence by the
+                    # full TTS time, so typed chats got slower for nothing.
+                    if not req.is_speech:
+                        continue
                     try:
                         # Ein langer Satz wird an seiner ersten Kommapause in
                         # zwei Sprech-Häppchen geteilt (siehe tts.split_for_
@@ -529,11 +590,13 @@ def chat_stream(req: ChatRequest):
                 # buttons instead of the user being stuck with an inert
                 # message every single turn until they dig into Settings.
                 yield json.dumps({"type": "hardware_block", "model": config.LM_STUDIO_MODEL}) + "\n"
-            try:
-                audio_b64 = base64.b64encode(tts.synthesize(fallback)).decode("ascii")
-                yield json.dumps({"type": "sentence", "text": fallback, "audio": audio_b64}) + "\n"
-            except requests.RequestException:
-                yield json.dumps({"type": "sentence", "text": fallback, "audio": ""}) + "\n"
+            audio_b64 = ""
+            if req.is_speech:
+                try:
+                    audio_b64 = base64.b64encode(tts.synthesize(fallback)).decode("ascii")
+                except Exception as tts_exc:  # noqa: BLE001 - the text must still arrive
+                    print(f"[tts] Sprachausgabe fehlgeschlagen: {tts_exc}")
+            yield json.dumps({"type": "sentence", "text": fallback, "audio": audio_b64}) + "\n"
             yield json.dumps({"type": "done", "full_text": fallback, "conversation_id": conv_id}) + "\n"
 
     return StreamingResponse(generate(), media_type="application/x-ndjson")
@@ -985,12 +1048,12 @@ def select_model(req: SelectModelRequest):
     # Ein echtes LM-Studio-Modell ausgewählt: explizit auf "lmstudio" pinnen,
     # sonst würde ein weiterhin konfigurierter DeepSeek-Key diese Wahl im
     # nächsten Request wieder überstimmen (siehe _request_targets).
-    config.set_provider("lmstudio")
     previous_model = config.LM_STUDIO_MODEL
     fit = hardware.check_model(req.model, freeable_ids=[previous_model])
     if not fit["fits"] and not req.force:
         print(f"[model] {fit['message']}")
         return {"ok": False, "error": fit["message"], "current": previous_model, "model": req.model}
+    config.set_provider("lmstudio")
     # Fits only once the previous model is out of memory: unload it BEFORE
     # loading the new one. The usual load-then-unload order (below) would
     # briefly hold both, which is exactly the overload this check prevents.

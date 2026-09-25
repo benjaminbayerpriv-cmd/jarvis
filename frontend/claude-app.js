@@ -95,9 +95,12 @@
             <span class="js-set-toggle-status-${section.toggle.key}" style="font-size:11.5px;color:${C.textDim};"></span>
           </div>` : '';
     return `
-      <div style="padding:12px 6px ${isLast ? '16px' : '12px'};border-top:1px solid ${C.border};">
-        <div style="padding:6px 10px;font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:${C.textDim};">${section.title}</div>
-        <div style="padding:4px 10px;display:flex;flex-direction:column;gap:10px;">
+      <div style="padding:${isLast ? '0 6px 16px' : '0 6px 12px'};border-top:1px solid ${C.border};">
+        <button class="js-settings-toggle-${section.id}" style="width:100%;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:12px 10px 6px;background:none;border:none;cursor:pointer;text-align:left;font-family:${C.font};">
+          <span style="font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:${C.textDim};">${section.title}</span>
+          <span class="js-settings-chevron-${section.id}" style="color:${C.textDim};transition:transform .15s;flex:0 0 auto;">${ICONS.chevronDown || '▾'}</span>
+        </button>
+        <div class="js-settings-body-${section.id}" style="display:none;padding:4px 10px;flex-direction:column;gap:10px;">
           ${toggleHtml}
           ${rows}
           <div style="display:flex;align-items:center;gap:10px;">
@@ -605,12 +608,18 @@
   let speechMode = false, dictating = false, micReady = false, micStream = null, muted = false;
   let vadAnalyser = null, vadData = null, vadNoiseFloor = 0.01, vadAbove = 0;
   const SpeechRecognitionImpl = window.SpeechRecognition || window.webkitSpeechRecognition;
-  // Web Speech API gibt es nur in Chrome/Chromium — im gepackten Desktop-App-
-  // Fenster (pywebview -> WKWebView, Safaris Engine) und in Safari/Firefox
-  // selbst fehlt sie komplett (window.SpeechRecognition/webkitSpeechRecognition
-  // sind dort undefined). Fällt dort auf lokales Whisper zurück (Backend
-  // /stt, siehe backend/stt.py) statt stumm nichts zu tun.
-  const useLocalWhisper = !SpeechRecognitionImpl;
+  // IMMER lokales Whisper (Backend /stt, siehe backend/stt.py), nie Chromes
+  // eingebaute Web-Speech-Erkennung — die schickt Audio an Googles Server
+  // und ist für Deutsch gerade bei technischen/englischen Begriffen
+  // unzuverlässig genug, um ein wiederkehrender Beschwerdepunkt zu sein.
+  // Live beobachtet: "Qwen3.8 27B" wurde als "Günstigste GPU für Gewinn
+  // 3.8.27b" erkannt — kein Einzelfall, sondern genau das Muster aus der
+  // Beschwerde (falsche Wörter, neu zusammengesetzte Wörter, Unsinn).
+  // backend/stt.py wurde ursprünglich exakt gegen dieses Problem gebaut,
+  // aber vorher nur als Rückfallebene genutzt, wenn SpeechRecognitionImpl
+  // fehlte (gepacktes Desktop-Fenster, Safari, Firefox) — in Chrome selbst
+  // lief also weiterhin die unzuverlässige Variante.
+  const useLocalWhisper = true;
   let pcmNode = null, pcmSampleRate = 48000, pcmRing = [], utterancePCM = null, utteranceStartedAt = 0, fallbackSilenceStreak = 0;
   const PCM_BUFFER_SIZE = 4096, PREROLL_MS = 1500, RECORD_SILENCE_SUSTAIN = 28, RECORD_MIN_MS = 300;
   let recognition = null, recognizing = false;
@@ -868,13 +877,21 @@
             <button class="js-settings-close" title="Schließen" style="width:32px;height:32px;border-radius:9px;background:none;border:none;color:${C.textSoft};cursor:pointer;font-size:18px;line-height:1;">×</button>
           </div>
           <div style="max-width:640px;display:flex;flex-direction:column;">
-            <div style="padding:12px 0;">
-              <div style="padding:6px 0;font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:${C.textDim};">Modell</div>
-              <div class="js-settings-models" style="border:1px solid ${C.border};border-radius:12px;overflow:hidden;"></div>
+            <div style="padding:0;">
+              <button class="js-settings-toggle-modell" style="width:100%;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:12px 0 6px;background:none;border:none;cursor:pointer;text-align:left;font-family:${C.font};">
+                <span style="font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:${C.textDim};">Modell</span>
+                <span class="js-settings-chevron-modell" style="color:${C.textDim};transition:transform .15s;flex:0 0 auto;">${ICONS.chevronDown}</span>
+              </button>
+              <div class="js-settings-body-modell" style="display:none;">
+                <div class="js-settings-models" style="border:1px solid ${C.border};border-radius:12px;overflow:hidden;"></div>
+              </div>
             </div>
-            <div style="padding:12px 0;border-top:1px solid ${C.border};">
-              <div style="padding:6px 0;font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:${C.textDim};">Verbindung</div>
-              <div style="padding:4px 0;display:flex;flex-direction:column;gap:8px;">
+            <div style="padding:0;border-top:1px solid ${C.border};">
+              <button class="js-settings-toggle-verbindung" style="width:100%;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:12px 0 6px;background:none;border:none;cursor:pointer;text-align:left;font-family:${C.font};">
+                <span style="font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:${C.textDim};">Verbindung</span>
+                <span class="js-settings-chevron-verbindung" style="color:${C.textDim};transition:transform .15s;flex:0 0 auto;">${ICONS.chevronDown}</span>
+              </button>
+              <div class="js-settings-body-verbindung" style="display:none;padding:4px 0;flex-direction:column;gap:8px;">
                 <span style="font-size:12px;color:${C.textSoft};">LM Studio Endpoint</span>
                 <input class="js-lmstudio-url-input" type="text" placeholder="http://127.0.0.1:1234/v1" spellcheck="false" style="width:100%;box-sizing:border-box;padding:9px 10px;background:${C.bg};border:1px solid ${C.border};border-radius:8px;color:${C.text};font-size:13px;outline:none;font-family:${C.font};" />
                 <div style="display:flex;align-items:center;gap:10px;">
@@ -898,9 +915,12 @@
                 <div class="js-settings-scan-results" style="display:none;flex-direction:column;gap:4px;"></div>
               </div>
             </div>
-            <div style="padding:12px 0;border-top:1px solid ${C.border};">
-              <div style="padding:6px 0;font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:${C.textDim};">Code</div>
-              <div style="padding:4px 0;display:flex;flex-direction:column;gap:8px;">
+            <div style="padding:0;border-top:1px solid ${C.border};">
+              <button class="js-settings-toggle-code" style="width:100%;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:12px 0 6px;background:none;border:none;cursor:pointer;text-align:left;font-family:${C.font};">
+                <span style="font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:${C.textDim};">Code</span>
+                <span class="js-settings-chevron-code" style="color:${C.textDim};transition:transform .15s;flex:0 0 auto;">${ICONS.chevronDown}</span>
+              </button>
+              <div class="js-settings-body-code" style="display:none;padding:4px 0;flex-direction:column;gap:8px;">
                 <span style="font-size:12px;color:${C.textSoft};">Arbeitsverzeichnis für JARVIS Code</span>
                 <input class="js-code-dir-input" type="text" placeholder="~/Developer" spellcheck="false" style="width:100%;box-sizing:border-box;padding:9px 10px;background:${C.bg};border:1px solid ${C.border};border-radius:8px;color:${C.text};font-size:13px;outline:none;font-family:${C.font};" />
                 <button class="js-code-dir-save" style="align-self:flex-start;padding:7px 12px;border:none;border-radius:8px;background:${C.accent};color:#fff;font-size:12px;cursor:pointer;font-family:${C.font};">Speichern</button>
@@ -1181,6 +1201,10 @@
       .js-chats-toggle .js-chats-chevron svg, .js-pinned-toggle .js-pinned-chevron svg, .js-projects-pinned-toggle .js-projects-pinned-chevron svg { width:13px; height:13px; display:block; }
       .js-chats-toggle.is-collapsed .js-chats-chevron, .js-pinned-toggle.is-collapsed .js-pinned-chevron, .js-projects-pinned-toggle.is-collapsed .js-projects-pinned-chevron { transform:rotate(-90deg); }
       .js-pinned-chats.is-collapsed { display:none !important; }
+      button[class*="js-settings-toggle-"] span[class*="js-settings-chevron-"] svg { width:13px; height:13px; display:block; }
+      button[class*="js-settings-toggle-"] span[class*="js-settings-chevron-"] { transform:rotate(-90deg); }
+      button[class*="js-settings-toggle-"].is-open span[class*="js-settings-chevron-"] { transform:rotate(0deg); }
+      button[class*="js-settings-toggle-"]:hover span:first-child { color:${C.textSoft}; }
       /* .js-chats behaelt sein flex:1 (bleibt als leerer Platzhalter bestehen), damit
          .js-settings-row weiterhin unten bleibt statt beim Zuklappen nach oben zu rutschen -
          nur der Inhalt wird versteckt. */
@@ -2287,6 +2311,22 @@
           refreshModelHealth();
         } catch (e) { if (lmUrlStatus) lmUrlStatus.textContent = 'Fehlgeschlagen'; }
         setTimeout(() => { if (lmUrlStatus) lmUrlStatus.textContent = ''; }, 2500);
+      });
+    }
+
+    // Jede Sektion (Modell, Verbindung, Code, Sprachausgabe, ...) startet
+    // zugeklappt — nur die Überschrift ist zu sehen, ein Klick klappt die
+    // Detail-Felder auf. "modell"/"verbindung"/"code" sind fest im Markup
+    // (buildUi()), der Rest kommt datengetrieben aus SETTINGS_SECTIONS.
+    const collapsibleIds = ['modell', 'verbindung', 'code', ...SETTINGS_SECTIONS.map((s) => s.id)];
+    for (const id of collapsibleIds) {
+      const toggleBtn = $(`.js-settings-toggle-${id}`, settingsSheetEl);
+      const body = $(`.js-settings-body-${id}`, settingsSheetEl);
+      if (!toggleBtn || !body) continue;
+      toggleBtn.addEventListener('click', () => {
+        const open = body.style.display !== 'none';
+        body.style.display = open ? 'none' : 'flex';
+        toggleBtn.classList.toggle('is-open', !open);
       });
     }
 
@@ -4347,7 +4387,20 @@
     // ausgerechnet die längste Phase, in der man ihn unterbrechen will,
     // nicht unterbrechbar.
     if (!busy && !speaking && !audioDraining) {
-      vadNoiseFloor = vadNoiseFloor * 0.98 + rms * 0.02;
+      // Asymmetrisch statt einer einfachen EMA: Ein leiserer Pegel als der
+      // bisherige Boden IST der Boden und wird schnell übernommen; ein
+      // lauterer Pegel wird nur ganz langsam eingemischt. Sonst pollt genau
+      // das eigene Reden des Nutzers (z.B. der nächste Satz direkt nach
+      // einem Barge-in, während Jarvis noch nicht wieder spricht) den Boden
+      // hoch — beobachtet live: nach mehrfachem Unterbrechen+Weiterreden
+      // stieg die Schwelle (vadNoiseFloor*2.4) so weit, dass ein erneutes
+      // Barge-in irgendwann gar nicht mehr auslöste, weil normale Sprache
+      // sie nicht mehr überschritt.
+      if (rms < vadNoiseFloor) {
+        vadNoiseFloor = vadNoiseFloor * 0.9 + rms * 0.1;
+      } else {
+        vadNoiseFloor = vadNoiseFloor * 0.999 + rms * 0.001;
+      }
       vadAbove = 0;
       if (useLocalWhisper) fallbackVadTick(rms);
       return;

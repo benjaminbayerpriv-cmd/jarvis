@@ -472,7 +472,12 @@ def _eval_calc_node(node):
     if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
         return node.value
     if isinstance(node, ast.BinOp) and type(node.op) in _CALC_OPS:
-        return _CALC_OPS[type(node.op)](_eval_calc_node(node.left), _eval_calc_node(node.right))
+        left, right = _eval_calc_node(node.left), _eval_calc_node(node.right)
+        # Integer powers never overflow in Python, they just keep computing —
+        # "9 hoch 9 hoch 9" would pin the server for hours.
+        if isinstance(node.op, ast.Pow) and abs(right) > 1000 and abs(left) > 1:
+            raise OverflowError("exponent too large")
+        return _CALC_OPS[type(node.op)](left, right)
     if isinstance(node, ast.UnaryOp) and type(node.op) in _CALC_OPS:
         return _CALC_OPS[type(node.op)](_eval_calc_node(node.operand))
     raise ValueError("unsupported expression")
@@ -511,7 +516,9 @@ def _calculate(expression: str) -> str:
         result = _eval_calc_node(tree.body)
     except ZeroDivisionError:
         return "Division durch null ist nicht definiert."
-    except (SyntaxError, ValueError, TypeError, OverflowError):
+    except OverflowError:
+        return f"Das Ergebnis von '{expression}' ist zu groß, um es auszurechnen."
+    except (SyntaxError, ValueError, TypeError):
         return f"'{expression}' ist kein Rechenausdruck, den ich auswerten kann."
     return f"{expression} = {_format_calc_result(result)}"
 
@@ -949,7 +956,8 @@ def _opencode(task: str) -> str:
     # Zeilenumbrüche sind oben schon weg: ein "\n" im PTY wäre ein Absenden
     # mitten im Satz, OpenCode bekäme nur das erste Fragment.
     panel.push("opencode", task=task[:2000])
-    return f"An OpenCode weitergegeben: {task}"
+    name = opencode_agent.CODE_AGENTS.get(opencode_agent.get_code_agent(), "den Coding-Agenten")
+    return f"An {name} weitergegeben: {task}"
 
 
 # Dateien, die das Betriebssystem beim Öffnen AUSFÜHREN würde. "Zeig mir die
