@@ -142,7 +142,12 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "open_app",
-            "description": "Ein Programm öffnen, z.B. Spotify, Obsidian, Terminal, Rechner, Notizen.",
+            "description": (
+                "Ein Programm öffnen, z.B. Spotify, Obsidian, Terminal, Rechner, "
+                "Notizen. NICHT für OpenCode, Claude Code oder Codex — das sind "
+                "keine eigenständigen Apps, sondern Terminal-Coding-Agenten, "
+                "dafür set_code_agent bzw. das opencode-Tool verwenden."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -327,10 +332,14 @@ TOOL_SCHEMAS = [
                 "Wechselt, WELCHER Coding-Agent Programmieraufträge (opencode-"
                 "Tool) bearbeitet: OpenCode, Claude Code oder Codex ('nimm "
                 "Claude Code zum Programmieren', 'wechsel auf Codex', 'benutz "
-                "wieder OpenCode'). EIN Aufruf genügt: gib direkt den vom "
-                "Nutzer genannten Namen mit. Ist der Agent nicht installiert, "
-                "bekommst du das gesagt statt eines stillen Fehlschlags. Ein "
-                "offenes Terminal startet dabei neu, damit die Wahl greift."
+                "wieder OpenCode', aber genauso 'öffne Claude Code', 'kannst du "
+                "Codex öffnen', 'starte OpenCode' — auch bei 'öffnen' geht es "
+                "hier NICHT um open_app, diese drei sind Terminal-Coding-"
+                "Agenten, keine eigenständigen Apps). EIN Aufruf genügt: gib "
+                "direkt den vom Nutzer genannten Namen mit. Ist der Agent "
+                "nicht installiert, bekommst du das gesagt statt eines stillen "
+                "Fehlschlags. Ein offenes Terminal startet dabei neu, damit "
+                "die Wahl greift."
             ),
             "parameters": {
                 "type": "object",

@@ -463,19 +463,36 @@
     const epoch = audioEpoch;
     audioDraining = true;
     speaking = false;
+    // Wächst mit jeder Lücke ohne echtes Audio, statt bei jeder Iteration neu
+    // "Ähm" zu sagen — ein Tool-Aufruf wie opencode kann viele Sekunden bis
+    // Minuten lang KEINEN Satz liefern (Tool-Runden streamen keinen Text),
+    // und ohne diese Bremse klang das wie ein Endlos-Stottern ("ahm ahm
+    // ahm…") statt einer einzelnen Verzögerung. Erstes "Ähm" sofort, danach
+    // mit wachsendem Abstand, und irgendwann ganz still statt endlos weiter.
+    let fillerCount = 0;
+    let lastFillerAt = 0;
     while (audioQueue.length || streamStillGenerating) {
       // Nach jedem await neu prüfen: Wurde zwischenzeitlich unterbrochen,
       // gehört die Warteschlange einer neueren Antwort — diese Schleife ist
       // dann eine Leiche und darf keine fremden Clips mehr abspielen.
       if (epoch !== audioEpoch) return;
       if (!audioQueue.length) {
-        // Nichts zu sprechen da, aber die Antwort ist noch nicht fertig —
-        // kurz "Ähm" sagen (oder, ohne geladenen Filler, kurz warten) und
-        // dann erneut nachsehen, ob inzwischen echtes Audio nachgekommen ist.
-        await playFiller();
+        const now = Date.now();
+        const gap = fillerCount === 0 ? 0 : Math.min(4000 + fillerCount * 1500, 15000);
+        if (fillerCount < 6 && now - lastFillerAt >= gap) {
+          await playFiller();
+          lastFillerAt = Date.now();
+          fillerCount++;
+        } else {
+          await sleep(400);
+        }
         if (!audioQueue.length && streamStillGenerating) await sleep(250);
         continue;
       }
+      // Echtes Audio ist da — Jarvis redet wieder, die Bremse von oben gilt
+      // nur für die GERADE zu Ende gegangene Lücke.
+      fillerCount = 0;
+      lastFillerAt = 0;
       const blob = audioQueue.shift();
       try { await playClip(blob); } catch (e) { /* nie den Faden abreißen */ }
     }
