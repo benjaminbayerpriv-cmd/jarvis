@@ -683,7 +683,6 @@
         <div class="js-sidebar-top" style="padding:16px 8px 6px;display:flex;flex-direction:column;gap:12px;">
           <div class="js-sidebar-header" style="display:flex;align-items:center;justify-content:space-between;padding-left:8px;">
             <span style="display:flex;align-items:center;gap:8px;">
-              <img src="/static/assets/img/jarvis-logo.png" alt="" style="width:24px;height:24px;border-radius:50%;object-fit:cover;" />
               <span style="font-family:${C.serif};font-size:21px;font-weight:700;color:${C.text};">Jarvis</span>
             </span>
             <div style="display:flex;align-items:center;gap:2px;">
