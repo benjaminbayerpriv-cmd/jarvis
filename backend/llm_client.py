@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import datetime
 import json
 import re
 import subprocess
@@ -19,15 +18,67 @@ class ModelTooLargeError(ModelError):
     """The configured model doesn't fit into this PC's memory; the message
     is meant to be shown/spoken to the user as-is."""
 
-# At low reasoning effort this model occasionally leaks raw <think>/</think>
-# markers into the content field instead of keeping them confined to
-# reasoning_content. Strip them defensively before anything is shown or read
-# aloud.
-_THINK_TAG_RE = re.compile(r"</?think>", re.IGNORECASE)
+# Some local reasoning models (observed with VibeThinker-3B) put their
+# entire chain-of-thought inline as ordinary `content` wrapped in
+# <think>...</think>, instead of a separate reasoning_content field the way
+# e.g. DeepSeek-R1-style APIs do. The previous version of this only deleted
+# the bare tag markers and left the reasoning prose itself fully visible —
+# it showed up verbatim as sidebar chat titles ("<think>The user gave a
+# meta-instruction...") and inside summarized history. This removes the
+# whole block, content included, for any call site that has the complete
+# text in hand at once (non-streaming replies, titles, summaries).
+_THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", re.IGNORECASE | re.DOTALL)
+# A block that never closed (model ran out of tokens mid-thought, or got
+# cut off) — drop everything from the opening tag onward rather than show a
+# half-finished reasoning trace.
+_THINK_UNCLOSED_RE = re.compile(r"<think>.*", re.IGNORECASE | re.DOTALL)
 
 
 def _strip_think_tags(text: str) -> str:
-    return _THINK_TAG_RE.sub("", text).strip()
+    text = _THINK_BLOCK_RE.sub("", text)
+    text = _THINK_UNCLOSED_RE.sub("", text)
+    return text.strip()
+
+
+_THINK_OPEN = "<think>"
+_THINK_CLOSE = "</think>"
+
+
+def _new_think_filter_state() -> dict:
+    return {"in_think": False, "carry": ""}
+
+
+def _filter_think(state: dict, text: str) -> str:
+    """Stateful counterpart to _strip_think_tags for the streaming path,
+    where a <think>...</think> block (and even its individual tags) can
+    arrive split across several chunks, and sentence-popping downstream
+    would otherwise treat un-tagged reasoning prose (the tag itself already
+    consumed by an earlier chunk) as ordinary output. Feed each new chunk
+    of raw model text through this and only ever pass its return value
+    further into the pipeline (buffer/content_acc) — never the raw chunk.
+    `state` is one _new_think_filter_state() dict per streaming turn/retry.
+    """
+    state["carry"] += text
+    out_parts = []
+    while True:
+        marker = _THINK_CLOSE if state["in_think"] else _THINK_OPEN
+        idx = state["carry"].lower().find(marker)
+        if idx == -1:
+            break
+        if not state["in_think"]:
+            out_parts.append(state["carry"][:idx])
+        state["carry"] = state["carry"][idx + len(marker):]
+        state["in_think"] = not state["in_think"]
+    hold_back = len(_THINK_CLOSE) - 1  # enough to catch a tag split across chunks
+    if state["in_think"]:
+        # Reasoning text is never shown; just cap unbounded growth if the
+        # model never closes the block at all.
+        if len(state["carry"]) > 8000:
+            state["carry"] = state["carry"][-hold_back:]
+    elif len(state["carry"]) > hold_back:
+        out_parts.append(state["carry"][:-hold_back])
+        state["carry"] = state["carry"][-hold_back:]
+    return "".join(out_parts)
 
 
 # Abbreviations whose trailing dot does not end a sentence. Single letters
@@ -201,13 +252,13 @@ die eigentliche Frage wirklich beantworten kannst.
 
 Für das aktuelle Datum, die Uhrzeit oder den Wochentag (auch beiläufig,
 z.B. "welches Jahr haben wir" oder eine Berechnung wie "wie alt ist
-jemand, der 1990 geboren ist") nutze IMMER exakt die Angabe aus "Gerade
-jetzt ist es: ..." im Kontextblock der letzten Nachricht — das ist der einzige echte Zeitpunkt, den du
+jemand, der 1990 geboren ist") rufe IMMER zuerst get_time auf und nutze
+exakt dessen Ergebnis — das ist der einzige echte Zeitpunkt, den du
 kennst. Nenne niemals ein Datum oder eine Uhrzeit aus eigenem Training
 (dessen Stichtag in der Vergangenheit liegt) oder aus einer früheren
 Erwähnung weiter oben im Gespräch, selbst wenn seither einige Nachrichten
-vergangen sind — diese Angabe wird bei jeder neuen Nachricht frisch
-aktualisiert, eine ältere Erwähnung im Verlauf ist es nicht.
+vergangen sind — ruf get_time bei jeder neuen Frage danach frisch erneut
+auf, statt dich auf eine ältere Erwähnung im Verlauf zu verlassen.
 
 Bei JEDER Rechnung, egal wie einfach — Addition, Subtraktion, Multiplikation,
 vor allem Division ("acht geteilt durch zwei", "was ist 17 mal 23") — rufst
@@ -362,25 +413,6 @@ def _build_messages(user_message: str, history: list | None, mode: str | None = 
     # of that is folded into exactly one leading system message instead;
     # any system-role entry surviving in `history` (the summary) is merged
     # in here rather than passed through as its own message.
-    # Injected as ground truth on every turn rather than left to the
-    # get_time tool alone: telling the model to "always call get_time
-    # first" (below in _system_prompt) still isn't reliable on its own — a
-    # long conversation that mentioned the time once earlier gave the
-    # model something to anchor on, and it estimated forward from that
-    # instead of calling the tool again (observed live: reported 13:45
-    # against an actual 14:12, 27 minutes stale). A fact stated fresh
-    # right here can't go stale the same way; get_time still exists for
-    # when the model wants to name it as an explicit action.
-    now = datetime.datetime.now().strftime("%A, %d.%m.%Y %H:%M")
-    # Nur die Uhrzeit hängt vorn an der letzten Nutzer-Nachricht (unten): sie
-    # ändert sich im Minutentakt, und LM Studio nutzt seinen Prompt-Cache nur,
-    # solange sich ausschließlich die letzte Nachricht ändert — stünde sie in
-    # der System-Nachricht, würde bei jeder neuen Minute alles davor
-    # (System-Prompt + Tools, gemessen ~5-7s statt ~0,2s) neu berechnet.
-    # Gedächtnis-Treffer und Ziel-Hinweis bleiben dagegen in der System-
-    # Nachricht: sie sind meist leer (dann bleibt der Cache intakt), und
-    # gemessen stört ein Gedächtnis-Block VOR der Nutzer-Nachricht die
-    # Tool-Aufrufe.
     system_parts = [_system_prompt(is_speech)]
     if mode == "code":
         system_parts.append(_CODE_MODE_PROMPT)
@@ -401,11 +433,7 @@ def _build_messages(user_message: str, history: list | None, mode: str | None = 
 
     messages = [{"role": "system", "content": "\n\n".join(system_parts)}]
     messages.extend(conversation)
-    # Bewusst OHNE erklärendes Etikett ("Kontext für dich, nicht vom Nutzer
-    # gesagt" o.ä.): gemessen ließ genau so ein Etikett das Modell Tools
-    # deutlich seltener aufrufen (9/18 statt 15-17/18 auf denselben
-    # Aufträgen) — eine schlichte Zeile vor der Nachricht stört nicht.
-    messages.append({"role": "user", "content": _user_content(f"Gerade jetzt ist es: {now}.\n\n{user_message}", images)})
+    messages.append({"role": "user", "content": _user_content(user_message, images)})
     return messages
 
 
@@ -605,7 +633,7 @@ def summarize_history(history: list) -> str:
             data = resp.json()
             if not data.get("choices"):
                 raise ModelError(data.get("error", {}).get("message", "Das Modell lieferte keine Antwort."))
-            return data["choices"][0]["message"].get("content", "").strip()
+            return _strip_think_tags(data["choices"][0]["message"].get("content", ""))
         except (requests.RequestException, ModelError) as exc:
             print(f"[model] {base_url} nicht verfügbar, versuche nächstes Ziel: {exc}")
             last_exc = exc
@@ -641,7 +669,7 @@ def generate_title(user_text: str, assistant_text: str) -> str:
             data = resp.json()
             if not data.get("choices"):
                 continue
-            title = data["choices"][0]["message"].get("content", "").strip()
+            title = _strip_think_tags(data["choices"][0]["message"].get("content", ""))
             return title.strip("\"'").strip()[:60]
         except (requests.RequestException, ModelError) as exc:
             print(f"[model] {base_url} nicht verfügbar, versuche nächstes Ziel: {exc}")
@@ -1593,6 +1621,7 @@ def _stream_reply_impl(user_message: str, history: list | None = None, turn_id: 
             content_acc = ""
             tool_calls_acc = {}
             pending_claims = []
+            think_state = _new_think_filter_state()
             # None = can't tell yet, True = leaked call (hold back speech),
             # False = ordinary prose (stream it), "corrupt" = scrap + retry.
             # This is decided once from the first characters — it catches a
@@ -1617,9 +1646,14 @@ def _stream_reply_impl(user_message: str, history: list | None = None, turn_id: 
                 choice = chunk["choices"][0]
                 delta = choice.get("delta", {})
 
-                if delta.get("content"):
-                    buffer += delta["content"]
-                    content_acc += delta["content"]
+                # Reasoning text (<think>...</think>) is filtered out right
+                # here, before anything downstream ever sees it — see
+                # _filter_think for why that has to happen at this exact
+                # point rather than later on individual sentences.
+                visible = _filter_think(think_state, delta["content"]) if delta.get("content") else ""
+                if visible:
+                    buffer += visible
+                    content_acc += visible
 
                     if suspect is None:
                         suspect = _call_prefix_verdict(content_acc)
@@ -1629,7 +1663,7 @@ def _stream_reply_impl(user_message: str, history: list | None = None, turn_id: 
 
                     if suspect is False:
                         if trailing_suspect:
-                            trailing_suspect_text += delta["content"]
+                            trailing_suspect_text += visible
                         else:
                             sentences, buffer = _pop_complete_sentences(buffer)
                             for s in sentences:
@@ -1688,6 +1722,16 @@ def _stream_reply_impl(user_message: str, history: list | None = None, turn_id: 
                         entry["name"] += fn["name"]
                     if fn.get("arguments"):
                         entry["arguments"] += fn["arguments"]
+
+            # _filter_think always withholds a short tail (long enough to
+            # catch a </think> split across two chunks) — once the stream is
+            # actually done, that tail can never turn out to be a tag after
+            # all, so release it now instead of silently swallowing the last
+            # few characters of every reply.
+            if not think_state["in_think"] and think_state["carry"]:
+                buffer += think_state["carry"]
+                content_acc += think_state["carry"]
+                think_state["carry"] = ""
 
             # The tail of the stream often never forms a "complete" sentence
             # (no trailing punctuation+space before the stream just ends) —
