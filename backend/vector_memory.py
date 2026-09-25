@@ -113,7 +113,7 @@ def index_entry(source: str, text: str) -> None:
 
 # Frontmatter/heading noise that would otherwise get embedded as if it
 # were real content — skipped rather than indexed.
-_SKIP_LINE_RE = re.compile(r"^\s*(---|#|type:|updated:|created:|date:|tags:|imported_from:)")
+NON_CONTENT_LINE_RE = re.compile(r"^\s*(---|#|type:|updated:|created:|date:|tags:|imported_from:)")
 
 
 def reindex_all() -> None:
@@ -142,7 +142,7 @@ def reindex_all() -> None:
             continue
         for raw_line in lines:
             line = raw_line.strip()
-            if not line or _SKIP_LINE_RE.match(line):
+            if not line or NON_CONTENT_LINE_RE.match(line):
                 continue
             if line_id(source, line) in existing_ids:
                 continue
@@ -164,7 +164,11 @@ def semantic_context_for(query: str, limit: int = 4) -> str | None:
     with _lock:
         cache = _load()
     if not cache:
-        return ""
+        # None, not "": an empty index also happens when the embedding model
+        # was unavailable while notes were written — "" would tell
+        # memory.context_for "searched, nothing relevant" and skip its
+        # keyword fallback, so those notes could never be found at all.
+        return None
 
     query_vector = embed(query, task="query")
     if query_vector is None:

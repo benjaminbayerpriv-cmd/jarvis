@@ -487,6 +487,11 @@ def chat_stream(req: ChatRequest):
                     # Synthese fehl, ist trotzdem der Text da (nie den Satz
                     # verschlucken, nur den Ton).
                     yield json.dumps({"type": "sentence", "text": text, "audio": ""}) + "\n"
+                    # Outside speech mode the frontend throws audio away — and
+                    # synthesizing it here holds up the next sentence by the
+                    # full TTS time, so typed chats got slower for nothing.
+                    if not req.is_speech:
+                        continue
                     try:
                         # Ein langer Satz wird an seiner ersten Kommapause in
                         # zwei Sprech-Häppchen geteilt (siehe tts.split_for_
@@ -529,11 +534,13 @@ def chat_stream(req: ChatRequest):
                 # buttons instead of the user being stuck with an inert
                 # message every single turn until they dig into Settings.
                 yield json.dumps({"type": "hardware_block", "model": config.LM_STUDIO_MODEL}) + "\n"
-            try:
-                audio_b64 = base64.b64encode(tts.synthesize(fallback)).decode("ascii")
-                yield json.dumps({"type": "sentence", "text": fallback, "audio": audio_b64}) + "\n"
-            except requests.RequestException:
-                yield json.dumps({"type": "sentence", "text": fallback, "audio": ""}) + "\n"
+            audio_b64 = ""
+            if req.is_speech:
+                try:
+                    audio_b64 = base64.b64encode(tts.synthesize(fallback)).decode("ascii")
+                except Exception as tts_exc:  # noqa: BLE001 - the text must still arrive
+                    print(f"[tts] Sprachausgabe fehlgeschlagen: {tts_exc}")
+            yield json.dumps({"type": "sentence", "text": fallback, "audio": audio_b64}) + "\n"
             yield json.dumps({"type": "done", "full_text": fallback, "conversation_id": conv_id}) + "\n"
 
     return StreamingResponse(generate(), media_type="application/x-ndjson")
@@ -985,12 +992,12 @@ def select_model(req: SelectModelRequest):
     # Ein echtes LM-Studio-Modell ausgewählt: explizit auf "lmstudio" pinnen,
     # sonst würde ein weiterhin konfigurierter DeepSeek-Key diese Wahl im
     # nächsten Request wieder überstimmen (siehe _request_targets).
-    config.set_provider("lmstudio")
     previous_model = config.LM_STUDIO_MODEL
     fit = hardware.check_model(req.model, freeable_ids=[previous_model])
     if not fit["fits"] and not req.force:
         print(f"[model] {fit['message']}")
         return {"ok": False, "error": fit["message"], "current": previous_model, "model": req.model}
+    config.set_provider("lmstudio")
     # Fits only once the previous model is out of memory: unload it BEFORE
     # loading the new one. The usual load-then-unload order (below) would
     # briefly hold both, which is exactly the overload this check prevents.

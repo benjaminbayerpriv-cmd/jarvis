@@ -615,7 +615,15 @@ def ensure_provider_config(models: list[dict], model_id: str) -> dict:
     """
     cfg = {}
     if OPENCODE_CONFIG.exists():
-        cfg = json.loads(OPENCODE_CONFIG.read_text(encoding="utf-8"))
+        try:
+            cfg = json.loads(OPENCODE_CONFIG.read_text(encoding="utf-8"))
+        except ValueError as exc:
+            # opencode itself accepts comments/trailing commas in this file;
+            # json.loads doesn't. Overwriting would destroy the user's config,
+            # and raising broke the Code-Tab (stuck on "verbinde") — so leave
+            # the file alone and let opencode start with what it has.
+            print(f"[code] {OPENCODE_CONFIG} ist kein reines JSON, LM-Studio-Provider nicht eingetragen: {exc}")
+            return {}
     # Only back up once, so repeated UI opens don't churn .bak files.
     bak = pathlib.Path(str(OPENCODE_CONFIG) + ".jarvis.bak")
     if not bak.exists():
@@ -685,14 +693,25 @@ class TtyHandle:
     def write(self, data: bytes) -> None:
         """Tastendruck-/Byte-Strom in den Prozess stdin."""
         if self.platform == "windows":
-            self.winpty.write(data.decode("utf-8", errors="replace"))
+            # pywinpty meldet einen geschlossenen PTY als EOFError, der
+            # POSIX-Pfad (os.write) als OSError — alle Aufrufer fangen nur
+            # OSError. Ohne diese Angleichung riss ein Tastendruck nach dem
+            # Ende der TUI den ganzen WebSocket-Handler mit ("Exception in
+            # ASGI application: EOFError: Pty is closed", live im Log).
+            try:
+                self.winpty.write(data.decode("utf-8", errors="replace"))
+            except EOFError as exc:
+                raise OSError(str(exc)) from exc
             return
         os.write(self.master, data)
 
     def resize(self, cols: int, rows: int) -> None:
         """Teile dem Terminal die neue Größe mit und nudge zum Reflow."""
         if self.platform == "windows":
-            self.winpty.setwinsize(rows, cols)
+            try:
+                self.winpty.setwinsize(rows, cols)
+            except EOFError:
+                pass
             return
         try:
             fcntl.ioctl(self.master, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))

@@ -5,7 +5,6 @@ from __future__ import annotations
 import datetime as dt
 import re
 import threading
-from pathlib import Path
 
 from . import config
 
@@ -131,6 +130,8 @@ def context_for(query: str, limit: int = 4) -> str:
     for path in (PROFILE, TASKS, NOTES, *KNOWLEDGE.glob("*.md")):
         try:
             for line in path.read_text(encoding="utf-8").splitlines():
+                if not line.strip() or vector_memory.NON_CONTENT_LINE_RE.match(line):
+                    continue
                 if any(word in line.lower() for word in words):
                     matches.append(f"[[{path.relative_to(config.ROOT_DIR).with_suffix('')}]] {line.strip()}")
                     if len(matches) >= limit:
