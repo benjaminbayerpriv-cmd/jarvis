@@ -128,8 +128,8 @@ def _pop_complete_sentences(buffer: str) -> tuple[list[str], str]:
 # otherwise Jarvis confidently claims to be DeepSeek while every reply is
 # secretly coming from the local model. Updated in _post_chat/_stream_chat
 # right after a request actually succeeds.
-_active_model_name = config.DEEPSEEK_MODEL if config.DEEPSEEK_API_KEY else config.LM_STUDIO_MODEL
-_active_model_provider = "DeepSeek" if config.DEEPSEEK_API_KEY else "ein lokales Modell über LM Studio"
+_active_model_name = config.DEEPSEEK_MODEL if (config.DEEPSEEK_API_KEY and config.DEEPSEEK_ENABLED) else config.LM_STUDIO_MODEL
+_active_model_provider = "DeepSeek" if (config.DEEPSEEK_API_KEY and config.DEEPSEEK_ENABLED) else "ein lokales Modell über LM Studio"
 
 
 def _note_active_target(base_url: str, model: str) -> None:
@@ -428,7 +428,7 @@ def _request_targets() -> list[tuple[str, str, dict, dict]]:
     that LM Studio expects.
     """
     deepseek_target = None
-    if config.DEEPSEEK_API_KEY:
+    if config.DEEPSEEK_API_KEY and config.DEEPSEEK_ENABLED:
         headers = {"Authorization": f"Bearer {config.DEEPSEEK_API_KEY}"}
         deepseek_target = (config.DEEPSEEK_BASE_URL, config.DEEPSEEK_MODEL, headers, {})
 
@@ -674,7 +674,7 @@ def list_models() -> list[str]:
         # LM Studio unreachable must not hide DeepSeek from the picker too —
         # DeepSeek can be perfectly healthy while LM Studio is down.
         models = []
-    if config.DEEPSEEK_API_KEY:
+    if config.DEEPSEEK_API_KEY and config.DEEPSEEK_ENABLED:
         models.insert(0, f"{DEEPSEEK_MODEL_ID_PREFIX}{config.DEEPSEEK_MODEL}")
     return models
 
@@ -818,8 +818,12 @@ def eject_model(model_id: str) -> None:
 
 
 def model_health() -> tuple[bool, str]:
-    """Report whether at least one text model in the fallback chain is reachable."""
-    if config.DEEPSEEK_API_KEY:
+    """Report whether at least one text model in the fallback chain is
+    reachable. Skips DeepSeek entirely (no network call at all, not even the
+    free /models listing) when config.DEEPSEEK_ENABLED is off — the whole
+    point of the toggle is that nothing gets sent to DeepSeek while it's
+    switched off, not just that its reply gets discarded."""
+    if config.DEEPSEEK_API_KEY and config.DEEPSEEK_ENABLED:
         try:
             resp = requests.get(
                 f"{config.DEEPSEEK_BASE_URL}/models",
@@ -844,7 +848,7 @@ def model_health() -> tuple[bool, str]:
     # actually confirming DeepSeek failed above, so the self-identification
     # must point at the model really answering, not the configured-but-dead one.
     _note_active_target(config.LM_STUDIO_BASE_URL, config.LM_STUDIO_MODEL)
-    suffix = " (DeepSeek-Fallback)" if config.DEEPSEEK_API_KEY else ""
+    suffix = " (DeepSeek-Fallback)" if config.DEEPSEEK_API_KEY and config.DEEPSEEK_ENABLED else ""
     return True, f"Modell bereit: {config.LM_STUDIO_MODEL}{suffix}"
 
 
