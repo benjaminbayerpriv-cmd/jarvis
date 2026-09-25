@@ -491,16 +491,16 @@
     resumeListening();
   }
 
-  // Stop-Button: unterbricht die laufende Antwort UND die Sprachausgabe.
-  function stopSpeech() {
-    turnAborted = true;
+  // Nur die Sprachausgabe abwürgen (Warteschlange + gerade laufender Clip),
+  // ohne eine eventuell noch laufende Text-Generierung abzubrechen — von
+  // stopSpeech() UND von exitSpeech() genutzt: Sprachmodus verlassen soll
+  // Jarvis sofort verstummen lassen, auch wenn die Antwort selbst noch
+  // fertig geschrieben werden darf.
+  function silenceAudio() {
     // Generation hochzählen: entwertet eine noch laufende drainAudioQueue-
     // Schleife, damit sie nicht gleich die Clips der NÄCHSTEN Frage
     // mitabspielt (siehe audioEpoch).
     audioEpoch++;
-    try { if (abortController) abortController.abort(); } catch (e) {}
-    try { if (activeReader) activeReader.cancel(); } catch (e) {}
-    streamStillGenerating = false;
     audioQueue.length = 0;
     audioDraining = false;
     if (currentAudioSrc) { try { currentAudioSrc.disconnect(); } catch (e) {} currentAudioSrc = null; }
@@ -508,6 +508,15 @@
     outputAnalyser = null;
     speaking = false;
     speakingLevel = 0;
+  }
+
+  // Stop-Button: unterbricht die laufende Antwort UND die Sprachausgabe.
+  function stopSpeech() {
+    turnAborted = true;
+    try { if (abortController) abortController.abort(); } catch (e) {}
+    try { if (activeReader) activeReader.cancel(); } catch (e) {}
+    streamStillGenerating = false;
+    silenceAudio();
     if (busy) setBusy(false);
     if (currentTurnId) { fetch('/chat/cancel', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ turn_id: currentTurnId }) }).catch(() => {}); }
     if (speechMode && !busy) setSpeechStatus('Bereit');
@@ -2463,7 +2472,11 @@
       }).catch(() => {});
     }
     if (healthy) setupPrefilled = false;
-    if (sendBtn) sendBtn.disabled = !healthy || busy;
+    // NICHT || busy: sobald Jarvis generiert, ist dies der Stopp-Button
+    // (siehe setBusy) und muss klickbar bleiben — busy hier mit reinzunehmen
+    // hat ihn bei jedem periodischen Health-Check (refreshModelHealth)
+    // deaktiviert, sodass Stopp während der Generierung nie ausgelöst wurde.
+    if (sendBtn) sendBtn.disabled = !healthy;
     if (speechBtn) speechBtn.disabled = !healthy;
     if (noteBtn) noteBtn.disabled = !healthy;
     if (!healthy && detail) console.warn('[jarvis] Kein Modell erreichbar:', detail);
@@ -4388,6 +4401,7 @@
   }
   function exitSpeech() {
     speechMode = false;
+    silenceAudio();
     clearViz();
     closeSpeechTerminal();
     stopListening();
