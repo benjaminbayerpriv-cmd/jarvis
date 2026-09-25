@@ -179,6 +179,25 @@
   //    statt stillschweigend Datenmüll in den Prompt zu kippen).
   const ATTACH_MAX_CHARS = 20000;
   let pendingImages = [];  // {name, image: Data-URL} der aktuell angehängten Bilder, siehe sendMessage
+  // Ungesendeter Entwurf pro Chat: ohne das wanderte getippter (aber nicht
+  // abgeschickter) Text beim Wechsel zu einem anderen Chat einfach mit ins
+  // neue Fenster, weil composerInput ein einziges, chat-unabhängiges Element
+  // ist. Beim Verlassen wird der aktuelle Stand hier abgelegt, beim Öffnen
+  // eines Chats der zu IHM gehörende Entwurf (oder leer) wiederhergestellt.
+  const composerDrafts = new Map();
+  function saveComposerDraft(conversationId) {
+    if (!composerInput) return;
+    const text = composerInput.innerText;
+    if (text && text.trim()) composerDrafts.set(conversationId, text);
+    else composerDrafts.delete(conversationId);
+  }
+  function restoreComposerDraft(conversationId) {
+    if (!composerInput) return;
+    const draft = composerDrafts.get(conversationId) || '';
+    composerInput.innerText = draft;
+    composerInput.classList.toggle('is-empty', draft.trim().length === 0);
+    updateSendSlot();
+  }
   function canSendNow() {
     const hasText = !!(composerInput && composerInput.innerText.trim());
     return hasText || pendingImages.length > 0;
@@ -280,6 +299,30 @@
         reader.readAsDataURL(blob);
       }, 'image/jpeg', 0.9);
     });
+  }
+  // Kleine, separat gespeicherte Miniatur (nicht das volle 1568px-Bild, das
+  // an das Modell geht) — ohne das verschwand ein angehängtes Bild spurlos
+  // aus dem Verlauf, sobald man den Chat wechselte und zurückkam: die
+  // Konversationsdatei speichert bisher nur den Text jeder Nachricht, kein
+  // Bild. Klein genug (96px, JPEG-Qualität .6), um jede Konversationsdatei
+  // nicht spürbar aufzublähen, aber groß genug, um zu erkennen, was man
+  // geschickt hat.
+  const THUMBNAIL_MAX_DIM = 96;
+  async function makeThumbnail(dataUrl) {
+    try {
+      const blob = await (await fetch(dataUrl)).blob();
+      const bitmap = await createImageBitmap(blob);
+      const scale = THUMBNAIL_MAX_DIM / Math.max(bitmap.width, bitmap.height);
+      const w = Math.max(1, Math.round(bitmap.width * Math.min(1, scale)));
+      const h = Math.max(1, Math.round(bitmap.height * Math.min(1, scale)));
+      const canvas = document.createElement('canvas');
+      canvas.width = w; canvas.height = h;
+      canvas.getContext('2d').drawImage(bitmap, 0, 0, w, h);
+      bitmap.close();
+      return canvas.toDataURL('image/jpeg', 0.6);
+    } catch (e) {
+      return null;
+    }
   }
   // Jede Datei wird angehängt (Chip außerhalb der Nachricht, wie bei anderen
   // KI-Chats) — nur WAS an den Text angehängt wird, wenn tatsächlich gesendet
@@ -591,7 +634,7 @@
   let codeSessionId = null;
 
   // Projects-Ansicht Anker
-  let projectsViewEl = null, projectsGridEl = null, projectsPinnedGridEl = null, projectsSearchRowEl = null, projectsSearchInputEl = null;
+  let projectsViewEl = null, projectsGridEl = null, projectsSearchRowEl = null, projectsSearchInputEl = null;
   let projectsList = [], projectsSortMode = 'newest', projectsSearchOpen = false;
   let projectCardMenuTargetId = null, editingProjectId = null;
   let currentProjectId = null;  // getaggt an die NÄCHSTE neu angelegte Konversation, siehe sendMessage
@@ -621,6 +664,17 @@
   // lief also weiterhin die unzuverlässige Variante.
   const useLocalWhisper = true;
   let pcmNode = null, pcmSampleRate = 48000, pcmRing = [], utterancePCM = null, utteranceStartedAt = 0, fallbackSilenceStreak = 0;
+  // Getrennt von RECORD_SILENCE_SUSTAIN (Sprachmodus, siehe unten): Diktieren
+  // landet nur im Textfeld, wo eine zu früh abgeschnittene Äußerung bloß ein
+  // zusätzliches Wort-Häppchen bedeutet, das noch vor dem Absenden korrigiert
+  // werden kann — anders als im Sprachmodus, wo dieselbe Äußerung sofort an
+  // Jarvis geschickt wird und ein zu früher Schnitt eine unfertige Frage
+  // auslöst. War früher 28 (~2,24s), passend zur alten CPU-Whisper-Zeit von
+  // ~2,7s pro Äußerung, wo eine kürzere Wartezeit ohnehin nichts gebracht
+  // hätte. Mit GPU-Whisper (~0,1-0,3s, siehe backend/stt.py) ist diese feste
+  // Wartezeit jetzt der Großteil der spürbaren Verzögerung — 10 Ticks
+  // (~0,8s) ist ein gängiger Wert für Sprachassistenten.
+  const DICTATE_SILENCE_SUSTAIN = 10;
   const PCM_BUFFER_SIZE = 4096, PREROLL_MS = 1500, RECORD_SILENCE_SUSTAIN = 28, RECORD_MIN_MS = 300;
   let recognition = null, recognizing = false;
 
@@ -768,11 +822,9 @@
             <button class="js-customize js-navrow" title="Bald verfügbar" style="display:flex;align-items:center;gap:8px;height:40px;padding:0 8px;background:none;border:none;border-radius:8px;color:${C.textDim};font-size:14px;cursor:default;text-align:left;opacity:.55;">${jsIcon('0xe100', 24)}<span>Anpassen</span></button>
           </div>
           <div class="js-projects-pin-section">
-            <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 8px 4px;">
+            <div style="display:flex;align-items:center;padding:8px 8px 4px;">
               <span class="js-projects-pin-title" style="font-size:14px;color:${C.textSoft};cursor:pointer;">Projekte</span>
-              <button class="js-projects-pin-add" title="Projekt erstellen" style="background:none;border:none;color:${C.textDim};cursor:pointer;display:inline-flex;padding:3px;">${ICONS.plus}</button>
             </div>
-            <div class="js-projects-pin-hint" style="display:flex;align-items:center;gap:10px;padding:7px 10px;color:${C.textDim};font-size:14px;line-height:1.3;">${jsIcon('0xe0bd', 20)}<span>Projekte anheften, um sie hier zu behalten</span></div>
           </div>
           <button class="js-pinned-toggle" style="display:none;align-items:center;gap:4px;padding:2px 8px 4px;background:none;border:none;font-size:13px;color:${C.textDim};cursor:pointer;font-family:${C.font};">
             <span>Angeheftet</span>
@@ -826,15 +878,9 @@
           <div class="js-projects-search-row" style="display:none;margin-bottom:20px;">
             <input class="js-projects-search-input" type="text" placeholder="Projekte durchsuchen…" style="width:100%;max-width:360px;padding:9px 14px;background:${C.bgHover};border:1px solid ${C.border};border-radius:10px;color:${C.text};font-size:13px;font-family:${C.font};outline:none;" />
           </div>
-          <button class="js-projects-pinned-toggle" style="display:none;align-items:center;gap:4px;padding:0 0 10px;background:none;border:none;font-size:13px;color:${C.textDim};cursor:pointer;font-family:${C.font};">
-            <span>Angeheftet</span>
-            <span class="js-projects-pinned-chevron" style="display:inline-flex;transition:transform .15s;">${ICONS.chevronDown}</span>
-          </button>
-          <div class="js-projects-pinned-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:16px;margin-bottom:24px;"></div>
           <div class="js-projects-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:16px;"></div>
           <div class="js-project-card-menu" style="display:none;position:absolute;width:170px;background:${C.bgSurface3};border:1px solid ${C.border};border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.4);overflow:hidden;z-index:5;">
             <button class="js-pcm-rename" style="display:block;width:100%;text-align:left;padding:9px 14px;background:none;border:none;color:${C.text};font-size:13px;cursor:pointer;font-family:${C.font};">Umbenennen</button>
-            <button class="js-pcm-pin" style="display:block;width:100%;text-align:left;padding:9px 14px;background:none;border:none;color:${C.text};font-size:13px;cursor:pointer;font-family:${C.font};">Anheften</button>
             <button class="js-pcm-delete" style="display:block;width:100%;text-align:left;padding:9px 14px;background:none;border:none;color:#e5735f;font-size:13px;cursor:pointer;font-family:${C.font};">Löschen</button>
           </div>
           <div class="js-projects-sort-menu" style="display:none;position:absolute;width:190px;background:${C.bgSurface3};border:1px solid ${C.border};border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.4);overflow:hidden;z-index:5;">
@@ -1096,7 +1142,6 @@
     projectsViewEl = $('.js-projects-view', uiEl);
     settingsSheetEl = $('.js-settings-view', uiEl);
     projectsGridEl = $('.js-projects-grid', uiEl);
-    projectsPinnedGridEl = $('.js-projects-pinned-grid', uiEl);
     projectsSearchRowEl = $('.js-projects-search-row', uiEl);
     projectsSearchInputEl = $('.js-projects-search-input', uiEl);
     projectDetailViewEl = $('.js-project-detail-view', uiEl);
@@ -1165,18 +1210,23 @@
       }
       .js-sidebar button:focus-visible, .js-main button:focus-visible { outline:2px solid ${C.accent}; outline-offset:2px; }
       .js-editor:empty::before, .js-editor.is-empty::before { content:attr(data-placeholder); color:${C.textDim}; pointer-events:none; }
+      /* Diktat-Live-Vorschau: das bestätigte Stück bleibt fest stehen (kein
+         Neuaufbau bei jedem Zwischenschritt), nur dieses Segment wird per
+         textContent aktualisiert und blendet sich sanft ein — kein Flackern
+         des ganzen Felds bei jeder Aktualisierung. */
+      .js-dictate-interim { color:${C.textDim}; transition:opacity .12s ease-out; }
       .js-editor:focus::before { opacity:.7; }
       .js-setup-test-lm:hover, .js-setup-test-api:hover { border-color:${C.borderStrong}; color:${C.text}; }
       .js-setup-activate-lm:disabled, .js-setup-activate-api:disabled { cursor:default; }
       .js-side-toggle svg, .js-side-toggle-float svg, .js-new svg, .js-projects svg, .js-upload svg, .js-note svg, .js-speech svg, .js-settings svg, .js-navrow svg { width:16px; height:16px; display:block; flex:0 0 auto; }
       .js-side-toggle:hover, .js-side-toggle-float:hover { background:${C.bgHover}; color:${C.text}; }
-      .js-search-toggle svg, .js-projects-pin-add svg, .js-chats-sort svg, .js-projects-pin-hint svg { width:15px; height:15px; display:block; flex:0 0 auto; }
-      .js-search-toggle:hover, .js-projects-pin-add:hover, .js-chats-sort:hover { background:${C.bgHover}; color:${C.text}; border-radius:7px; }
+      .js-search-toggle svg, .js-chats-sort svg { width:15px; height:15px; display:block; flex:0 0 auto; }
+      .js-search-toggle:hover, .js-chats-sort:hover { background:${C.bgHover}; color:${C.text}; border-radius:7px; }
       .js-nav-back svg, .js-nav-forward svg { width:15px; height:15px; display:block; flex:0 0 auto; }
       .js-nav-back:hover:not(:disabled), .js-nav-forward:hover:not(:disabled) { background:${C.bgHover}; color:${C.text}; }
       .js-nav-back:disabled, .js-nav-forward:disabled { opacity:.35; cursor:default; }
       .js-projects-search-btn svg, .js-projects-sort-btn svg { width:18px; height:18px; display:block; }
-      .js-project-menu-btn svg, .js-project-pin-btn svg { width:16px; height:16px; display:block; }
+      .js-project-menu-btn svg { width:16px; height:16px; display:block; }
       .js-upload svg, .js-note svg, .js-settings svg { width:18px; height:18px; }
       .js-speech svg, .js-send svg { width:18px; height:18px; display:block; }
       .js-sp-mute svg, .js-sp-stop svg, .js-sp-chat svg, .js-sp-send svg { width:20px; height:20px; display:block; }
@@ -1191,15 +1241,15 @@
       .js-speech.on { background:${C.accent} !important; border-color:${C.accent} !important; color:#fff !important; }
       .js-speech.on svg { animation:js-speech-pulse 1.3s ease-in-out infinite; }
       @keyframes js-speech-pulse { 0%,100% { transform:scale(1); } 50% { transform:scale(1.14); } }
-      .js-chat-item { position:relative; display:flex; align-items:center; gap:9px; padding:7px 54px 7px 10px; border-radius:8px; cursor:pointer; font-size:14px; color:${C.textSoft}; }
+      .js-chat-item { position:relative; display:flex; align-items:center; gap:9px; padding:7px 72px 7px 10px; border-radius:8px; cursor:pointer; font-size:14px; color:${C.textSoft}; }
       .js-chat-item:hover { background:${C.bgHover}; color:${C.text}; }
       .js-chat-item.selected { background:${C.bgHover}; color:${C.text}; }
       .js-navrow { background:transparent; }
       .js-navrow.active { background:${C.bgHover}; color:${C.text}; }
       .js-chat-item .js-ico { flex:0 0 auto; display:inline-flex; align-items:center; justify-content:center; width:15px; height:15px; color:${C.textDim}; }
       .js-chat-item .js-ico svg { width:15px; height:15px; display:block; }
-      .js-chats-toggle .js-chats-chevron svg, .js-pinned-toggle .js-pinned-chevron svg, .js-projects-pinned-toggle .js-projects-pinned-chevron svg { width:13px; height:13px; display:block; }
-      .js-chats-toggle.is-collapsed .js-chats-chevron, .js-pinned-toggle.is-collapsed .js-pinned-chevron, .js-projects-pinned-toggle.is-collapsed .js-projects-pinned-chevron { transform:rotate(-90deg); }
+      .js-chats-toggle .js-chats-chevron svg, .js-pinned-toggle .js-pinned-chevron svg { width:13px; height:13px; display:block; }
+      .js-chats-toggle.is-collapsed .js-chats-chevron, .js-pinned-toggle.is-collapsed .js-pinned-chevron { transform:rotate(-90deg); }
       .js-pinned-chats.is-collapsed { display:none !important; }
       button[class*="js-settings-toggle-"] span[class*="js-settings-chevron-"] svg { width:13px; height:13px; display:block; }
       button[class*="js-settings-toggle-"] span[class*="js-settings-chevron-"] { transform:rotate(-90deg); }
@@ -1210,8 +1260,13 @@
          nur der Inhalt wird versteckt. */
       .js-chats.is-collapsed > * { display:none !important; }
       .js-chat-item .js-txt { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; flex:1; }
-      .js-chatitem-menu-btn { position:absolute; right:6px; top:50%; transform:translateY(-50%); opacity:0; transition:opacity .1s; background:none; border:none; color:${C.textSoft}; cursor:pointer; padding:2px; display:inline-flex; border-radius:6px; }
-      .js-chatitem-rename-btn { position:absolute; right:28px; top:50%; transform:translateY(-50%); opacity:0; transition:opacity .1s; background:none; border:none; color:${C.textSoft}; cursor:pointer; padding:2px; display:inline-flex; border-radius:6px; }
+      /* Trefferfläche bewusst größer als das sichtbare Icon (24px -> 32px):
+         ein Klick, der knapp daneben landet, fiel sonst auf den Chat-Eintrag
+         darunter durch und öffnete den Chat statt das Menü zu öffnen — live
+         gemessen war die Icon-Box selbst zwar exakt zentriert, aber mit nur
+         24×24px ein knappes Ziel. */
+      .js-chatitem-menu-btn { position:absolute; right:2px; top:50%; transform:translateY(-50%); opacity:0; transition:opacity .1s; background:none; border:none; color:${C.textSoft}; cursor:pointer; padding:6px; display:inline-flex; align-items:center; justify-content:center; border-radius:6px; }
+      .js-chatitem-rename-btn { position:absolute; right:36px; top:50%; transform:translateY(-50%); opacity:0; transition:opacity .1s; background:none; border:none; color:${C.textSoft}; cursor:pointer; padding:6px; display:inline-flex; align-items:center; justify-content:center; border-radius:6px; }
       .js-chat-item:hover .js-chatitem-menu-btn, .js-chatitem-menu-btn.is-open,
       .js-chat-item:hover .js-chatitem-rename-btn { opacity:1; }
       .js-chatitem-menu-btn:hover, .js-chatitem-rename-btn:hover { background:${C.border}; }
@@ -1269,7 +1324,7 @@
       .js-project-card { position:relative; cursor:pointer; }
       .js-project-menu-btn { opacity:0; transition:opacity .1s; }
       .js-project-card:hover .js-project-menu-btn, .js-project-menu-btn.is-open { opacity:1; }
-      .js-pcm-rename:hover, .js-pcm-pin:hover, .js-pcm-delete:hover, .js-psm-opt:hover { background:${C.bgHover}; }
+      .js-pcm-rename:hover, .js-pcm-delete:hover, .js-psm-opt:hover { background:${C.bgHover}; }
       .js-psm-opt.active { color:${C.accent} !important; }
       .js-pd-back:hover { text-decoration:underline; }
       .js-pd-editor:empty::before { content:attr(data-placeholder); color:${C.textDim}; pointer-events:none; }
@@ -1388,6 +1443,7 @@
     }
     if (codeReconnectTimer) { clearTimeout(codeReconnectTimer); codeReconnectTimer = null; }
     if (currentConversationId) localStorage.setItem(modeKey(activeMode), currentConversationId);
+    saveComposerDraft(currentConversationId);
     activeMode = mode;
     // Nur INNERHALB einer laufenden Sitzung wird beim Hin-und-Herwechseln
     // zwischen Chat/Code die zuletzt in diesem Modus offene Unterhaltung
@@ -1409,7 +1465,7 @@
     const nextId = saved && isModeConv(mode, saved) ? saved : null;
     if (nextId === currentConversationId) { loadConversationList(); navRecord(); return; }
     currentConversationId = nextId;
-    renderConversation(nextId);
+    renderConversation(nextId).then(() => restoreComposerDraft(nextId));
     loadConversationList();
     navRecord();
   }
@@ -1431,7 +1487,8 @@
       } catch (e) { turns = []; }
     }
     for (const t of turns) {
-      addThreadTurn(t.role === 'you' ? 'you' : 'jarvis', t.text);
+      const attachments = (t.images || []).map((img) => ({ image: img }));
+      addThreadTurn(t.role === 'you' ? 'you' : 'jarvis', t.text, attachments);
       history.push({ role: t.role === 'you' ? 'user' : 'assistant', content: t.text });
     }
     if (history.length > 40) history = history.slice(-40);
@@ -1637,19 +1694,23 @@
     closeSettings();
     currentProjectId = projectId || null;
     if (id === currentConversationId) { navRecord(); return; }
+    saveComposerDraft(currentConversationId);
     currentConversationId = id;
     localStorage.setItem(modeKey(activeMode), id);
     await renderConversation(id, projectId);
+    restoreComposerDraft(id);
     loadConversationList();
     navRecord();
   }
 
   function startNewConversation() {
+    saveComposerDraft(currentConversationId);
     currentProjectId = null;
     currentConversationId = activeMode + '-' + (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2));
     localStorage.setItem(modeKey(activeMode), currentConversationId);
     history = [];
     clearThreadUI();
+    restoreComposerDraft(currentConversationId);
     loadConversationList();
     navRecord();
   }
@@ -1756,11 +1817,10 @@
   function projectCardHtml(p) {
     return `
       <div class="js-project-card" data-id="${p.id}" style="position:relative;border:1px solid ${C.border};border-radius:14px;padding:16px 18px;background:${C.bgSurface3};transition:border-color .15s;display:flex;flex-direction:column;min-height:110px;">
-        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px;padding-right:44px;">
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px;padding-right:34px;">
           <span style="font-size:14px;font-weight:600;color:${C.text};">${escapeHtml(p.name)}</span>
           ${p.tag ? `<span style="font-size:11px;padding:2px 8px;border-radius:10px;background:${C.bgHover};color:${C.textSoft};">${escapeHtml(p.tag)}</span>` : ''}
         </div>
-        <button class="js-project-pin-btn" data-id="${p.id}" title="${p.pinned ? 'Lösen' : 'Anheften'}" style="position:absolute;top:12px;right:32px;background:none;border:none;color:${p.pinned ? C.accent : C.textSoft};cursor:pointer;padding:4px;display:inline-flex;">${p.pinned ? ICONS.pinFilled : ICONS.pin}</button>
         <button class="js-project-menu-btn" data-id="${p.id}" title="Optionen" style="position:absolute;top:12px;right:10px;background:none;border:none;color:${C.textSoft};cursor:pointer;padding:4px;display:inline-flex;">${jsIcon('0xe062', 20)}</button>
         ${p.dir ? `<div style="font-size:11px;color:${C.textDim};font-family:monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-bottom:8px;" title="${escapeHtml(p.dir)}">${escapeHtml(p.dir)}</div>` : ''}
         ${p.description ? `<div style="font-size:13px;color:${C.textSoft};line-height:1.45;flex:1;">${escapeHtml(p.description)}</div>` : '<div style="flex:1;"></div>'}
@@ -1774,70 +1834,10 @@
     const q = (projectsSearchInputEl ? projectsSearchInputEl.value : '').trim().toLowerCase();
     if (q) list = list.filter((p) => p.name.toLowerCase().includes(q) || (p.description || '').toLowerCase().includes(q));
     list = sortedProjects(list);
-    const pinned = list.filter((p) => p.pinned);
-    const rest = list.filter((p) => !p.pinned);
 
-    // Immer sichtbar, auch ohne angeheftete Projekte — nur das Auf-/
-    // Zuklappen entscheidet, ob das Grid (mit Leerzustand) zu sehen ist.
-    const pinnedToggle = $('.js-projects-pinned-toggle', uiEl);
-    if (pinnedToggle) pinnedToggle.style.display = 'flex';
-    if (projectsPinnedGridEl) {
-      projectsPinnedGridEl.style.display = projectsPinnedGridEl.classList.contains('is-collapsed') ? 'none' : 'grid';
-      projectsPinnedGridEl.innerHTML = pinned.length
-        ? pinned.map(projectCardHtml).join('')
-        : `<div style="grid-column:1/-1;color:${C.textDim};font-size:13px;">Noch nichts angeheftet.</div>`;
-    }
-
-    projectsGridEl.innerHTML = rest.length
-      ? rest.map(projectCardHtml).join('')
-      : (pinned.length ? '' : `<div style="grid-column:1/-1;color:${C.textDim};font-size:13px;padding:8px 2px;">${q ? 'Keine Projekte gefunden.' : 'Noch keine Projekte — leg oben eins an.'}</div>`);
-    [projectsGridEl, projectsPinnedGridEl].forEach((gridEl) => {
-      if (!gridEl) return;
-      gridEl.querySelectorAll('.js-project-pin-btn').forEach((btn) => {
-        btn.addEventListener('click', async (e) => {
-          e.preventDefault(); e.stopPropagation();
-          const p = projectsList.find((x) => x.id === btn.dataset.id);
-          if (!p) return;
-          try {
-            await fetch(`/projects/${encodeURIComponent(p.id)}`, {
-              method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pinned: !p.pinned }),
-            });
-          } catch (e2) {}
-          await loadProjects();
-        });
-      });
-    });
-    renderPinnedProjects();
-  }
-
-  // Sidebar-Vorschau der angehefteten Projekte — liest dieselben,
-  // serverseitig persistierten p.pinned wie die Projekte-Seite, damit beide
-  // Ansichten (Sidebar + volle Projektliste) immer synchron sind.
-  function renderPinnedProjects() {
-    const hintEl = $('.js-projects-pin-hint', uiEl);
-    if (!hintEl) return;
-    const pinned = projectsList.filter((p) => p.pinned);
-    if (!pinned.length) {
-      hintEl.style.display = 'flex';
-      hintEl.nextElementSibling && hintEl.nextElementSibling.remove();
-      return;
-    }
-    hintEl.style.display = 'none';
-    let list = hintEl.nextElementSibling;
-    if (!list || !list.classList.contains('js-projects-pinned-list')) {
-      list = document.createElement('div');
-      list.className = 'js-projects-pinned-list';
-      hintEl.after(list);
-    }
-    list.innerHTML = pinned.map((p) => `
-      <button class="js-navrow js-pinned-project" data-id="${p.id}" style="display:flex;align-items:center;gap:10px;padding:8px 10px;background:none;border:none;border-radius:9px;color:${C.textSoft};font-size:13px;cursor:pointer;text-align:left;width:100%;">${ICONS.folder}<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(p.name)}</span></button>
-    `).join('');
-    list.querySelectorAll('.js-pinned-project').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        const p = pinned.find((x) => x.id === btn.dataset.id);
-        if (p) openProjectDetail(p);
-      });
-    });
+    projectsGridEl.innerHTML = list.length
+      ? list.map(projectCardHtml).join('')
+      : `<div style="grid-column:1/-1;color:${C.textDim};font-size:13px;padding:8px 2px;">${q ? 'Keine Projekte gefunden.' : 'Noch keine Projekte — leg oben eins an.'}</div>`;
   }
   function openNewProjectModal() {
     if (!newProjectSheetEl) return;
@@ -2091,7 +2091,6 @@
     renameChatSheetEl.addEventListener('click', (e) => { if (e.target === renameChatSheetEl) closeRenameChatModal(); });
     $('.js-projects', uiEl).addEventListener('click', (e) => { e.preventDefault(); openProjectsView(); });
     $('.js-projects-pin-title', uiEl).addEventListener('click', (e) => { e.preventDefault(); openProjectsView(); });
-    $('.js-projects-pin-add', uiEl).addEventListener('click', (e) => { e.preventDefault(); openNewProjectModal(); });
     $('.js-search-toggle', uiEl).addEventListener('click', (e) => {
       e.preventDefault();
       const row = $('.js-search-row', uiEl);
@@ -2111,17 +2110,6 @@
       else if (projectsSearchInputEl) { projectsSearchInputEl.value = ''; renderProjectsGrid(); }
     });
     if (projectsSearchInputEl) projectsSearchInputEl.addEventListener('input', renderProjectsGrid);
-    $('.js-projects-pinned-toggle', uiEl).addEventListener('click', (e) => {
-      e.preventDefault();
-      const collapsed = projectsPinnedGridEl.classList.toggle('is-collapsed');
-      $('.js-projects-pinned-toggle', uiEl).classList.toggle('is-collapsed', collapsed);
-      localStorage.setItem('jarvis_projects_pinned_collapsed', collapsed ? '1' : '0');
-      renderProjectsGrid();
-    });
-    if (localStorage.getItem('jarvis_projects_pinned_collapsed') === '1') {
-      projectsPinnedGridEl.classList.add('is-collapsed');
-      $('.js-projects-pinned-toggle', uiEl).classList.add('is-collapsed');
-    }
     $('.js-projects-sort-btn', uiEl).addEventListener('click', (e) => {
       e.preventDefault();
       e.stopPropagation();
@@ -2142,54 +2130,36 @@
         closeProjectsSortMenu();
       });
     });
-    // Drei-Punkte-Menü pro Karte — Delegation, weil renderProjectsGrid() die
-    // Grids bei jedem Render komplett neu aufbaut (frische Buttons, keine
-    // pro-Karte-Listener nötig). Auf BEIDEN Grids (angeheftet + normal),
-    // da eine Karte je nach Zustand in der einen oder anderen landet.
-    [projectsGridEl, projectsPinnedGridEl].forEach((gridEl) => {
-      gridEl.addEventListener('click', (e) => {
-        const btn = e.target.closest('.js-project-menu-btn');
-        if (!btn) return;
-        e.preventDefault();
-        e.stopPropagation();
-        closeProjectsSortMenu();
-        const menu = $('.js-project-card-menu', uiEl);
-        const alreadyOpenForThis = projectCardMenuTargetId === btn.dataset.id && menu.style.display !== 'none';
-        closeProjectCardMenu();
-        if (alreadyOpenForThis) return;
-        projectCardMenuTargetId = btn.dataset.id;
-        const project = projectsList.find((p) => p.id === btn.dataset.id);
-        $('.js-pcm-pin', menu).textContent = project && project.pinned ? 'Lösen' : 'Anheften';
-        btn.classList.add('is-open');
-        menu.style.display = 'block';
-        positionFloatingMenu(btn, menu);
-      });
-      gridEl.addEventListener('click', (e) => {
-        if (e.target.closest('.js-project-menu-btn')) return;
-        const card = e.target.closest('.js-project-card');
-        if (!card) return;
-        const project = projectsList.find((p) => p.id === card.dataset.id);
-        if (project) openProjectDetail(project);
-      });
+    // Drei-Punkte-Menü pro Karte — Delegation, weil renderProjectsGrid() das
+    // Grid bei jedem Render komplett neu aufbaut (frische Buttons, keine
+    // pro-Karte-Listener nötig).
+    projectsGridEl.addEventListener('click', (e) => {
+      const btn = e.target.closest('.js-project-menu-btn');
+      if (!btn) return;
+      e.preventDefault();
+      e.stopPropagation();
+      closeProjectsSortMenu();
+      const menu = $('.js-project-card-menu', uiEl);
+      const alreadyOpenForThis = projectCardMenuTargetId === btn.dataset.id && menu.style.display !== 'none';
+      closeProjectCardMenu();
+      if (alreadyOpenForThis) return;
+      projectCardMenuTargetId = btn.dataset.id;
+      btn.classList.add('is-open');
+      menu.style.display = 'block';
+      positionFloatingMenu(btn, menu);
+    });
+    projectsGridEl.addEventListener('click', (e) => {
+      if (e.target.closest('.js-project-menu-btn')) return;
+      const card = e.target.closest('.js-project-card');
+      if (!card) return;
+      const project = projectsList.find((p) => p.id === card.dataset.id);
+      if (project) openProjectDetail(project);
     });
     $('.js-pcm-rename', uiEl).addEventListener('click', (e) => {
       e.preventDefault();
       const project = projectsList.find((p) => p.id === projectCardMenuTargetId);
       closeProjectCardMenu();
       if (project) openEditProjectModal(project);
-    });
-    $('.js-pcm-pin', uiEl).addEventListener('click', async (e) => {
-      e.preventDefault();
-      const id = projectCardMenuTargetId;
-      const project = projectsList.find((p) => p.id === id);
-      closeProjectCardMenu();
-      if (!id) return;
-      try {
-        await fetch(`/projects/${encodeURIComponent(id)}`, {
-          method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pinned: !(project && project.pinned) }),
-        });
-      } catch (e2) {}
-      loadProjects();
     });
     $('.js-pcm-delete', uiEl).addEventListener('click', (e) => {
       e.preventDefault();
@@ -2807,12 +2777,17 @@
     currentTurnId = String(++turnCounter);
     streamStillGenerating = true;
     clearViz();
+    // Kleine Miniaturen NACH dem Absenden erzeugen (Anzeige ist längst
+    // passiert, das darf ruhig einen Moment dauern) — landen erst im
+    // Request, sobald sie fertig sind; ein Fehlschlag bei einem Bild
+    // (z.B. ein bereits verworfenes Blob) darf die Nachricht nicht blockieren.
+    const thumbnailsForThisTurn = (await Promise.all(imagesForThisTurn.map(makeThumbnail))).filter(Boolean);
     try {
       const resp = await fetch('/chat/stream', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         signal: abortController.signal,
-        body: JSON.stringify({ message: outgoingText, history, turn_id: currentTurnId, mode: activeMode, conversation_id: ensureConversationId(), images: imagesForThisTurn, project_id: currentProjectId, is_speech: speechMode }),
+        body: JSON.stringify({ message: outgoingText, history, turn_id: currentTurnId, mode: activeMode, conversation_id: ensureConversationId(), images: imagesForThisTurn, image_thumbnails: thumbnailsForThisTurn, project_id: currentProjectId, is_speech: speechMode }),
       });
       if (!resp.ok) throw new Error('HTTP ' + resp.status);
       const reader = resp.body.getReader();
@@ -4193,13 +4168,92 @@
     pcmNode.connect(silentGain);
     silentGain.connect(ctx.destination);
   }
+  // Live-Mitschrift beim Diktieren: statt nur EINMAL am Ende zu transkribieren,
+  // wird die bisher aufgenommene Äußerung alle paar hundert Millisekunden
+  // erneut (als wachsendes Fenster, nicht als getrennte Häppchen — sonst
+  // reißt Whisper Wörter an der Schnittstelle auseinander) an Whisper
+  // geschickt und das Ergebnis sofort als Vorschau ins Textfeld geschrieben.
+  // Nur im Diktiermodus: im Sprachmodus bleibt es beim bisherigen Verhalten
+  // (eine Transkription erst nach Sprechende), weil dort jede Äußerung sofort
+  // an Jarvis geht — eine "vorläufige" Version würde dort nie sichtbar,
+  // brächte aber unnötige GPU-Last.
+  const DICTATE_INTERIM_MS = 500;
+  let interimTimer = null;
+  let interimInFlight = false;
+  let recordingEpoch = 0;
+  // Das <span> der laufenden Äußerung, einmal angelegt und danach nur per
+  // textContent aktualisiert (siehe runInterimTranscription) — das bestätigte
+  // dictBase-Stück davor bleibt dabei unangetastet, statt bei jedem
+  // Zwischenschritt das ganze Feld neu aufzubauen.
+  let dictInterimSpan = null;
+
+  function clearDictInterimSpan() {
+    if (dictInterimSpan && dictInterimSpan.parentNode) dictInterimSpan.remove();
+    dictInterimSpan = null;
+  }
+
+  async function runInterimTranscription(epoch, chunks) {
+    if (!chunks.length) return;
+    const samples = concatFloat32(chunks);
+    if (samples.length < pcmSampleRate * 0.3) return;
+    interimInFlight = true;
+    try {
+      const blob = encodeWav(samples, pcmSampleRate);
+      const form = new FormData();
+      form.append('audio', blob, 'speech.wav');
+      const resp = await fetch('/stt', { method: 'POST', body: form });
+      // Zwischenzeitlich abgebrochen/neu gestartet/schon final abgeschickt —
+      // dieses Ergebnis gehört nicht mehr zur aktuellen Äußerung.
+      if (epoch !== recordingEpoch || !dictating || !composerInput) return;
+      if (!resp.ok) return;
+      const data = await resp.json();
+      const text = (data.text || '').trim();
+      if (!text) return;
+      if (!dictInterimSpan || !dictInterimSpan.isConnected) {
+        // Erster Zwischenstand dieser Äußerung: die feste Basis (falls vorhanden,
+        // mit trennendem Leerzeichen) bleibt als reiner Textknoten stehen, das
+        // Span kommt einmalig dahinter — jeder weitere Tick ändert nur noch
+        // dessen textContent statt das Feld neu aufzubauen.
+        const base = dictBase || '';
+        composerInput.innerText = '';
+        if (base) composerInput.appendChild(document.createTextNode(base + ' '));
+        dictInterimSpan = document.createElement('span');
+        dictInterimSpan.className = 'js-dictate-interim';
+        composerInput.appendChild(dictInterimSpan);
+      }
+      dictInterimSpan.textContent = text;
+      composerInput.classList.remove('is-empty');
+      updateSendSlot();
+    } catch (err) {
+      console.error(err);
+    } finally {
+      interimInFlight = false;
+    }
+  }
+
+  function startInterimLoop(epoch) {
+    stopInterimLoop();
+    interimTimer = setInterval(() => {
+      if (!utterancePCM || interimInFlight) return;
+      runInterimTranscription(epoch, utterancePCM.slice());
+    }, DICTATE_INTERIM_MS);
+  }
+
+  function stopInterimLoop() {
+    if (interimTimer) { clearInterval(interimTimer); interimTimer = null; }
+  }
+
   function beginUtterance() {
     if (utterancePCM) return;
     utterancePCM = pcmRing.slice();
     utteranceStartedAt = Date.now();
+    recordingEpoch++;
+    if (dictating) startInterimLoop(recordingEpoch);
   }
   function stopRecording() {
     if (!utterancePCM) return;
+    stopInterimLoop();
+    recordingEpoch++;
     const chunks = utterancePCM;
     const startedAt = utteranceStartedAt;
     utterancePCM = null;
@@ -4208,6 +4262,9 @@
   }
   function cancelRecording() {
     if (!utterancePCM) return;
+    stopInterimLoop();
+    recordingEpoch++;
+    clearDictInterimSpan();
     utterancePCM = null;
     pcmRing = [];
   }
@@ -4265,6 +4322,7 @@
       } else if (dictating && composerInput) {
         const base = dictBase || (composerInput.innerText || '').trim();
         const composed = base ? base + ' ' + text : text;
+        clearDictInterimSpan();
         composerInput.innerText = composed;
         composerInput.classList.remove('is-empty');
         updateSendSlot();
@@ -4286,7 +4344,8 @@
       fallbackSilenceStreak = 0;
     } else {
       fallbackSilenceStreak++;
-      if (fallbackSilenceStreak >= RECORD_SILENCE_SUSTAIN) {
+      const sustain = dictating ? DICTATE_SILENCE_SUSTAIN : RECORD_SILENCE_SUSTAIN;
+      if (fallbackSilenceStreak >= sustain) {
         fallbackSilenceStreak = 0;
         stopRecording();
       }

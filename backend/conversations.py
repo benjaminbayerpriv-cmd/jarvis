@@ -73,6 +73,7 @@ def append_turn(
     assistant_text: str,
     project_id: str | None = None,
     base_dir: Path | None = None,
+    images: list[str] | None = None,
 ) -> dict:
     """Appends one turn, creating the conversation file on first use.
 
@@ -85,13 +86,20 @@ def append_turn(
     projects.chats_dir) for every turn, not just the first — the caller is
     responsible for resolving it consistently from the conversation's own
     project_id, not from whatever the current UI state happens to be.
+    ``images`` are small thumbnails (see main.py's ChatRequest.image_thumbnails)
+    for the user's turn only — without persisting these, an attached image
+    visibly vanished from the thread the moment the conversation was
+    reopened, since only the message text was ever saved.
     """
     with _lock:
         conv = _load(conv_id, base_dir)
         now = dt.datetime.now().isoformat(timespec="seconds")
         if conv is None:
             conv = {"id": conv_id, "title": None, "created_at": now, "turns": [], "project_id": project_id}
-        conv["turns"].append({"role": "you", "text": user_text})
+        you_turn = {"role": "you", "text": user_text}
+        if images:
+            you_turn["images"] = images
+        conv["turns"].append(you_turn)
         conv["turns"].append({"role": "jarvis", "text": assistant_text})
         conv["updated_at"] = now
         _save(conv, base_dir)
