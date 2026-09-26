@@ -865,6 +865,14 @@
   // eigener /code/tty/ws-Socket, unabhängig vom Terminal im Code-Tab (der
   // Server startet pro Verbindung einen eigenen opencode-Prozess).
   let speechTermEl = null, speechTermHostEl = null, speechTerm = null, speechTermFit = null;
+  // Sobald der Nutzer das Terminal per Hand gezogen/skaliert hat, übernimmt
+  // dieses Rechteck die Positionierung — layoutSpeechTerminal() (läuft jede
+  // Frame aus drawOrb heraus, s.u.) berechnet sonst bei jedem Frame Position
+  // und Größe neu und würde eine manuelle Änderung sofort wieder überschreiben.
+  let speechTermUserRect = null;
+  // Dieselbe Untergrenze wie in layoutSpeechTerminal (dort erklärt: darunter
+  // stürzt die opencode-TUI beim Start ab) — auch fürs manuelle Ziehen/Skalieren.
+  const SPEECH_TERM_MIN_W = 560, SPEECH_TERM_MIN_H = 340;
   // Kopfzeilenbeschriftung des Terminals — folgt dem gewählten Coding-Agenten
   // (siehe renderPanelItem 'code_agent'); Startwert bis /code/status geladen
   // ist oder der Nutzer wechselt. speechTermAgentName ist dieselbe Wahl in
@@ -929,7 +937,6 @@
     'Wie war dein Tag?', 'Wie war dein Tag, Chef?',
     'Grüß dich, wer auch immer du bist',
     'Zurück am Start, Chef', 'Wieder da, Chef', 'Wieder da!',
-    'Lass uns inkognito chatten', 'Du bist inkognito',
   ];
   const GREETINGS_MORNING = ['Guten Morgen', 'Guten Morgen, Chef', 'Kaffee und Jarvis-Zeit?'];
   const GREETINGS_AFTERNOON = ['Guten Tag', 'Guten Tag, Chef'];
@@ -961,7 +968,6 @@
     uiEl.id = 'jsApp';
     uiEl.style.cssText = `position:fixed;inset:0;z-index:30;display:flex;background:${C.bg};color:${C.text};font-family:${C.font};`;
     uiEl.innerHTML = `
-      <button class="js-side-toggle-float" title="Sidebar einblenden" style="display:none;position:absolute;top:15px;left:12px;z-index:31;background:none;border:none;color:${C.textSoft};cursor:pointer;align-items:center;justify-content:center;width:30px;height:30px;border-radius:8px;">${ICONS.menu}</button>
       <aside class="js-sidebar" style="width:308px;flex:0 0 308px;height:100%;display:flex;flex-direction:column;background:${C.bgSoft};border-right:1px solid ${C.border};position:relative;">
         <div class="js-sidebar-top" style="padding:16px 8px 6px;display:flex;flex-direction:column;gap:12px;">
           <div class="js-sidebar-header" style="display:flex;align-items:center;justify-content:space-between;padding-left:8px;">
@@ -971,12 +977,7 @@
             <div style="display:flex;align-items:center;gap:2px;">
               <button class="js-nav-back" title="Zurück" disabled style="background:none;border:none;color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:7px;">${ICONS.arrowLeft}</button>
               <button class="js-nav-forward" title="Vorwärts" disabled style="background:none;border:none;color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:7px;">${ICONS.arrowRight}</button>
-              <button class="js-side-toggle" title="Sidebar ausblenden" style="background:none;border:none;color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:7px;">${jsIcon('0xe0dd', 20)}</button>
-              <button class="js-search-toggle" title="Bald verfügbar" disabled style="background:none;border:none;color:${C.textDim};cursor:default;display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:7px;opacity:.5;">${jsIcon('0xe0d3', 20)}</button>
             </div>
-          </div>
-          <div class="js-search-row" style="display:none;">
-            <input class="js-search-input" type="text" placeholder="Chats durchsuchen…" style="width:100%;padding:7px 10px;background:${C.bgHover};border:1px solid ${C.border};border-radius:9px;color:${C.text};font-size:13px;font-family:${C.font};outline:none;" />
           </div>
           <div class="js-mode" style="position:relative;display:flex;padding:1px;gap:0;background:rgba(255,255,255,.06);border-radius:8px;">
             <div class="js-mode-indicator" style="position:absolute;top:1px;bottom:1px;left:1px;width:0;border-radius:7px;background:rgba(255,255,255,.1);box-shadow:inset 0 0 0 .5px rgba(255,255,255,.08),0 1px 2px rgba(0,0,0,.3),0 2px 6px -1px rgba(0,0,0,.25);transition:left .3s cubic-bezier(.32,.72,0,1),width .3s cubic-bezier(.32,.72,0,1);pointer-events:none;"></div>
@@ -1079,83 +1080,6 @@
           </div>
           <div class="js-pd-recent-label" style="font-size:12px;color:${C.textDim};margin:28px 0 4px;max-width:640px;">Zuletzt verwendet</div>
           <div class="js-pd-recent" style="display:flex;flex-direction:column;max-width:640px;"></div>
-        </div>
-        <div class="js-settings-view" style="position:absolute;inset:0;display:none;flex-direction:column;min-width:0;min-height:0;overflow-y:auto;padding:40px 48px;">
-          <div style="display:flex;align-items:center;justify-content:space-between;max-width:640px;margin-bottom:28px;">
-            <h1 style="font-family:${C.serif};font-size:28px;font-weight:600;color:${C.text};margin:0;">Einstellungen</h1>
-            <button class="js-settings-close" title="Schließen" style="width:32px;height:32px;border-radius:9px;background:none;border:none;color:${C.textSoft};cursor:pointer;font-size:18px;line-height:1;">×</button>
-          </div>
-          <div style="max-width:640px;display:flex;flex-direction:column;">
-            ${settingsGroupLabel('Darstellung', true)}
-            ${settingsAppearanceCardHtml()}
-            ${settingsGroupLabel('Grundlagen')}
-            <div class="js-settings-card" style="border:1px solid ${C.border};border-radius:14px;background:${C.bgSurface3};margin-bottom:10px;overflow:hidden;">
-              <button class="js-settings-toggle-modell" style="width:100%;display:flex;align-items:center;gap:12px;padding:14px 16px;background:none;border:none;cursor:pointer;text-align:left;font-family:${C.font};">
-                ${settingsIconBadge(SETTINGS_ICONS.model)}
-                <span style="flex:1;min-width:0;display:flex;flex-direction:column;gap:2px;">
-                  <span style="font-size:14px;font-weight:600;color:${C.text};">Modell</span>
-                  <span style="font-size:12px;color:${C.textDim};">Welches Sprachmodell Jarvis gerade benutzt</span>
-                </span>
-                <span class="js-settings-chevron-modell" style="color:${C.textDim};transition:transform .15s;flex:0 0 auto;">${ICONS.chevronDown}</span>
-              </button>
-              <div class="js-settings-body-modell" style="display:none;padding:0 16px 16px;">
-                <div class="js-settings-models" style="border:1px solid ${C.border};border-radius:12px;overflow:hidden;"></div>
-              </div>
-            </div>
-            <div class="js-settings-card" style="border:1px solid ${C.border};border-radius:14px;background:${C.bgSurface3};margin-bottom:10px;overflow:hidden;">
-              <button class="js-settings-toggle-verbindung" style="width:100%;display:flex;align-items:center;gap:12px;padding:14px 16px;background:none;border:none;cursor:pointer;text-align:left;font-family:${C.font};">
-                ${settingsIconBadge(SETTINGS_ICONS.connection)}
-                <span style="flex:1;min-width:0;display:flex;flex-direction:column;gap:2px;">
-                  <span style="font-size:14px;font-weight:600;color:${C.text};">Verbindung</span>
-                  <span style="font-size:12px;color:${C.textDim};">LM-Studio-Adresse und Netzwerksuche</span>
-                </span>
-                <span class="js-settings-chevron-verbindung" style="color:${C.textDim};transition:transform .15s;flex:0 0 auto;">${ICONS.chevronDown}</span>
-              </button>
-              <div class="js-settings-body-verbindung" style="display:none;padding:0 16px 16px;flex-direction:column;gap:8px;">
-                <span style="font-size:12.5px;color:${C.textSoft};">LM Studio Endpoint</span>
-                <input class="js-lmstudio-url-input js-settings-input" type="text" placeholder="http://127.0.0.1:1234/v1" spellcheck="false" style="width:100%;box-sizing:border-box;padding:9px 10px;background:${C.bg};border:1px solid ${C.border};border-radius:8px;color:${C.text};font-size:13px;outline:none;font-family:${C.font};" />
-                <div style="display:flex;align-items:center;gap:10px;">
-                  <button class="js-lmstudio-url-save js-settings-save-btn" style="align-self:flex-start;padding:8px 14px;border:none;border-radius:8px;background:${C.accent};color:#fff;font-size:12.5px;font-weight:600;cursor:pointer;font-family:${C.font};">Speichern</button>
-                  <span class="js-lmstudio-url-status" style="font-size:12px;color:${C.textDim};display:flex;align-items:center;gap:5px;"></span>
-                </div>
-                <!-- Netzwerksuche auch hier verfügbar, unabhängig davon, ob
-                     gerade schon eine LM-Studio-Verbindung steht - z.B. um
-                     eine ANDERE Instanz im Netz zu finden, ohne die
-                     bestehende erst zu trennen. Das Einrichtungsmenü im
-                     Composer zeigt dieselbe Suche nur, wenn nichts
-                     erreichbar ist. -->
-                <div style="display:flex;align-items:center;gap:8px;margin-top:4px;">
-                  <button class="js-settings-scan" style="padding:6px 10px;border:1px solid ${C.border};border-radius:8px;background:none;color:${C.textSoft};font-size:12px;cursor:pointer;white-space:nowrap;font-family:${C.font};">Netzwerk durchsuchen</button>
-                  <button class="js-settings-scan-extended" title="Prüft zusätzlich die Standardports von Ollama, text-generation-webui, koboldcpp & Co., nicht nur LM Studios 1234" style="padding:6px 10px;border:1px solid ${C.border};border-radius:8px;background:none;color:${C.textSoft};font-size:12px;cursor:pointer;white-space:nowrap;font-family:${C.font};">Erweiterte Suche</button>
-                  <div class="js-settings-scan-bar-track" style="display:none;flex:1;height:6px;border-radius:3px;background:${C.bg};overflow:hidden;">
-                    <div class="js-settings-scan-bar-fill" style="height:100%;width:0%;background:${C.accent};transition:width .12s linear;"></div>
-                  </div>
-                </div>
-                <div class="js-settings-scan-status" style="font-size:12px;color:${C.textDim};min-height:14px;"></div>
-                <div class="js-settings-scan-results" style="display:none;flex-direction:column;gap:4px;"></div>
-              </div>
-            </div>
-            <div class="js-settings-card" style="border:1px solid ${C.border};border-radius:14px;background:${C.bgSurface3};margin-bottom:10px;overflow:hidden;">
-              <button class="js-settings-toggle-code" style="width:100%;display:flex;align-items:center;gap:12px;padding:14px 16px;background:none;border:none;cursor:pointer;text-align:left;font-family:${C.font};">
-                ${settingsIconBadge(SETTINGS_ICONS.code)}
-                <span style="flex:1;min-width:0;display:flex;flex-direction:column;gap:2px;">
-                  <span style="font-size:14px;font-weight:600;color:${C.text};">Code</span>
-                  <span style="font-size:12px;color:${C.textDim};">Arbeitsverzeichnis für den Coding-Agenten</span>
-                </span>
-                <span class="js-settings-chevron-code" style="color:${C.textDim};transition:transform .15s;flex:0 0 auto;">${ICONS.chevronDown}</span>
-              </button>
-              <div class="js-settings-body-code" style="display:none;padding:0 16px 16px;flex-direction:column;gap:8px;">
-                <span style="font-size:12.5px;color:${C.textSoft};">Arbeitsverzeichnis für JARVIS Code</span>
-                <input class="js-code-dir-input js-settings-input" type="text" placeholder="~/Developer" spellcheck="false" style="width:100%;box-sizing:border-box;padding:9px 10px;background:${C.bg};border:1px solid ${C.border};border-radius:8px;color:${C.text};font-size:13px;outline:none;font-family:${C.font};" />
-                <div style="display:flex;align-items:center;gap:10px;">
-                  <button class="js-code-dir-save js-settings-save-btn" style="align-self:flex-start;padding:8px 14px;border:none;border-radius:8px;background:${C.accent};color:#fff;font-size:12.5px;font-weight:600;cursor:pointer;font-family:${C.font};">Speichern</button>
-                  <span class="js-code-dir-status" style="font-size:12px;color:${C.textDim};display:flex;align-items:center;gap:5px;"></span>
-                </div>
-              </div>
-            </div>
-            ${settingsGroupLabel('Erweitert')}
-            ${SETTINGS_SECTIONS.map((s) => settingsSectionHtml(s)).join('')}
-          </div>
         </div>
       </div>
       <div class="js-composer" style="position:absolute;left:308px;right:0;bottom:0;padding:0 24px 22px;background:linear-gradient(transparent,${C.bg} 55%);">
@@ -1305,6 +1229,89 @@
     `;
     document.body.appendChild(renameChatSheetEl);
 
+    // Einstellungen als schmales, zentriertes Popup (body-Kind, z-index 70 —
+    // über dem Sprachmodus-Orb (40) und dessen Leiste/Untertiteln (50), damit
+    // die Einstellungen im Sprachmodus nicht vom Overlay verdeckt werden).
+    settingsSheetEl = document.createElement('div');
+    settingsSheetEl.id = 'jsSettingsSheet';
+    settingsSheetEl.className = 'js-settings-view';
+    settingsSheetEl.style.cssText = `position:fixed;inset:0;z-index:70;display:none;align-items:center;justify-content:flex-start;padding-left:32px;background:rgba(0,0,0,.5);`;
+    settingsSheetEl.innerHTML = `
+      <div style="width:460px;max-width:90vw;max-height:82vh;display:flex;flex-direction:column;background:${C.bgSurface3};border:1px solid ${C.border};border-radius:16px;box-shadow:0 20px 60px rgba(0,0,0,.5);">
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:20px 22px 16px;flex:0 0 auto;">
+          <h1 style="font-family:${C.serif};font-size:20px;font-weight:600;color:${C.text};margin:0;">Einstellungen</h1>
+          <button class="js-settings-close" title="Schließen" style="width:30px;height:30px;border-radius:9px;background:none;border:none;color:${C.textSoft};cursor:pointer;font-size:18px;line-height:1;">×</button>
+        </div>
+        <div style="overflow-y:auto;padding:0 22px 22px;display:flex;flex-direction:column;">
+          ${settingsGroupLabel('Darstellung', true)}
+          ${settingsAppearanceCardHtml()}
+          ${settingsGroupLabel('Grundlagen')}
+          <div class="js-settings-card" style="border:1px solid ${C.border};border-radius:14px;background:${C.bg};margin-bottom:10px;overflow:hidden;">
+            <button class="js-settings-toggle-modell" style="width:100%;display:flex;align-items:center;gap:12px;padding:14px 16px;background:none;border:none;cursor:pointer;text-align:left;font-family:${C.font};">
+              ${settingsIconBadge(SETTINGS_ICONS.model)}
+              <span style="flex:1;min-width:0;display:flex;flex-direction:column;gap:2px;">
+                <span style="font-size:14px;font-weight:600;color:${C.text};">Modell</span>
+                <span style="font-size:12px;color:${C.textDim};">Welches Sprachmodell Jarvis gerade benutzt</span>
+              </span>
+              <span class="js-settings-chevron-modell" style="color:${C.textDim};transition:transform .15s;flex:0 0 auto;">${ICONS.chevronDown}</span>
+            </button>
+            <div class="js-settings-body-modell" style="display:none;padding:0 16px 16px;">
+              <div class="js-settings-models" style="border:1px solid ${C.border};border-radius:12px;overflow:hidden;"></div>
+            </div>
+          </div>
+          <div class="js-settings-card" style="border:1px solid ${C.border};border-radius:14px;background:${C.bg};margin-bottom:10px;overflow:hidden;">
+            <button class="js-settings-toggle-verbindung" style="width:100%;display:flex;align-items:center;gap:12px;padding:14px 16px;background:none;border:none;cursor:pointer;text-align:left;font-family:${C.font};">
+              ${settingsIconBadge(SETTINGS_ICONS.connection)}
+              <span style="flex:1;min-width:0;display:flex;flex-direction:column;gap:2px;">
+                <span style="font-size:14px;font-weight:600;color:${C.text};">Verbindung</span>
+                <span style="font-size:12px;color:${C.textDim};">LM-Studio-Adresse und Netzwerksuche</span>
+              </span>
+              <span class="js-settings-chevron-verbindung" style="color:${C.textDim};transition:transform .15s;flex:0 0 auto;">${ICONS.chevronDown}</span>
+            </button>
+            <div class="js-settings-body-verbindung" style="display:none;padding:0 16px 16px;flex-direction:column;gap:8px;">
+              <span style="font-size:12.5px;color:${C.textSoft};">LM Studio Endpoint</span>
+              <input class="js-lmstudio-url-input js-settings-input" type="text" placeholder="http://127.0.0.1:1234/v1" spellcheck="false" style="width:100%;box-sizing:border-box;padding:9px 10px;background:${C.bg};border:1px solid ${C.border};border-radius:8px;color:${C.text};font-size:13px;outline:none;font-family:${C.font};" />
+              <div style="display:flex;align-items:center;gap:10px;">
+                <button class="js-lmstudio-url-save js-settings-save-btn" style="align-self:flex-start;padding:8px 14px;border:none;border-radius:8px;background:${C.accent};color:#fff;font-size:12.5px;font-weight:600;cursor:pointer;font-family:${C.font};">Speichern</button>
+                <span class="js-lmstudio-url-status" style="font-size:12px;color:${C.textDim};display:flex;align-items:center;gap:5px;"></span>
+              </div>
+              <div style="display:flex;align-items:center;gap:8px;margin-top:4px;">
+                <button class="js-settings-scan" style="padding:6px 10px;border:1px solid ${C.border};border-radius:8px;background:none;color:${C.textSoft};font-size:12px;cursor:pointer;white-space:nowrap;font-family:${C.font};">Netzwerk durchsuchen</button>
+                <button class="js-settings-scan-extended" title="Prüft zusätzlich die Standardports von Ollama, text-generation-webui, koboldcpp & Co., nicht nur LM Studios 1234" style="padding:6px 10px;border:1px solid ${C.border};border-radius:8px;background:none;color:${C.textSoft};font-size:12px;cursor:pointer;white-space:nowrap;font-family:${C.font};">Erweiterte Suche</button>
+                <div class="js-settings-scan-bar-track" style="display:none;flex:1;height:6px;border-radius:3px;background:${C.bg};overflow:hidden;">
+                  <div class="js-settings-scan-bar-fill" style="height:100%;width:0%;background:${C.accent};transition:width .12s linear;"></div>
+                </div>
+              </div>
+              <div class="js-settings-scan-status" style="font-size:12px;color:${C.textDim};min-height:14px;"></div>
+              <div class="js-settings-scan-results" style="display:none;flex-direction:column;gap:4px;"></div>
+            </div>
+          </div>
+          <div class="js-settings-card" style="border:1px solid ${C.border};border-radius:14px;background:${C.bg};margin-bottom:10px;overflow:hidden;">
+            <button class="js-settings-toggle-code" style="width:100%;display:flex;align-items:center;gap:12px;padding:14px 16px;background:none;border:none;cursor:pointer;text-align:left;font-family:${C.font};">
+              ${settingsIconBadge(SETTINGS_ICONS.code)}
+              <span style="flex:1;min-width:0;display:flex;flex-direction:column;gap:2px;">
+                <span style="font-size:14px;font-weight:600;color:${C.text};">Code</span>
+                <span style="font-size:12px;color:${C.textDim};">Arbeitsverzeichnis für den Coding-Agenten</span>
+              </span>
+              <span class="js-settings-chevron-code" style="color:${C.textDim};transition:transform .15s;flex:0 0 auto;">${ICONS.chevronDown}</span>
+            </button>
+            <div class="js-settings-body-code" style="display:none;padding:0 16px 16px;flex-direction:column;gap:8px;">
+              <span style="font-size:12.5px;color:${C.textSoft};">Arbeitsverzeichnis für JARVIS Code</span>
+              <input class="js-code-dir-input js-settings-input" type="text" placeholder="~/Developer" spellcheck="false" style="width:100%;box-sizing:border-box;padding:9px 10px;background:${C.bg};border:1px solid ${C.border};border-radius:8px;color:${C.text};font-size:13px;outline:none;font-family:${C.font};" />
+              <div style="display:flex;align-items:center;gap:10px;">
+                <button class="js-code-dir-save js-settings-save-btn" style="align-self:flex-start;padding:8px 14px;border:none;border-radius:8px;background:${C.accent};color:#fff;font-size:12.5px;font-weight:600;cursor:pointer;font-family:${C.font};">Speichern</button>
+                <span class="js-code-dir-status" style="font-size:12px;color:${C.textDim};display:flex;align-items:center;gap:5px;"></span>
+              </div>
+            </div>
+          </div>
+          ${settingsGroupLabel('Erweitert')}
+          ${SETTINGS_SECTIONS.map((s) => settingsSectionHtml(s)).join('')}
+        </div>
+      </div>
+    `;
+    settingsSheetEl.addEventListener('click', (e) => { if (e.target === settingsSheetEl) closeSettings(); });
+    document.body.appendChild(settingsSheetEl);
+
     sidebarEl = $('.js-sidebar', uiEl);
     chatListEl = $('.js-chats', uiEl);
     pinnedChatListEl = $('.js-pinned-chats', uiEl);
@@ -1322,7 +1329,6 @@
     uploadBtn = $('.js-upload', uiEl);
     attachPreviewEl = $('.js-attach-preview', uiEl);
     projectsViewEl = $('.js-projects-view', uiEl);
-    settingsSheetEl = $('.js-settings-view', uiEl);
     projectsGridEl = $('.js-projects-grid', uiEl);
     projectsSearchRowEl = $('.js-projects-search-row', uiEl);
     projectsSearchInputEl = $('.js-projects-search-input', uiEl);
@@ -1397,13 +1403,13 @@
          Artefakte, Anpassen, Mikrofon-Diktieren) explizit KEINEN Squish, nur einen normalen
          Auswahl-/Hover-Zustand ohne Groessenaenderung. Direkt am echten DOM verifiziert. */
       a:hover > .jsi, button:hover > .jsi, a:hover .jsi, button:hover .jsi { --jsi-anim: 100; }
-      .js-side-toggle, .js-side-toggle-float, .js-search-toggle, .js-projects-search-btn,
+      .js-projects-search-btn,
       .js-chats-sort, .js-projects-sort-btn, .js-chatitem-menu-btn, .js-project-menu-btn,
       .js-send, .js-pd-send, .js-sp-send, .js-upload, .js-pd-upload {
         transform:scale(1); transform-origin:50% center;
         transition:transform .45s linear(0, .2459, .6526, .9468, 1.0764, 1.0915, 1.0585, 1.0219, .9993, .9914, .9921, .9957, .9988, 1.0004, 1);
       }
-      .js-side-toggle:active, .js-side-toggle-float:active, .js-search-toggle:active, .js-projects-search-btn:active,
+      .js-projects-search-btn:active,
       .js-chats-sort:active, .js-projects-sort-btn:active, .js-chatitem-menu-btn:active, .js-project-menu-btn:active,
       .js-send:active, .js-pd-send:active, .js-sp-send:active, .js-upload:active, .js-pd-upload:active {
         transform:scale(.975); transition:transform 60ms ease-out;
@@ -1418,10 +1424,9 @@
       .js-editor:focus::before { opacity:.7; }
       .js-setup-test-lm:hover, .js-setup-test-api:hover { border-color:${C.borderStrong}; color:${C.text}; }
       .js-setup-activate-lm:disabled, .js-setup-activate-api:disabled { cursor:default; }
-      .js-side-toggle svg, .js-side-toggle-float svg, .js-new svg, .js-projects svg, .js-upload svg, .js-note svg, .js-speech svg, .js-settings svg, .js-navrow svg { width:16px; height:16px; display:block; flex:0 0 auto; }
-      .js-side-toggle:hover, .js-side-toggle-float:hover { background:${C.bgHover}; color:${C.text}; }
-      .js-search-toggle svg, .js-chats-sort svg { width:15px; height:15px; display:block; flex:0 0 auto; }
-      .js-search-toggle:hover, .js-chats-sort:hover { background:${C.bgHover}; color:${C.text}; border-radius:7px; }
+      .js-new svg, .js-projects svg, .js-upload svg, .js-note svg, .js-speech svg, .js-settings svg, .js-navrow svg { width:16px; height:16px; display:block; flex:0 0 auto; }
+      .js-chats-sort svg { width:15px; height:15px; display:block; flex:0 0 auto; }
+      .js-chats-sort:hover { background:${C.bgHover}; color:${C.text}; border-radius:7px; }
       .js-nav-back svg, .js-nav-forward svg { width:15px; height:15px; display:block; flex:0 0 auto; }
       .js-nav-back:hover:not(:disabled), .js-nav-forward:hover:not(:disabled) { background:${C.bgHover}; color:${C.text}; }
       .js-nav-back:disabled, .js-nav-forward:disabled { opacity:.35; cursor:default; }
@@ -1431,7 +1436,7 @@
       .js-speech svg, .js-send svg { width:18px; height:18px; display:block; }
       .js-sp-mute svg, .js-sp-stop svg, .js-sp-chat svg, .js-sp-send svg { width:20px; height:20px; display:block; }
       .js-pill svg { width:16px; height:16px; display:block; }
-      .js-side-toggle:hover, .js-new:hover, .js-projects:hover, .js-upload:hover, .js-note:hover, .js-speech:hover, .js-model:hover, .js-settings-row:hover, .js-sp-mute:hover, .js-sp-stop:hover, .js-sp-chat:hover { background:${C.bgHover}; color:${C.text}; }
+      .js-new:hover, .js-projects:hover, .js-upload:hover, .js-note:hover, .js-speech:hover, .js-model:hover, .js-settings-row:hover, .js-sp-mute:hover, .js-sp-stop:hover, .js-sp-chat:hover { background:${C.bgHover}; color:${C.text}; }
       .js-navrow:not([disabled]):not(.js-artifacts):not(.js-customize):hover { background:${C.bgHover}; color:${C.text}; }
       .js-pill.active { color:${C.text} !important; }
       .js-pill:not(.active):hover { color:${C.text}; }
@@ -1517,14 +1522,22 @@
          Code-Tab heraus öffnet (sonst läge das Terminal weiterhin sichtbar
          unter der Projekte-Ansicht). */
       #jsApp.js-projects-active .js-codeview, #jsApp.js-project-detail-active .js-codeview { display:none !important; }
-      /* Einstellungen ist wie Projekte über Chat UND Code hinweg erreichbar
-         (Sidebar-Button bleibt in beiden Modi sichtbar) — aus demselben
-         Grund wie oben muss diese Regel nach den .js-code-active-Regeln
-         stehen. */
-      #jsApp.js-settings-active .js-thread, #jsApp.js-settings-active .js-welcome, #jsApp.js-settings-active .js-composer { display:none !important; }
-      #jsApp.js-settings-active .js-settings-view { display:flex !important; }
-      #jsApp.js-settings-active .js-codeview { display:none !important; }
+      /* Einstellungen sind jetzt ein schmales Popup (body-Kind, eigener
+         fixed-Overlay, s.u. bei settingsSheetEl) statt einer Vollseiten-
+         Ansicht innerhalb von #jsApp — Sichtbarkeit steuert openSettings()/
+         closeSettings() direkt per style.display, nicht mehr diese Klasse.
+         Die Klasse bleibt trotzdem für Nav-Status (aktiver Sidebar-Eintrag,
+         Zurück-Navigation) erhalten. */
       #jsApp.js-settings-active .js-settings-row { background:${C.bgHover}; color:${C.text}; }
+      /* Beobachtet: Beim ersten Öffnen des Popups wurden Icon+Titel+
+         Beschreibung der Karten manchmal auf eine einzeilige Höhe
+         zusammengequetscht (Beschreibung unsichtbar), bis irgendeine
+         Interaktion einen Reflow erzwang — ein bekannter Chromium-Bug bei
+         verschachtelten Flexboxen in einem overflow:auto-Scrollcontainer,
+         wo Flex-Items per Default (min-height:auto) unter ihre Inhaltsgröße
+         schrumpfen dürfen, bevor der Scrollbereich fertig berechnet ist.
+         flex-shrink:0 verbietet das Schrumpfen von vornherein. */
+      .js-settings-view .js-settings-card, .js-settings-view .js-settings-card > button { flex-shrink: 0; }
       .js-project-card:hover { border-color:${C.textDim}; }
       .js-project-card { position:relative; cursor:pointer; }
       .js-project-menu-btn { opacity:0; transition:opacity .1s; }
@@ -1885,15 +1898,6 @@
     restartCodeTerminal();
   }
 
-  function filterChatList(query) {
-    if (!chatListEl) return;
-    const q = query.trim().toLowerCase();
-    chatListEl.querySelectorAll('.js-chat-item').forEach((el) => {
-      if (!el.dataset.title) return;
-      el.style.display = !q || el.dataset.title.includes(q) ? '' : 'none';
-    });
-  }
-
   async function openConversation(id, projectId) {
     closeProjectsView();
     closeSettings();
@@ -1909,6 +1913,10 @@
   }
 
   function startNewConversation() {
+    // Neuer Chat aus dem Sprachmodus heraus: erst sauber verlassen (Mikrofon/
+    // Orb/Terminal schließen), statt ihn stumm im Hintergrund weiterlaufen zu
+    // lassen, während man schon im neuen, getippten Chat gelandet ist.
+    if (speechMode) exitSpeech();
     saveComposerDraft(currentConversationId);
     currentProjectId = null;
     currentConversationId = activeMode + '-' + (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2));
@@ -2295,15 +2303,6 @@
     $('.js-renamechat-input', renameChatSheetEl).addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); saveRenameChatModal(); } });
     renameChatSheetEl.addEventListener('click', (e) => { if (e.target === renameChatSheetEl) closeRenameChatModal(); });
     $('.js-projects', uiEl).addEventListener('click', (e) => { e.preventDefault(); openProjectsView(); });
-    $('.js-search-toggle', uiEl).addEventListener('click', (e) => {
-      e.preventDefault();
-      const row = $('.js-search-row', uiEl);
-      const input = $('.js-search-input', uiEl);
-      const show = row.style.display === 'none';
-      row.style.display = show ? 'block' : 'none';
-      if (show) { input.value = ''; input.focus(); filterChatList(''); } else { filterChatList(''); }
-    });
-    $('.js-search-input', uiEl).addEventListener('input', (e) => filterChatList(e.target.value));
     $('.js-chats-sort', uiEl).addEventListener('click', (e) => { e.preventDefault(); loadConversationList(); });
     $('.js-projects-new', uiEl).addEventListener('click', (e) => { e.preventDefault(); openNewProjectModal(); });
     $('.js-projects-search-btn', uiEl).addEventListener('click', (e) => {
@@ -2390,7 +2389,15 @@
     if (composerInput) {
       composerInput.addEventListener('keydown', (e) => {
         if (handleSlashMenuKeydown(e)) return;
-        if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendFromComposer(); }
+        if (e.key === 'Enter' && !e.shiftKey) {
+          e.preventDefault();
+          // Erster Enter im Diktat schaltet nur das Mikrofon aus (sonst
+          // schickt man versehentlich mitten im Diktieren ab, bevor der
+          // letzte gesprochene Satz überhaupt eingetippt wurde) — erst ein
+          // zweiter Enter (Diktat dann schon aus) schickt wirklich ab.
+          if (dictating) { setDictating(false); return; }
+          sendFromComposer();
+        }
       });
       composerInput.addEventListener('input', () => {
         composerInput.classList.toggle('is-empty', composerInput.innerText.trim().length === 0);
@@ -4245,6 +4252,7 @@
     closeProjectsView();
     closeProjectDetail();
     if (uiEl) uiEl.classList.add('js-settings-active');
+    if (settingsSheetEl) settingsSheetEl.style.display = 'flex';
     navRecord();
     updateNavActive();
     // Code-Verzeichnis aus /code/status vorbelegen.
@@ -4353,6 +4361,7 @@
   }
   function closeSettings() {
     if (uiEl) uiEl.classList.remove('js-settings-active');
+    if (settingsSheetEl) settingsSheetEl.style.display = 'none';
     updateNavActive();
     refreshModelHealth();
   }
@@ -4592,6 +4601,7 @@
         sendMessage(text);
       } else if (dictating && composerInput) {
         const base = dictBase || (composerInput.innerText || '').trim();
+        if (base && base.toLowerCase().endsWith(text.toLowerCase())) return;
         const composed = base ? base + ' ' + text : text;
         clearDictInterimSpan();
         composerInput.innerText = composed;
@@ -4660,6 +4670,12 @@
         // Diktat: Zwischenergebnisse live ins Eingabefeld, aufbauend auf dem
         // gesicherten Stand (dictBase); abgeschlossene Segmente rücken auf.
         if (dictBase === null) dictBase = composerInput ? composerInput.innerText.trim() : '';
+        // Chrome feuert bei kurzen Äußerungen manchmal ein finales Ergebnis
+        // zweimal (beobachtet live: "öffne Spotify" landete doppelt im
+        // Textfeld) — z.B. einmal regulär und nochmal beim automatischen
+        // Neustart nach onend (s.u.). Ein finaler Satz, der schon am Ende
+        // von dictBase steht, wird deshalb nicht nochmal angehängt.
+        if (final && dictBase && dictBase.toLowerCase().endsWith(text.toLowerCase())) return;
         const composed = dictBase ? dictBase + ' ' + text : text;
         composerInput.innerText = composed;
         composerInput.classList.remove('is-empty');
@@ -4787,6 +4803,12 @@
     ensureMic().then(() => {
       speechMode = true;
       showOrb();
+      // Frischer Start: sonst zeigt die Beschriftung noch die letzte Zeile
+      // aus einem vorherigen getippten oder gesprochenen Austausch, bevor
+      // im neuen Sprachmodus überhaupt etwas gesagt wurde (noteSpeechReply
+      // wird bei JEDER Chat-Antwort geschrieben, auch getippt — s. sendMessage).
+      noteSpeechWords('');
+      noteSpeechReply('');
       showSpeechCaption();
       setSpeechStatus('Bereit');
       startListening();
@@ -4880,22 +4902,28 @@
       + 'background:#060910;border:1px solid ' + ORB_COLOR + '55;'
       + 'box-shadow:0 0 24px rgba(0,0,0,0.5);overflow:hidden;';
     speechTermEl.innerHTML = `
-      <div style="flex:0 0 auto;display:flex;align-items:center;justify-content:space-between;padding:5px 10px;border-bottom:1px solid ${ORB_COLOR}33;">
+      <div class="js-speechterm-drag" style="flex:0 0 auto;display:flex;align-items:center;justify-content:space-between;padding:5px 10px;border-bottom:1px solid ${ORB_COLOR}33;cursor:move;user-select:none;">
         <span style="font:600 11px system-ui,-apple-system,sans-serif;letter-spacing:3px;color:${ORB_COLOR};">${speechTermAgentLabel.split('').join(' ')}</span>
         <button class="js-speechterm-close" title="Terminal schließen" style="background:none;border:none;color:${ORB_COLOR};cursor:pointer;font-size:15px;line-height:1;padding:2px 4px;">×</button>
       </div>
       <div class="js-speechterm-host" style="flex:1 1 auto;min-height:0;"></div>
+      <div class="js-speechterm-resize" title="Größe ändern" style="position:absolute;right:0;bottom:0;width:16px;height:16px;cursor:nwse-resize;">
+        <svg viewBox="0 0 16 16" width="16" height="16" style="display:block;"><path d="M14 2 2 14M14 8 8 14" stroke="${ORB_COLOR}77" stroke-width="1.5" fill="none"/></svg>
+      </div>
     `;
     document.body.appendChild(speechTermEl);
     // Gleich hier einmessen statt erst im nächsten drawOrb-Frame: xterm
     // berechnet Spalten/Zeilen beim open() aus der Elementgröße, und ein
     // Terminal, das in eine 0x0-Box geöffnet wird, meldet dem PTY Unsinn.
+    speechTermUserRect = null;
     if (chatRootEl) layoutSpeechTerminal(chatRootEl.getBoundingClientRect());
     speechTermHostEl = speechTermEl.querySelector('.js-speechterm-host');
     speechTermEl.querySelector('.js-speechterm-close').addEventListener('click', (e) => {
       e.preventDefault();
       closeSpeechTerminal();
     });
+    wireSpeechTermDrag();
+    wireSpeechTermResize();
 
     speechTerm = new Terminal({
       cursorBlink: true,
@@ -4954,7 +4982,67 @@
     speechTerm = null; speechTermFit = null; speechTermHostEl = null;
     if (speechTermEl && speechTermEl.parentNode) speechTermEl.parentNode.removeChild(speechTermEl);
     speechTermEl = null;
+    speechTermUserRect = null;
     if (speechMode) { setSpeechStatus('Bereit'); noteSpeechReply(''); }
+  }
+
+  // Kopfzeile zum Ziehen: Fenster einmal manuell verschoben, merkt sich
+  // speechTermUserRect die Position fortan (siehe layoutSpeechTerminal).
+  function wireSpeechTermDrag() {
+    const handle = speechTermEl.querySelector('.js-speechterm-drag');
+    if (!handle) return;
+    handle.addEventListener('mousedown', (e) => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      const startX = e.clientX, startY = e.clientY;
+      const rect = speechTermEl.getBoundingClientRect();
+      const baseX = rect.left, baseY = rect.top;
+      const onMove = (ev) => {
+        const w = rect.width, h = rect.height;
+        const x = Math.max(0, Math.min(baseX + (ev.clientX - startX), window.innerWidth - w));
+        const y = Math.max(0, Math.min(baseY + (ev.clientY - startY), window.innerHeight - h));
+        speechTermUserRect = { x, y, w, h };
+        speechTermEl.style.left = x + 'px';
+        speechTermEl.style.top = y + 'px';
+      };
+      const onUp = () => {
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+      };
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+    });
+  }
+
+  // Ecke unten rechts zum Skalieren — Mindestgröße wie beim Auto-Layout
+  // (siehe SPEECH_TERM_MIN_W/H), sonst stürzt die TUI wieder ab. fit() läuft
+  // erst bei mouseup, nicht bei jedem mousemove: xterms fit() layoutet neu
+  // und ist bei 60 Aufrufen/s spürbar ruckelig.
+  function wireSpeechTermResize() {
+    const handle = speechTermEl.querySelector('.js-speechterm-resize');
+    if (!handle) return;
+    handle.addEventListener('mousedown', (e) => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const startX = e.clientX, startY = e.clientY;
+      const rect = speechTermEl.getBoundingClientRect();
+      const baseW = rect.width, baseH = rect.height;
+      const onMove = (ev) => {
+        const w = Math.max(SPEECH_TERM_MIN_W, Math.min(baseW + (ev.clientX - startX), window.innerWidth - rect.left));
+        const h = Math.max(SPEECH_TERM_MIN_H, Math.min(baseH + (ev.clientY - startY), window.innerHeight - rect.top));
+        speechTermUserRect = { x: rect.left, y: rect.top, w, h };
+        speechTermEl.style.width = w + 'px';
+        speechTermEl.style.height = h + 'px';
+      };
+      const onUp = () => {
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+        fitSpeechTerminal();
+      };
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+    });
   }
 
   function fitSpeechTerminal() {
@@ -5383,11 +5471,31 @@
   function layoutSpeechTerminal(rect) {
     if (!speechTermEl) return;
     const S = GRID_STEP;
+    // Nutzer hat schon selbst gezogen/skaliert: dessen Rechteck gewinnt,
+    // sonst würde diese pro-Frame-Nachführung jede manuelle Änderung sofort
+    // wieder überschreiben. Weiterhin ins (ggf. seither veränderte)
+    // Fenster geklemmt, statt blind das gemerkte Rechteck zu übernehmen.
+    if (speechTermUserRect) {
+      const w = Math.max(SPEECH_TERM_MIN_W, Math.min(speechTermUserRect.w, window.innerWidth - S));
+      const h = Math.max(SPEECH_TERM_MIN_H, Math.min(speechTermUserRect.h, window.innerHeight - S));
+      const x0 = Math.max(S / 2, Math.min(speechTermUserRect.x, window.innerWidth - w - S / 2));
+      const y0 = Math.max(S / 2, Math.min(speechTermUserRect.y, window.innerHeight - h - S / 2));
+      if (speechTermEl.dataset.w !== String(w) || speechTermEl.dataset.h !== String(h)) {
+        speechTermEl.dataset.w = String(w);
+        speechTermEl.dataset.h = String(h);
+        speechTermEl.style.width = w + 'px';
+        speechTermEl.style.height = h + 'px';
+        requestAnimationFrame(fitSpeechTerminal);
+      }
+      speechTermEl.style.left = x0 + 'px';
+      speechTermEl.style.top = y0 + 'px';
+      return;
+    }
     // Untergrenze ist kein Schönheitswunsch: unter ~50x15 Zeichen stürzt die
     // opencode-TUI beim Start ab (live beobachtet mit 36x9 — Bun-Panic,
     // während dasselbe Terminal im Code-Tab in groß sauber läuft). Deshalb
     // lieber den Orb verdecken als ein zu kleines Raster auszuliefern.
-    const MIN_W = 560, MIN_H = 340;
+    const MIN_W = SPEECH_TERM_MIN_W, MIN_H = SPEECH_TERM_MIN_H;
     // Obergrenze ist das FENSTER, nicht der Chat-Bereich: bei schmaler
     // Sidebar-Ansicht bliebe sonst nur ein Streifen übrig, in dem die TUI
     // wieder abstürzt. Das Panel liegt frei über der Seite, es darf über den
@@ -5523,27 +5631,6 @@
       orbDragging = false;
       orbHitEl.style.cursor = 'grab';
     });
-    const toggleSidebar = () => {
-      const aside = $('.js-sidebar', uiEl);
-      const floatBtn = $('.js-side-toggle-float', uiEl);
-      const open = aside.style.display !== 'none';
-      aside.style.display = open ? 'none' : 'flex';
-      if (floatBtn) floatBtn.style.display = open ? 'inline-flex' : 'none';
-      const comp = $('.js-composer', uiEl);
-      if (comp) comp.style.left = open ? '0' : '308px';
-      // orbCanvas selbst bleibt IMMER auf voller Bildschirmbreite (left:0,
-      // inset:0 aus buildUi) — drawOrb() zentriert die Kugel schon selbst
-      // über chatRootEl.getBoundingClientRect() (Viewport-Koordinaten).
-      // Das Canvas hier zusätzlich zu verschieben (frühere Version) machte
-      // die eigene Box schmaler als 100vw + links versetzt, wodurch die auf
-      // Viewport-Koordinaten gezeichnete Kugel bei geöffneter Sidebar 308px
-      // zu weit rechts landete, sobald einmal umgeschaltet wurde.
-      layoutSpeechBar();
-    };
-    const t = $('.js-side-toggle', uiEl);
-    if (t) t.addEventListener('click', toggleSidebar);
-    const tf = $('.js-side-toggle-float', uiEl);
-    if (tf) tf.addEventListener('click', toggleSidebar);
     const navBackBtn = $('.js-nav-back', uiEl);
     const navForwardBtn = $('.js-nav-forward', uiEl);
     if (navBackBtn) navBackBtn.addEventListener('click', () => navGo(-1));

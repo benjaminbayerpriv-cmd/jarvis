@@ -188,6 +188,38 @@ def _note_active_target(base_url: str, model: str) -> None:
     _active_model_provider = "DeepSeek" if base_url == config.DEEPSEEK_BASE_URL else "ein lokales Modell über LM Studio"
 
 
+def warm_system_prompt(base_url: str, model: str) -> None:
+    """Throwaway completion carrying the real system prompt, so LM Studio's
+    llama.cpp backend prefills and caches those tokens ahead of time.
+
+    Observed live: with a big model (Qwen3.6 35B A3B), the FIRST real message
+    after a (re)load took noticeably longer than every one after it — because
+    that first request pays for prefilling the whole system prompt (a few
+    thousand tokens) from scratch, while later ones reuse the server's
+    prompt-prefix cache from the previous turn. Sending that same prefix here
+    ahead of time, right after the model finishes loading, moves that one-time
+    cost off the user's first real message. Purely a latency optimization:
+    errors are swallowed, this must never block startup or a model switch,
+    and a cache miss here just means the first real message pays the normal
+    cost, exactly like today.
+    """
+    try:
+        requests.post(
+            f"{base_url}/chat/completions",
+            json={
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": _system_prompt(False)},
+                    {"role": "user", "content": "hi"},
+                ],
+                "max_tokens": 1,
+            },
+            timeout=180,
+        )
+    except requests.RequestException as exc:
+        print(f"[model] Vorwärmen des System-Prompts für {model} fehlgeschlagen: {exc}")
+
+
 # Kept deliberately short: measured against this model, a long rule-list prompt
 # made it hallucinate tool results (inventing a time, claiming a note was saved)
 # where a compact one keeps it actually calling the functions. A function, not
@@ -318,8 +350,17 @@ OpenCode kennt euer Gespräch nicht. Danach sagst du in einem kurzen Satz, was
 du weitergegeben hast.
 
 Will der Nutzer das Modell des Coding-Agenten wechseln ("nimm das Devstral",
-"wechsel bei OpenCode auf das große Modell", "benutz Sonnet", "nimm Opus"),
-rufst du IMMER opencode_model auf — behaupte den Wechsel nie einfach, ohne
+"wechsel bei OpenCode auf das große Modell", "benutz Sonnet", "nimm Opus",
+"switch das Modell zu X"), rufst du SOFORT opencode_model mit genau dem vom
+Nutzer genannten Namen auf — auch wenn dir der Name selbst nichts sagt oder
+exotisch/erfunden klingt ("Big Pickle" zum Beispiel ist ein echtes,
+existierendes OpenCode-Modell). Du kennst OpenCodes Modell-Katalog NICHT
+auswendig, also darfst du niemals von dir aus behaupten, ein Modellname sei
+"unbekannt" oder frag nie von dir aus nach, welches Modell gemeint ist, bevor
+du opencode_model überhaupt aufgerufen hast — nur das Tool weiß, ob der Name
+existiert, und liefert bei einem echten Nichttreffer selbst schon die Liste
+der verfügbaren Modelle sowie eine passende Rückfrage zurück, die du dann
+unverändert weitergibst. Behaupte den Wechsel aber auch nie einfach, ohne
 die Funktion aufgerufen zu haben. Gemeint ist damit NICHT dein eigenes
 Chat-Modell. Das gilt für ALLE drei Coding-Agenten, nicht nur OpenCode:
 opencode_model wechselt immer das Modell des gerade AKTIVEN Agenten (siehe
@@ -329,6 +370,14 @@ Will der Nutzer stattdessen WELCHEN Coding-Agenten benutzen ("nimm Claude
 Code zum Programmieren", "wechsel auf Codex", "benutz wieder OpenCode"),
 rufst du IMMER set_code_agent auf — das ist etwas anderes als opencode_model
 (hier wechselt der ganze Agent, dort nur dessen Modell).
+
+set_code_agent kennt GENAU drei gültige Namen: OpenCode, Claude Code, Codex —
+sonst nichts. Jeder andere Name in einem "nimm/wechsel/switch"-Satz ist ein
+MODELLNAME, kein Agent, und gehört zu opencode_model — auch wenn er wie ein
+Eigenname oder ein zweites Wort wie "Coder"/"Code" klingt (z.B. "Qwen Coder",
+"Muse Spark", "Space Bunny" sind allesamt Modelle aus OpenCodes Katalog,
+keine Agenten). Ruf set_code_agent NIEMALS mit einem Namen auf, der nicht
+wortwörtlich einer der drei obigen ist — im Zweifel ist es opencode_model.
 
 Programmiert wird AUSNAHMSLOS über opencode — jede Größe, jede Aufgabe, auch
 wenn der Nutzer einen eigenen Zielordner nennt oder eine komplett neue App
@@ -381,7 +430,15 @@ _CODE_MODE_PROMPT = """Der Nutzer hat den Code-Modus gewählt. Antworte deshalb 
 technischer und konkreter: wo es passt, gib echten Code (in Code-Blöcken),
 zeige Differenzen oder genaue Schritte und bleibe knapp. Soll etwas
 programmiert werden, gib den Auftrag wie immer sofort per opencode weiter —
-ohne nach einem Zielordner zu fragen."""
+ohne nach einem Zielordner zu fragen.
+
+Redet der Nutzer hier im Code-Modus von "das Modell wechseln"/"switch das
+Modell" o.ä., OHNE dabei ausdrücklich dein eigenes Chat-/Sprachmodell zu
+meinen, ist damit IMMER das Modell des gerade aktiven Coding-Agenten gemeint
+(OpenCode, Claude Code oder Codex) — ruf sofort opencode_model auf, ganz
+gleich ob der Nutzer den Agenten beim Namen nennt oder nicht. Frag nicht erst
+nach, ob er den Coding-Agenten oder dein eigenes Modell meint; im Code-Modus
+ist das keine echte Mehrdeutigkeit."""
 
 
 def _user_content(user_message: str, images: list[str] | None):
@@ -1128,6 +1185,36 @@ _FS_STATE_CLAIM_RE = re.compile(
     r"\b(?:datei|ordner|verzeichnis)\w*\b[^.!?]{0,80}\b(?:existiert|existieren|vorhanden|gelöscht|entfernt)\b",
     re.IGNORECASE,
 )
+# The model rejecting a requested code-agent model switch as "unknown" from
+# its own (non-)knowledge, without ever having called opencode_model to find
+# out — observed live: "Auch 'Big Pickle' ist mir als Modellname unbekannt.
+# Kannst du mir sagen, ...?" for a model that genuinely exists in OpenCode's
+# catalog. Only opencode_model actually knows the catalog; a refusal that
+# skips it is exactly as unbacked as claiming a file was deleted without
+# checking (see _FS_STATE_CLAIM_RE above).
+_MODEL_UNKNOWN_CLAIM_RE = re.compile(
+    r"\bmodell\w*\b[^.!?]{0,60}\b(?:unbekannt|nicht bekannt|nicht verfügbar|"
+    r"existiert nicht|gibt es nicht|kenne ich nicht|kenn ich nicht)\b",
+    re.IGNORECASE,
+)
+# The opposite failure of the one above: claiming the switch WORKED without
+# ever calling opencode_model — observed live, switching A -> B -> back to A
+# again: the second switch was never actually applied (get_selected_model
+# still showed B), yet the reply confidently said the model was back to A.
+# None of the existing participle/stem lists caught this (they were built for
+# open/save/delete/click, never extended for "wechseln"/"umstellen") so the
+# claim sailed through unvetted. Order-independent (lookaheads) since the verb
+# and "Modell" can appear in either order ("Modell gewechselt" vs. "Big
+# Pickle ist jetzt aktiv") — deliberately also matches opencode_model's own
+# genuine return text ("OpenCode arbeitet ab jetzt mit X"), which is fine:
+# when the tool really ran, the requirement below is already satisfied.
+_MODEL_SWITCH_CLAIM_RE = re.compile(
+    r"(?=.*\b(?:modell\w*|coding-agent)\b)"
+    r"(?=.*\b(?:gewechselt|wechselt|zurückgewechselt|umgestellt|umgeschaltet|"
+    r"eingestellt|gesetzt|aktiviert|arbeitet\s+(?:ab\s+)?jetzt\s+mit|"
+    r"läuft\s+(?:ab\s+)?jetzt\s+mit|ist\s+(?:jetzt\s+)?wieder)\b)",
+    re.IGNORECASE,
+)
 
 # "I'm doing/will do X" reads as just as done as a past participle to a
 # listener, in any tense or mood — observed live first with present tense
@@ -1271,6 +1358,8 @@ def _sentence_is_claim(sentence: str) -> bool:
         or _direct_ich_claim(sentence)
         or (bool(_TASK_HANDOFF_RE.search(sentence)) and not negated)
         or bool(_FS_STATE_CLAIM_RE.search(sentence))
+        or bool(_MODEL_UNKNOWN_CLAIM_RE.search(sentence))
+        or bool(_MODEL_SWITCH_CLAIM_RE.search(sentence))
     )
     if not is_claim:
         return False
@@ -1312,6 +1401,8 @@ def _claims_action(text: str) -> bool:
 # done — this stays scoped to the one gap actually observed.
 _CLAIM_TOOL_REQUIREMENTS: tuple[tuple[re.Pattern, frozenset[str]], ...] = (
     (_TASK_HANDOFF_RE, frozenset({"opencode"})),
+    (_MODEL_UNKNOWN_CLAIM_RE, frozenset({"opencode_model"})),
+    (_MODEL_SWITCH_CLAIM_RE, frozenset({"opencode_model"})),
 )
 
 

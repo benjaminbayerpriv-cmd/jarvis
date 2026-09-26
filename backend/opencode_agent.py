@@ -451,22 +451,35 @@ def recent_output(max_chars: int = 2000) -> str:
     return "\n".join(deduped)[-max_chars:]
 
 
+_LAST_MODEL_LIST: list[str] = []
+
+
 def list_all_models() -> list[str]:
     """Alle Modelle, die opencode kennt — als vollständige IDs inklusive
     Provider ("lmstudio/qwen/qwen3.5-9b", "opencode/big-pickle").
 
     Bewusst über `opencode models` statt über LM Studio: opencode bringt
     eigene (auch kostenlose) Modelle mit, die LM Studio gar nicht kennt und
-    die sonst nicht auswählbar wären.
+    die sonst nicht auswählbar wären. Der kostenlose "opencode/"-Katalog wird
+    dabei online abgefragt — bei einer Netzwerkflaute würde ein Modellwechsel
+    sonst reihenweise mit "nicht gefunden" fehlschlagen, obwohl das Modell
+    existiert. Deshalb: kurzes Timeout statt eine ganze Sprach-Runde lang zu
+    hängen, und bei einem leeren/fehlgeschlagenen Versuch die zuletzt
+    erfolgreich geladene Liste als Fallback statt komplett leer zurückgeben.
     """
+    global _LAST_MODEL_LIST
     try:
         out = subprocess.run(
             [OPENCODE_BIN, "models"],
-            capture_output=True, text=True, timeout=60,
+            capture_output=True, text=True, timeout=12,
         ).stdout
     except (OSError, subprocess.SubprocessError):
-        return []
-    return [ln.strip() for ln in out.splitlines() if "/" in ln and not ln.startswith(" ")]
+        return _LAST_MODEL_LIST
+    models = [ln.strip() for ln in out.splitlines() if "/" in ln and not ln.startswith(" ")]
+    if models:
+        _LAST_MODEL_LIST = models
+        return models
+    return _LAST_MODEL_LIST
 
 
 def _model_config_key(agent_id: str | None) -> str:
