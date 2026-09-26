@@ -13,25 +13,98 @@
   const $ = (s, r = document) => r.querySelector(s);
 
   // ------------------------------------------------ claude-design-tokens
-  // Echte claude.ai-Dark-Palette (aus dem live-DOM extrahiert: --cds-surface-1
-  // #151515 für Seite/Sidebar, --cds-surface-3 #1f1f1e fürs Composer-Karten,
-  // --cds-gray-200/-350 für Sekundär-/Tertiärtext, ein HELLER Haarlinien-Rand
-  // bei ~10% Deckkraft statt eines dunklen Randtons — auf dunklem Grund liegt
-  // dort ein dezenter LICHTER Ring, kein brauner Schatten).
+  // Jeder Farbwert ist eine CSS-Variable statt eines festen Hex-Codes — ein
+  // Theme-Wechsel (siehe JARVIS_THEMES/applyJarvisTheme unten) ändert nur die
+  // Variablenwerte auf <html>, und JEDE der tausenden Stellen, die hier
+  // ${C.bg} etc. in einen style="..."-String einsetzt, liest den neuen Wert
+  // live über die CSS-Kaskade — ganz ohne die UI neu zu bauen. Die Werte
+  // selbst (die tatsächlichen Hex-Codes je Theme) stehen in JARVIS_THEMES.
   const C = {
-    bg: '#151515',
-    bgSoft: '#151515',
-    bgSurface3: '#1f1f1e',
-    bgHover: 'rgba(255,255,255,.11)',
-    text: '#f0efe8',
-    textSoft: '#c3c0b4',
-    textDim: '#8a8680',
-    border: 'rgba(240,236,225,.14)',
-    borderStrong: 'rgba(240,236,225,.24)',
-    accent: '#d97757',                 // Claude-Terracotta
+    bg: 'var(--jsBg)',
+    bgSoft: 'var(--jsBgSoft)',
+    bgSurface3: 'var(--jsBgSurface3)',
+    bgHover: 'var(--jsBgHover)',
+    text: 'var(--jsText)',
+    textSoft: 'var(--jsTextSoft)',
+    textDim: 'var(--jsTextDim)',
+    border: 'var(--jsBorder)',
+    borderStrong: 'var(--jsBorderStrong)',
+    accent: 'var(--jsAccent)',
+    accentTint: 'var(--jsAccentTint)', // dezenter Akzent-Ton für Hervorhebungen (z.B. aktives Modell)
     font: 'var(--font-anthropic-sans, system-ui, sans-serif)',
     serif: 'var(--font-anthropic-serif, Georgia, serif)',
   };
+
+  // Vier Theme-Paletten — "dark" ist die ursprüngliche claude.ai-Dark-Palette
+  // (aus dem live-DOM extrahiert: --cds-surface-1 #151515 für Seite/Sidebar,
+  // --cds-surface-3 #1f1f1e fürs Composer-Karten, --cds-gray-200/-350 für
+  // Sekundär-/Tertiärtext), die anderen drei sind eigene Varianten (hell,
+  // bläulich, warm) auf derselben Struktur.
+  const JARVIS_THEMES = [
+    { id: 'dark', label: 'Dunkel', vars: {
+      jsBg: '#151515', jsBgSoft: '#151515', jsBgSurface3: '#1f1f1e', jsBgHover: 'rgba(255,255,255,.11)',
+      jsText: '#f0efe8', jsTextSoft: '#c3c0b4', jsTextDim: '#8a8680',
+      jsBorder: 'rgba(240,236,225,.14)', jsBorderStrong: 'rgba(240,236,225,.24)',
+      jsAccent: '#d97757', jsAccentTint: 'rgba(217,119,87,.14)',
+    } },
+    { id: 'light', label: 'Hell', vars: {
+      jsBg: '#faf9f5', jsBgSoft: '#f3f1ea', jsBgSurface3: '#ffffff', jsBgHover: 'rgba(31,29,26,.06)',
+      jsText: '#211f1b', jsTextSoft: '#57534a', jsTextDim: '#8c8779',
+      jsBorder: 'rgba(31,29,26,.12)', jsBorderStrong: 'rgba(31,29,26,.22)',
+      jsAccent: '#bd5b3c', jsAccentTint: 'rgba(189,91,60,.12)',
+    } },
+    { id: 'ocean', label: 'Ozean', vars: {
+      jsBg: '#0d1420', jsBgSoft: '#0a0f18', jsBgSurface3: '#16202e', jsBgHover: 'rgba(255,255,255,.08)',
+      jsText: '#e8eef5', jsTextSoft: '#aebdcf', jsTextDim: '#71889f',
+      jsBorder: 'rgba(180,205,230,.14)', jsBorderStrong: 'rgba(180,205,230,.24)',
+      jsAccent: '#4d9de0', jsAccentTint: 'rgba(77,157,224,.16)',
+    } },
+    { id: 'sunset', label: 'Sonnenuntergang', vars: {
+      jsBg: '#1a1015', jsBgSoft: '#170e13', jsBgSurface3: '#251720', jsBgHover: 'rgba(255,255,255,.09)',
+      jsText: '#f5e9ec', jsTextSoft: '#d1b3bc', jsTextDim: '#977581',
+      jsBorder: 'rgba(245,180,200,.14)', jsBorderStrong: 'rgba(245,180,200,.24)',
+      jsAccent: '#e0607a', jsAccentTint: 'rgba(224,96,122,.16)',
+    } },
+    // Reines Schwarz mit hellgrünem Akzent — Terminal-/Matrix-Anmutung.
+    { id: 'matrix', label: 'Matrix', vars: {
+      jsBg: '#000000', jsBgSoft: '#000000', jsBgSurface3: '#0d1a0d', jsBgHover: 'rgba(57,255,20,.14)',
+      jsText: '#39ff14', jsTextSoft: '#2de00f', jsTextDim: '#1f9c0b',
+      jsBorder: 'rgba(57,255,20,.22)', jsBorderStrong: 'rgba(57,255,20,.36)',
+      jsAccent: '#39ff14', jsAccentTint: 'rgba(57,255,20,.18)',
+    } },
+  ];
+  const JARVIS_THEME_DEFAULT = 'dark';
+
+  function getJarvisTheme() {
+    try {
+      const saved = localStorage.getItem('jarvisTheme');
+      if (saved && JARVIS_THEMES.some((t) => t.id === saved)) return saved;
+    } catch (e) {}
+    return JARVIS_THEME_DEFAULT;
+  }
+  function applyJarvisTheme(id) {
+    const theme = JARVIS_THEMES.find((t) => t.id === id) || JARVIS_THEMES[0];
+    document.documentElement.dataset.jarvisTheme = theme.id;
+    try { localStorage.setItem('jarvisTheme', theme.id); } catch (e) {}
+  }
+  // Sofort anwenden, noch bevor buildUi() irgendetwas zeichnet — sonst blitzt
+  // beim Laden immer kurz das dunkle Default-Theme auf, bevor ein gespeichertes
+  // helles nachträglich greift.
+  applyJarvisTheme(getJarvisTheme());
+
+  function getJarvisPref(key, fallback) {
+    try {
+      const v = localStorage.getItem(key);
+      return v === null ? fallback : v === 'true';
+    } catch (e) { return fallback; }
+  }
+  function setJarvisPref(key, value) {
+    try { localStorage.setItem(key, value ? 'true' : 'false'); } catch (e) {}
+  }
+  function applyReduceMotion(on) {
+    document.documentElement.classList.toggle('jarvis-reduce-motion', !!on);
+  }
+  applyReduceMotion(getJarvisPref('jarvisReduceMotion', false));
 
   // Einstellungen-Panel: jede .env-Variable aus backend/config.py, die
   // nicht schon ihr eigenes dediziertes UI hat (LM-Studio-URL/Modell,
@@ -41,18 +114,47 @@
   // ein neues Feld braucht nur einen neuen Eintrag, keinen neuen Code.
   // Modul-Ebene (nicht in buildUi()), damit openSettings() — eine
   // eigenständige Funktion, kein Kind von buildUi() — mitlesen kann.
+  // Selbständig bemaßte 18x18-Icons für die Einstellungs-Kartenköpfe — anders
+  // als die ICONS-Sammlung unten (die auf kontextbezogene "X svg{width;height}"
+  // CSS-Regeln angewiesen ist) tragen diese ihre Größe direkt im <svg>-Tag,
+  // damit settingsIconBadge() sie ohne zusätzliche CSS-Kopplung einsetzen kann.
+  const SETTINGS_ICONS = {
+    model: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="16" height="16" x="4" y="4" rx="2"/><rect width="6" height="6" x="9" y="9" rx="1"/><path d="M15 2v2"/><path d="M15 20v2"/><path d="M2 15h2"/><path d="M2 9h2"/><path d="M20 15h2"/><path d="M20 9h2"/><path d="M9 2v2"/><path d="M9 20v2"/></svg>',
+    connection: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 17H7A5 5 0 0 1 7 7h2"/><path d="M15 7h2a5 5 0 1 1 0 10h-2"/><line x1="8" x2="16" y1="12" y2="12"/></svg>',
+    code: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>',
+    speaker: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 4.702a.705.705 0 0 0-1.203-.498L6.413 7.587A1.4 1.4 0 0 1 5.416 8H3a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2.416a1.4 1.4 0 0 1 .997.413l3.383 3.384A.705.705 0 0 0 11 19.298z"/><path d="M16 9a5 5 0 0 1 0 6"/><path d="M19.364 18.364a9 9 0 0 0 0-12.728"/></svg>',
+    mic: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/></svg>',
+    cloud: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.5 19H9a7 7 0 1 1 6.71-9h.79a4.5 4.5 0 1 1 0 9Z"/></svg>',
+    memory: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0 0 18 0V5"/><path d="M3 12a9 3 0 0 0 18 0"/></svg>',
+    web: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/></svg>',
+    palette: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22a1 1 0 0 1 0-20 10 9 0 0 1 10 9 5 5 0 0 1-5 5h-2.25a1.75 1.75 0 0 0-1.4 2.8l.3.4a1.75 1.75 0 0 1-1.4 2.8z"/><circle cx="13.5" cy="6.5" r=".5" fill="currentColor"/><circle cx="17.5" cy="10.5" r=".5" fill="currentColor"/><circle cx="6.5" cy="12.5" r=".5" fill="currentColor"/><circle cx="8.5" cy="7.5" r=".5" fill="currentColor"/></svg>',
+  };
+  const SETTINGS_CHECK_SVG = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>';
+  function settingsIconBadge(svg) {
+    return `<span style="width:32px;height:32px;border-radius:9px;background:${C.bgHover};color:${C.textSoft};display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;">${svg}</span>`;
+  }
+  function settingsGroupLabel(text, first) {
+    return `<div style="font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:${C.textDim};margin:${first ? '0' : '26px'} 2px 10px;">${text}</div>`;
+  }
+
   const SETTINGS_SECTIONS = [
-    { id: 'sprachausgabe', title: 'Sprachausgabe', fields: [
+    { id: 'sprachausgabe', title: 'Sprachausgabe', desc: 'ElevenLabs (Cloud) oder Supertonic — lokal und kostenlos', icon: SETTINGS_ICONS.speaker, fields: [
       { key: 'elevenlabs_api_key', label: 'ElevenLabs API-Key (optional, sonst lokale Stimme)', placeholder: 'sk_…', type: 'password' },
       { key: 'elevenlabs_voice_id', label: 'ElevenLabs Voice-ID', placeholder: 'pNInz6obpgDQGcFmaJgB' },
       { key: 'supertonic_voice', label: 'Lokale Stimme (Supertonic)', placeholder: 'M1' },
       { key: 'supertonic_lang', label: 'Sprache (Supertonic)', placeholder: 'de' },
     ] },
-    { id: 'spracherkennung', title: 'Spracherkennung', fields: [
-      { key: 'whisper_model', label: 'Whisper-Modell (tiny/base/small/medium/large-v3)', placeholder: 'medium' },
+    { id: 'spracherkennung', title: 'Spracherkennung', desc: 'Lokales Whisper-Modell, läuft komplett offline', icon: SETTINGS_ICONS.mic, fields: [
+      { key: 'whisper_model', label: 'Whisper-Modell', type: 'select', options: [
+        { value: 'tiny', label: 'Tiny — am schnellsten, am ungenauesten' },
+        { value: 'base', label: 'Base' },
+        { value: 'small', label: 'Small' },
+        { value: 'medium', label: 'Medium — empfohlen' },
+        { value: 'large-v3', label: 'Large v3 — am genauesten, am langsamsten' },
+      ], hint: 'Größer erkennt zuverlässiger, braucht aber mehr Zeit und VRAM.' },
     ] },
     {
-      id: 'cloud-llm', title: 'Cloud-LLM (optional, sonst LM Studio)',
+      id: 'cloud-llm', title: 'Cloud-LLM', desc: 'Optional — ohne Konfiguration nutzt Jarvis LM Studio', icon: SETTINGS_ICONS.cloud,
       // Hart aus/an, unabhängig von den Feldern unten — wirkt sofort beim
       // Umschalten (kein Speichern-Klick nötig), damit "ausschalten"
       // wirklich sofort keine Anfrage mehr an DeepSeek gehen lässt, auch
@@ -68,19 +170,28 @@
         { key: 'deepseek_model', label: 'DeepSeek Modell', placeholder: 'deepseek-chat' },
       ],
     },
-    { id: 'gedaechtnis', title: 'Gedächtnis', fields: [
-      { key: 'embedding_model', label: 'Embedding-Modell (semantische Suche, in LM Studio geladen)', placeholder: 'text-embedding-nomic-embed-text-v1.5' },
+    { id: 'gedaechtnis', title: 'Gedächtnis', desc: 'Embedding-Modell für die semantische Notizsuche', icon: SETTINGS_ICONS.memory, fields: [
+      { key: 'embedding_model', label: 'Embedding-Modell (in LM Studio geladen)', placeholder: 'text-embedding-nomic-embed-text-v1.5' },
     ] },
-    { id: 'web', title: 'Web-Suche', fields: [
-      { key: 'tavily_api_key', label: 'Tavily API-Key (optional, sonst Suche im Browser öffnen)', placeholder: 'tvly-…', type: 'password' },
+    { id: 'web', title: 'Web-Suche', desc: 'Optional — ohne Tavily-Key öffnet Jarvis die Suche im Browser', icon: SETTINGS_ICONS.web, fields: [
+      { key: 'tavily_api_key', label: 'Tavily API-Key', placeholder: 'tvly-…', type: 'password' },
     ] },
   ];
-  function settingsSectionHtml(section, isLast) {
-    const rows = section.fields.map((f) => `
+  function settingsFieldHtml(f) {
+    const control = f.type === 'select'
+      ? `<select class="js-set-${f.key} js-settings-input" style="width:100%;box-sizing:border-box;padding:9px 10px;background:${C.bg};border:1px solid ${C.border};border-radius:8px;color:${C.text};font-size:13px;outline:none;font-family:${C.font};">
+          ${(f.options || []).map((o) => `<option value="${o.value}">${o.label}</option>`).join('')}
+        </select>`
+      : `<input class="js-set-${f.key} js-settings-input" type="${f.type || 'text'}" placeholder="${f.placeholder || ''}" spellcheck="false" style="width:100%;box-sizing:border-box;padding:9px 10px;background:${C.bg};border:1px solid ${C.border};border-radius:8px;color:${C.text};font-size:13px;outline:none;font-family:${C.font};" />`;
+    return `
           <div style="display:flex;flex-direction:column;gap:6px;">
-            <span style="font-size:12px;color:${C.textSoft};">${f.label}</span>
-            <input class="js-set-${f.key}" type="${f.type || 'text'}" placeholder="${f.placeholder || ''}" spellcheck="false" style="width:100%;box-sizing:border-box;padding:9px 10px;background:${C.bg};border:1px solid ${C.border};border-radius:8px;color:${C.text};font-size:13px;outline:none;font-family:${C.font};" />
-          </div>`).join('');
+            <span style="font-size:12.5px;color:${C.textSoft};">${f.label}</span>
+            ${control}
+            ${f.hint ? `<span style="font-size:11.5px;color:${C.textDim};line-height:1.4;">${f.hint}</span>` : ''}
+          </div>`;
+  }
+  function settingsSectionHtml(section) {
+    const rows = section.fields.map(settingsFieldHtml).join('');
     const toggleHtml = section.toggle ? `
           <div style="display:flex;flex-direction:column;gap:4px;">
             <label style="display:flex;align-items:center;justify-content:space-between;gap:10px;cursor:pointer;">
@@ -95,18 +206,75 @@
             <span class="js-set-toggle-status-${section.toggle.key}" style="font-size:11.5px;color:${C.textDim};"></span>
           </div>` : '';
     return `
-      <div style="padding:${isLast ? '0 6px 16px' : '0 6px 12px'};border-top:1px solid ${C.border};">
-        <button class="js-settings-toggle-${section.id}" style="width:100%;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:12px 10px 6px;background:none;border:none;cursor:pointer;text-align:left;font-family:${C.font};">
-          <span style="font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:${C.textDim};">${section.title}</span>
+      <div class="js-settings-card" style="border:1px solid ${C.border};border-radius:14px;background:${C.bgSurface3};margin-bottom:10px;overflow:hidden;">
+        <button class="js-settings-toggle-${section.id}" style="width:100%;display:flex;align-items:center;gap:12px;padding:14px 16px;background:none;border:none;cursor:pointer;text-align:left;font-family:${C.font};">
+          ${settingsIconBadge(section.icon)}
+          <span style="flex:1;min-width:0;display:flex;flex-direction:column;gap:2px;">
+            <span style="font-size:14px;font-weight:600;color:${C.text};">${section.title}</span>
+            ${section.desc ? `<span style="font-size:12px;color:${C.textDim};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${section.desc}</span>` : ''}
+          </span>
           <span class="js-settings-chevron-${section.id}" style="color:${C.textDim};transition:transform .15s;flex:0 0 auto;">${ICONS.chevronDown || '▾'}</span>
         </button>
-        <div class="js-settings-body-${section.id}" style="display:none;padding:4px 10px;flex-direction:column;gap:10px;">
+        <div class="js-settings-body-${section.id}" style="display:none;padding:0 16px 16px;flex-direction:column;gap:12px;">
           ${toggleHtml}
           ${rows}
           <div style="display:flex;align-items:center;gap:10px;">
-            <button class="js-set-save-${section.id}" style="align-self:flex-start;padding:7px 12px;border:none;border-radius:8px;background:${C.accent};color:#fff;font-size:12px;cursor:pointer;font-family:${C.font};">Speichern</button>
-            <span class="js-set-status-${section.id}" style="font-size:11.5px;color:${C.textDim};"></span>
+            <button class="js-set-save-${section.id} js-settings-save-btn" style="align-self:flex-start;padding:8px 14px;border:none;border-radius:8px;background:${C.accent};color:#fff;font-size:12.5px;font-weight:600;cursor:pointer;font-family:${C.font};">Speichern</button>
+            <span class="js-set-status-${section.id}" style="font-size:12px;color:${C.textDim};display:flex;align-items:center;gap:5px;"></span>
           </div>
+        </div>
+      </div>`;
+  }
+
+  // Ein sofort wirksamer An/Aus-Schalter außerhalb des SETTINGS_SECTIONS-
+  // Speichern-Musters — für reine Oberflächen-Einstellungen (Theme-Karte
+  // unten), die wie eine Anprobe sofort sichtbar sein sollen, ohne extra
+  // Klick auf "Speichern". `key` ist zugleich der localStorage-Schlüssel.
+  function settingsImmediateToggleHtml(key, label, hint) {
+    return `
+          <label style="display:flex;align-items:center;justify-content:space-between;gap:10px;cursor:pointer;">
+            <span style="display:flex;flex-direction:column;gap:2px;">
+              <span style="font-size:13px;color:${C.text};">${label}</span>
+              ${hint ? `<span style="font-size:11.5px;color:${C.textDim};line-height:1.4;">${hint}</span>` : ''}
+            </span>
+            <span style="position:relative;display:inline-block;width:38px;height:22px;flex:0 0 auto;">
+              <input class="js-immediate-toggle-${key}" type="checkbox" style="opacity:0;width:100%;height:100%;position:absolute;margin:0;cursor:pointer;" />
+              <span class="js-immediate-toggle-track-${key}" style="position:absolute;inset:0;background:${C.border};border-radius:11px;transition:background .15s;pointer-events:none;"></span>
+              <span class="js-immediate-toggle-thumb-${key}" style="position:absolute;top:2px;left:2px;width:18px;height:18px;border-radius:50%;background:#fff;transition:left .15s;pointer-events:none;"></span>
+            </span>
+          </label>`;
+  }
+
+  function jarvisThemeSwatchHtml(t) {
+    return `
+          <button class="js-theme-swatch" data-theme-id="${t.id}" title="${t.label}" style="display:flex;flex-direction:column;align-items:center;gap:6px;background:none;border:none;cursor:pointer;padding:0;font-family:${C.font};">
+            <span class="js-theme-swatch-box" data-theme-id="${t.id}" style="width:64px;height:44px;border-radius:10px;border:2px solid transparent;overflow:hidden;position:relative;background:${t.vars.jsBg};box-shadow:inset 0 0 0 1px ${t.vars.jsBorder};">
+              <span style="position:absolute;left:6px;top:6px;right:6px;height:8px;border-radius:3px;background:${t.vars.jsBgSurface3};"></span>
+              <span style="position:absolute;left:6px;bottom:6px;width:16px;height:16px;border-radius:50%;background:${t.vars.jsAccent};"></span>
+            </span>
+            <span style="font-size:11.5px;color:${C.textDim};">${t.label}</span>
+          </button>`;
+  }
+
+  function settingsAppearanceCardHtml() {
+    return `
+      <div class="js-settings-card" style="border:1px solid ${C.border};border-radius:14px;background:${C.bgSurface3};margin-bottom:10px;overflow:hidden;">
+        <button class="js-settings-toggle-appearance" style="width:100%;display:flex;align-items:center;gap:12px;padding:14px 16px;background:none;border:none;cursor:pointer;text-align:left;font-family:${C.font};">
+          ${settingsIconBadge(SETTINGS_ICONS.palette)}
+          <span style="flex:1;min-width:0;display:flex;flex-direction:column;gap:2px;">
+            <span style="font-size:14px;font-weight:600;color:${C.text};">Erscheinungsbild</span>
+            <span style="font-size:12px;color:${C.textDim};">Farbschema und Bewegung</span>
+          </span>
+          <span class="js-settings-chevron-appearance" style="color:${C.textDim};transition:transform .15s;flex:0 0 auto;">${ICONS.chevronDown}</span>
+        </button>
+        <div class="js-settings-body-appearance" style="display:none;padding:0 16px 16px;flex-direction:column;gap:16px;">
+          <div style="display:flex;flex-direction:column;gap:8px;">
+            <span style="font-size:12.5px;color:${C.textSoft};">Farbschema</span>
+            <div class="js-theme-swatches" style="display:flex;gap:14px;flex-wrap:wrap;">
+              ${JARVIS_THEMES.map(jarvisThemeSwatchHtml).join('')}
+            </div>
+          </div>
+          ${settingsImmediateToggleHtml('jarvisReduceMotion', 'Bewegung reduzieren', 'Schaltet Übergänge und Animationen in der Oberfläche ab.')}
         </div>
       </div>`;
   }
@@ -821,11 +989,6 @@
             <button class="js-artifacts js-navrow" title="Bald verfügbar" style="display:flex;align-items:center;gap:8px;height:40px;padding:0 8px;background:none;border:none;border-radius:8px;color:${C.textDim};font-size:14px;cursor:default;text-align:left;opacity:.55;">${jsIcon('0xe017', 24)}<span>Artefakte</span></button>
             <button class="js-customize js-navrow" title="Bald verfügbar" style="display:flex;align-items:center;gap:8px;height:40px;padding:0 8px;background:none;border:none;border-radius:8px;color:${C.textDim};font-size:14px;cursor:default;text-align:left;opacity:.55;">${jsIcon('0xe100', 24)}<span>Anpassen</span></button>
           </div>
-          <div class="js-projects-pin-section">
-            <div style="display:flex;align-items:center;padding:8px 8px 4px;">
-              <span class="js-projects-pin-title" style="font-size:14px;color:${C.textSoft};cursor:pointer;">Projekte</span>
-            </div>
-          </div>
           <button class="js-pinned-toggle" style="display:none;align-items:center;gap:4px;padding:2px 8px 4px;background:none;border:none;font-size:13px;color:${C.textDim};cursor:pointer;font-family:${C.font};">
             <span>Angeheftet</span>
             <span class="js-pinned-chevron" style="display:inline-flex;transition:transform .15s;">${ICONS.chevronDown}</span>
@@ -923,26 +1086,37 @@
             <button class="js-settings-close" title="Schließen" style="width:32px;height:32px;border-radius:9px;background:none;border:none;color:${C.textSoft};cursor:pointer;font-size:18px;line-height:1;">×</button>
           </div>
           <div style="max-width:640px;display:flex;flex-direction:column;">
-            <div style="padding:0;">
-              <button class="js-settings-toggle-modell" style="width:100%;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:12px 0 6px;background:none;border:none;cursor:pointer;text-align:left;font-family:${C.font};">
-                <span style="font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:${C.textDim};">Modell</span>
+            ${settingsGroupLabel('Darstellung', true)}
+            ${settingsAppearanceCardHtml()}
+            ${settingsGroupLabel('Grundlagen')}
+            <div class="js-settings-card" style="border:1px solid ${C.border};border-radius:14px;background:${C.bgSurface3};margin-bottom:10px;overflow:hidden;">
+              <button class="js-settings-toggle-modell" style="width:100%;display:flex;align-items:center;gap:12px;padding:14px 16px;background:none;border:none;cursor:pointer;text-align:left;font-family:${C.font};">
+                ${settingsIconBadge(SETTINGS_ICONS.model)}
+                <span style="flex:1;min-width:0;display:flex;flex-direction:column;gap:2px;">
+                  <span style="font-size:14px;font-weight:600;color:${C.text};">Modell</span>
+                  <span style="font-size:12px;color:${C.textDim};">Welches Sprachmodell Jarvis gerade benutzt</span>
+                </span>
                 <span class="js-settings-chevron-modell" style="color:${C.textDim};transition:transform .15s;flex:0 0 auto;">${ICONS.chevronDown}</span>
               </button>
-              <div class="js-settings-body-modell" style="display:none;">
+              <div class="js-settings-body-modell" style="display:none;padding:0 16px 16px;">
                 <div class="js-settings-models" style="border:1px solid ${C.border};border-radius:12px;overflow:hidden;"></div>
               </div>
             </div>
-            <div style="padding:0;border-top:1px solid ${C.border};">
-              <button class="js-settings-toggle-verbindung" style="width:100%;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:12px 0 6px;background:none;border:none;cursor:pointer;text-align:left;font-family:${C.font};">
-                <span style="font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:${C.textDim};">Verbindung</span>
+            <div class="js-settings-card" style="border:1px solid ${C.border};border-radius:14px;background:${C.bgSurface3};margin-bottom:10px;overflow:hidden;">
+              <button class="js-settings-toggle-verbindung" style="width:100%;display:flex;align-items:center;gap:12px;padding:14px 16px;background:none;border:none;cursor:pointer;text-align:left;font-family:${C.font};">
+                ${settingsIconBadge(SETTINGS_ICONS.connection)}
+                <span style="flex:1;min-width:0;display:flex;flex-direction:column;gap:2px;">
+                  <span style="font-size:14px;font-weight:600;color:${C.text};">Verbindung</span>
+                  <span style="font-size:12px;color:${C.textDim};">LM-Studio-Adresse und Netzwerksuche</span>
+                </span>
                 <span class="js-settings-chevron-verbindung" style="color:${C.textDim};transition:transform .15s;flex:0 0 auto;">${ICONS.chevronDown}</span>
               </button>
-              <div class="js-settings-body-verbindung" style="display:none;padding:4px 0;flex-direction:column;gap:8px;">
-                <span style="font-size:12px;color:${C.textSoft};">LM Studio Endpoint</span>
-                <input class="js-lmstudio-url-input" type="text" placeholder="http://127.0.0.1:1234/v1" spellcheck="false" style="width:100%;box-sizing:border-box;padding:9px 10px;background:${C.bg};border:1px solid ${C.border};border-radius:8px;color:${C.text};font-size:13px;outline:none;font-family:${C.font};" />
+              <div class="js-settings-body-verbindung" style="display:none;padding:0 16px 16px;flex-direction:column;gap:8px;">
+                <span style="font-size:12.5px;color:${C.textSoft};">LM Studio Endpoint</span>
+                <input class="js-lmstudio-url-input js-settings-input" type="text" placeholder="http://127.0.0.1:1234/v1" spellcheck="false" style="width:100%;box-sizing:border-box;padding:9px 10px;background:${C.bg};border:1px solid ${C.border};border-radius:8px;color:${C.text};font-size:13px;outline:none;font-family:${C.font};" />
                 <div style="display:flex;align-items:center;gap:10px;">
-                  <button class="js-lmstudio-url-save" style="align-self:flex-start;padding:7px 12px;border:none;border-radius:8px;background:${C.accent};color:#fff;font-size:12px;cursor:pointer;font-family:${C.font};">Speichern</button>
-                  <span class="js-lmstudio-url-status" style="font-size:11.5px;color:${C.textDim};"></span>
+                  <button class="js-lmstudio-url-save js-settings-save-btn" style="align-self:flex-start;padding:8px 14px;border:none;border-radius:8px;background:${C.accent};color:#fff;font-size:12.5px;font-weight:600;cursor:pointer;font-family:${C.font};">Speichern</button>
+                  <span class="js-lmstudio-url-status" style="font-size:12px;color:${C.textDim};display:flex;align-items:center;gap:5px;"></span>
                 </div>
                 <!-- Netzwerksuche auch hier verfügbar, unabhängig davon, ob
                      gerade schon eine LM-Studio-Verbindung steht - z.B. um
@@ -961,18 +1135,26 @@
                 <div class="js-settings-scan-results" style="display:none;flex-direction:column;gap:4px;"></div>
               </div>
             </div>
-            <div style="padding:0;border-top:1px solid ${C.border};">
-              <button class="js-settings-toggle-code" style="width:100%;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:12px 0 6px;background:none;border:none;cursor:pointer;text-align:left;font-family:${C.font};">
-                <span style="font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:${C.textDim};">Code</span>
+            <div class="js-settings-card" style="border:1px solid ${C.border};border-radius:14px;background:${C.bgSurface3};margin-bottom:10px;overflow:hidden;">
+              <button class="js-settings-toggle-code" style="width:100%;display:flex;align-items:center;gap:12px;padding:14px 16px;background:none;border:none;cursor:pointer;text-align:left;font-family:${C.font};">
+                ${settingsIconBadge(SETTINGS_ICONS.code)}
+                <span style="flex:1;min-width:0;display:flex;flex-direction:column;gap:2px;">
+                  <span style="font-size:14px;font-weight:600;color:${C.text};">Code</span>
+                  <span style="font-size:12px;color:${C.textDim};">Arbeitsverzeichnis für den Coding-Agenten</span>
+                </span>
                 <span class="js-settings-chevron-code" style="color:${C.textDim};transition:transform .15s;flex:0 0 auto;">${ICONS.chevronDown}</span>
               </button>
-              <div class="js-settings-body-code" style="display:none;padding:4px 0;flex-direction:column;gap:8px;">
-                <span style="font-size:12px;color:${C.textSoft};">Arbeitsverzeichnis für JARVIS Code</span>
-                <input class="js-code-dir-input" type="text" placeholder="~/Developer" spellcheck="false" style="width:100%;box-sizing:border-box;padding:9px 10px;background:${C.bg};border:1px solid ${C.border};border-radius:8px;color:${C.text};font-size:13px;outline:none;font-family:${C.font};" />
-                <button class="js-code-dir-save" style="align-self:flex-start;padding:7px 12px;border:none;border-radius:8px;background:${C.accent};color:#fff;font-size:12px;cursor:pointer;font-family:${C.font};">Speichern</button>
+              <div class="js-settings-body-code" style="display:none;padding:0 16px 16px;flex-direction:column;gap:8px;">
+                <span style="font-size:12.5px;color:${C.textSoft};">Arbeitsverzeichnis für JARVIS Code</span>
+                <input class="js-code-dir-input js-settings-input" type="text" placeholder="~/Developer" spellcheck="false" style="width:100%;box-sizing:border-box;padding:9px 10px;background:${C.bg};border:1px solid ${C.border};border-radius:8px;color:${C.text};font-size:13px;outline:none;font-family:${C.font};" />
+                <div style="display:flex;align-items:center;gap:10px;">
+                  <button class="js-code-dir-save js-settings-save-btn" style="align-self:flex-start;padding:8px 14px;border:none;border-radius:8px;background:${C.accent};color:#fff;font-size:12.5px;font-weight:600;cursor:pointer;font-family:${C.font};">Speichern</button>
+                  <span class="js-code-dir-status" style="font-size:12px;color:${C.textDim};display:flex;align-items:center;gap:5px;"></span>
+                </div>
               </div>
             </div>
-            ${SETTINGS_SECTIONS.map((s) => settingsSectionHtml(s, false)).join('')}
+            ${settingsGroupLabel('Erweitert')}
+            ${SETTINGS_SECTIONS.map((s) => settingsSectionHtml(s)).join('')}
           </div>
         </div>
       </div>
@@ -1178,11 +1360,29 @@
     setInterval(refreshModelHealth, 20000);
   }
 
+  // CSS für :root und :root[data-jarvis-theme="…"] aus JARVIS_THEMES erzeugen,
+  // statt jede Palette zweimal (einmal als Daten, einmal als CSS) von Hand zu
+  // pflegen — ein neues Theme in JARVIS_THEMES reicht, kein zweiter Ort nötig.
+  function jarvisThemeCss() {
+    return JARVIS_THEMES.map((t) => {
+      const decls = Object.entries(t.vars).map(([k, v]) => `--${k}:${v};`).join(' ');
+      const selector = t.id === JARVIS_THEME_DEFAULT ? ':root' : `:root[data-jarvis-theme="${t.id}"]`;
+      return `${selector} { ${decls} }`;
+    }).join('\n      ');
+  }
+
   function injectSkinCss() {
     if (document.getElementById('jsAppCss')) return;
     const s = document.createElement('style');
     s.id = 'jsAppCss';
     s.textContent = `
+      ${jarvisThemeCss()}
+      /* "Bewegung reduzieren" in Einstellungen > Erscheinungsbild: nullt jede
+         Übergangs-/Animationsdauer statt einzelne Regeln zu deaktivieren, damit
+         auch künftig hinzugefügte Transitions automatisch mit erfasst sind. */
+      .jarvis-reduce-motion, .jarvis-reduce-motion * {
+        transition-duration: 0s !important; animation-duration: 0s !important; animation-delay: 0s !important;
+      }
       body.js-app-active > :not(#jsApp):not(#jarvisOrb):not(#jarvisOrbHit):not(#jsSpeechTerm):not(#jsSpeechbar):not(#jsSpeechCaption):not(#jsSettingsSheet):not(#jsNewProjectSheet):not(#jsRenameChatSheet):not(#jsBtwWindow):not(#jsNotice):not(script):not(style) { display:none !important; }
       body.js-app-active { overflow:hidden; }
       /* Sanftes Einblenden bei jedem Stream-Update (siehe setAssistantText)
@@ -1235,7 +1435,7 @@
       .js-navrow:not([disabled]):not(.js-artifacts):not(.js-customize):hover { background:${C.bgHover}; color:${C.text}; }
       .js-pill.active { color:${C.text} !important; }
       .js-pill:not(.active):hover { color:${C.text}; }
-      .js-note.on { color:${C.accent} !important; background:rgba(217,119,87,.12) !important; }
+      .js-note.on { color:${C.accent} !important; background:${C.accentTint} !important; }
       .js-note.on svg { animation:js-note-pulse 1.4s ease-in-out infinite; }
       @keyframes js-note-pulse { 0%,100% { opacity:1; } 50% { opacity:.45; } }
       .js-speech.on { background:${C.accent} !important; border-color:${C.accent} !important; color:#fff !important; }
@@ -1254,7 +1454,12 @@
       button[class*="js-settings-toggle-"] span[class*="js-settings-chevron-"] svg { width:13px; height:13px; display:block; }
       button[class*="js-settings-toggle-"] span[class*="js-settings-chevron-"] { transform:rotate(-90deg); }
       button[class*="js-settings-toggle-"].is-open span[class*="js-settings-chevron-"] { transform:rotate(0deg); }
-      button[class*="js-settings-toggle-"]:hover span:first-child { color:${C.textSoft}; }
+      button[class*="js-settings-toggle-"]:hover { background:${C.bgHover}; }
+      .js-settings-input { transition:border-color .15s,background .15s; }
+      .js-settings-input:focus { border-color:${C.accent} !important; background:${C.bgSurface3} !important; }
+      .js-settings-save-btn { transition:filter .15s; }
+      .js-settings-save-btn:hover { filter:brightness(1.08); }
+      .js-settings-card:has(button[class*="js-settings-toggle-"]:hover) { border-color:${C.borderStrong}; }
       /* .js-chats behaelt sein flex:1 (bleibt als leerer Platzhalter bestehen), damit
          .js-settings-row weiterhin unten bleibt statt beim Zuklappen nach oben zu rutschen -
          nur der Inhalt wird versteckt. */
@@ -2090,7 +2295,6 @@
     $('.js-renamechat-input', renameChatSheetEl).addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); saveRenameChatModal(); } });
     renameChatSheetEl.addEventListener('click', (e) => { if (e.target === renameChatSheetEl) closeRenameChatModal(); });
     $('.js-projects', uiEl).addEventListener('click', (e) => { e.preventDefault(); openProjectsView(); });
-    $('.js-projects-pin-title', uiEl).addEventListener('click', (e) => { e.preventDefault(); openProjectsView(); });
     $('.js-search-toggle', uiEl).addEventListener('click', (e) => {
       e.preventDefault();
       const row = $('.js-search-row', uiEl);
@@ -2253,14 +2457,18 @@
     // Code-Verzeichnis speichern
     const codeDirInput = $('.js-code-dir-input', settingsSheetEl);
     const codeDirSave = $('.js-code-dir-save', settingsSheetEl);
+    const codeDirStatus = $('.js-code-dir-status', settingsSheetEl);
     if (codeDirSave && codeDirInput) {
       codeDirSave.addEventListener('click', async () => {
         const v = codeDirInput.value.trim();
         if (!v) return;
+        if (codeDirStatus) codeDirStatus.textContent = 'Speichert…';
         try {
           await fetch('/code/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dir: v }) });
           if (codeDirEl) { codeDirEl.textContent = v; codeDirEl.title = v; }
-        } catch (e) {}
+          if (codeDirStatus) codeDirStatus.innerHTML = `${SETTINGS_CHECK_SVG}<span>Gespeichert</span>`;
+        } catch (e) { if (codeDirStatus) codeDirStatus.textContent = 'Fehlgeschlagen'; }
+        setTimeout(() => { if (codeDirStatus) codeDirStatus.textContent = ''; }, 2500);
       });
     }
 
@@ -2275,7 +2483,7 @@
         if (lmUrlStatus) lmUrlStatus.textContent = 'Speichert…';
         try {
           await fetch('/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ lm_studio_base_url: v }) });
-          if (lmUrlStatus) lmUrlStatus.textContent = 'Gespeichert';
+          if (lmUrlStatus) lmUrlStatus.innerHTML = `${SETTINGS_CHECK_SVG}<span>Gespeichert</span>`;
           lastModelsList = null;
           fetch('/models').then((r) => r.json()).then((j) => { applyModelCaps(j); if (j.current) setModelLabel(j.current); }).catch(() => {});
           refreshModelHealth();
@@ -2288,7 +2496,7 @@
     // zugeklappt — nur die Überschrift ist zu sehen, ein Klick klappt die
     // Detail-Felder auf. "modell"/"verbindung"/"code" sind fest im Markup
     // (buildUi()), der Rest kommt datengetrieben aus SETTINGS_SECTIONS.
-    const collapsibleIds = ['modell', 'verbindung', 'code', ...SETTINGS_SECTIONS.map((s) => s.id)];
+    const collapsibleIds = ['appearance', 'modell', 'verbindung', 'code', ...SETTINGS_SECTIONS.map((s) => s.id)];
     for (const id of collapsibleIds) {
       const toggleBtn = $(`.js-settings-toggle-${id}`, settingsSheetEl);
       const body = $(`.js-settings-body-${id}`, settingsSheetEl);
@@ -2316,7 +2524,7 @@
         if (statusEl) statusEl.textContent = 'Speichert…';
         try {
           await fetch('/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-          if (statusEl) statusEl.textContent = 'Gespeichert';
+          if (statusEl) statusEl.innerHTML = `${SETTINGS_CHECK_SVG}<span>Gespeichert</span>`;
           refreshModelHealth();
         } catch (e) { if (statusEl) statusEl.textContent = 'Fehlgeschlagen'; }
         setTimeout(() => { if (statusEl) statusEl.textContent = ''; }, 2500);
@@ -2356,6 +2564,43 @@
         setTimeout(() => { if (statusEl) statusEl.textContent = ''; }, 2500);
       });
     }
+
+    // Erscheinungsbild-Karte: Theme-Swatches und die zwei Sofort-Umschalter
+    // (Bewegung reduzieren, kompakte Seitenleiste) — reine Oberflächen-
+    // Einstellungen, in localStorage statt im Backend, wirken augenblicklich
+    // ohne "Speichern"-Klick.
+    const paintThemeSwatches = () => {
+      const activeId = document.documentElement.dataset.jarvisTheme || JARVIS_THEME_DEFAULT;
+      settingsSheetEl.querySelectorAll('.js-theme-swatch-box').forEach((box) => {
+        box.style.borderColor = box.dataset.themeId === activeId ? C.accent : 'transparent';
+      });
+    };
+    paintThemeSwatches();
+    settingsSheetEl.querySelectorAll('.js-theme-swatch').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        applyJarvisTheme(btn.dataset.themeId);
+        paintThemeSwatches();
+      });
+    });
+
+    const wireImmediateToggle = (key, getInitial, onChange) => {
+      const input = $(`.js-immediate-toggle-${key}`, settingsSheetEl);
+      const track = $(`.js-immediate-toggle-track-${key}`, settingsSheetEl);
+      const thumb = $(`.js-immediate-toggle-thumb-${key}`, settingsSheetEl);
+      if (!input) return;
+      input.checked = getInitial();
+      const paint = () => {
+        if (track) track.style.background = input.checked ? C.accent : C.border;
+        if (thumb) thumb.style.left = input.checked ? '18px' : '2px';
+      };
+      paint();
+      input.addEventListener('change', () => {
+        paint();
+        setJarvisPref(key, input.checked);
+        onChange(input.checked);
+      });
+    };
+    wireImmediateToggle('jarvisReduceMotion', () => getJarvisPref('jarvisReduceMotion', false), applyReduceMotion);
 
     if (modelBtnEl) modelBtnEl.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); toggleModelMenu(modelBtnEl); });
     if (pdModelBtn) pdModelBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); toggleModelMenu(pdModelBtn); });
@@ -4018,7 +4263,19 @@
       for (const section of SETTINGS_SECTIONS) {
         for (const f of section.fields) {
           const input = $(`.js-set-${f.key}`, settingsSheetEl);
-          if (input && j[f.key] != null) input.value = j[f.key];
+          if (input && j[f.key] != null) {
+            // Falls der gespeicherte Wert kein Dropdown-Eintrag ist (z.B. eine
+            // manuell in .env gesetzte, hier nicht gelistete Variante), diesen
+            // statt eines stillen Zurückfallens auf die erste Option als
+            // eigenen Eintrag ergänzen — sonst würde ein Klick auf "Speichern"
+            // ihn unbemerkt durch die erste Option ersetzen.
+            if (input.tagName === 'SELECT' && ![...input.options].some((o) => o.value === j[f.key])) {
+              const opt = document.createElement('option');
+              opt.value = j[f.key]; opt.textContent = j[f.key];
+              input.appendChild(opt);
+            }
+            input.value = j[f.key];
+          }
         }
         if (section.toggle) {
           const key = section.toggle.key;
@@ -4037,10 +4294,12 @@
       settingsModelsEl.innerHTML = '';
       const load = async () => {
         let models = [];
+        let current = '';
         try {
           const r = await fetch('/models');
           const j = await r.json();
           models = j.models || [];
+          current = j.current || '';
           applyModelCaps(j);
           if (j.current) setModelLabel(j.current);
         } catch (e) { models = []; }
@@ -4053,23 +4312,35 @@
         }
         for (const m of models) {
           const publisher = String(m).includes('/') ? String(m).split('/')[0] : '';
+          const isActive = m === current;
+          const baseBg = isActive ? C.accentTint : 'none';
           const b = document.createElement('button');
           b.title = m;
-          b.style.cssText = `display:flex;flex-direction:column;gap:1px;width:100%;text-align:left;padding:8px 14px;background:none;border:none;color:${C.text};font-size:13.5px;font-weight:500;cursor:pointer;line-height:1.35;border-radius:8px;`;
+          b.style.cssText = `display:flex;align-items:center;gap:10px;width:100%;text-align:left;padding:8px 14px;background:${baseBg};border:none;color:${C.text};font-size:13.5px;font-weight:500;cursor:pointer;line-height:1.35;border-radius:8px;`;
+          const textWrap = document.createElement('span');
+          textWrap.style.cssText = 'display:flex;flex-direction:column;gap:1px;flex:1;min-width:0;';
           const nameEl = document.createElement('span');
           nameEl.textContent = prettyModelName(m);
-          nameEl.style.cssText = `overflow:hidden;text-overflow:ellipsis;white-space:nowrap;`;
-          b.appendChild(nameEl);
+          nameEl.style.cssText = `overflow:hidden;text-overflow:ellipsis;white-space:nowrap;${isActive ? `color:${C.accent};font-weight:600;` : ''}`;
+          textWrap.appendChild(nameEl);
           if (publisher) {
             const subEl = document.createElement('span');
             subEl.textContent = publisher;
             subEl.style.cssText = `font-size:11.5px;font-weight:400;color:${C.textDim};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;`;
-            b.appendChild(subEl);
+            textWrap.appendChild(subEl);
+          }
+          b.appendChild(textWrap);
+          if (isActive) {
+            const checkWrap = document.createElement('span');
+            checkWrap.title = 'Aktives Modell';
+            checkWrap.style.cssText = `flex:0 0 auto;color:${C.accent};display:inline-flex;`;
+            checkWrap.innerHTML = SETTINGS_CHECK_SVG;
+            b.appendChild(checkWrap);
           }
           const tooLarge = modelTooLarge(m);
           if (tooLarge) markTooLarge(b, 'Zu groß für diesen PC');
           b.onmouseenter = () => { b.style.background = C.bgHover; };
-          b.onmouseleave = () => { b.style.background = 'none'; };
+          b.onmouseleave = () => { b.style.background = baseBg; };
           b.addEventListener('click', () => {
             if (tooLarge) { showNotice(tooLarge); return; }
             requestModelSwitch(m);

@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import re
 import subprocess
-from pathlib import Path
 
 import requests
 
@@ -380,8 +379,9 @@ MAX_TOOL_ROUNDS = 4
 # mode-Wert mit, das Backend entscheidet hier über den Ton.
 _CODE_MODE_PROMPT = """Der Nutzer hat den Code-Modus gewählt. Antworte deshalb jetzt
 technischer und konkreter: wo es passt, gib echten Code (in Code-Blöcken),
-zeige Differenzen oder genaue Schritte und bleibe knapp. Wenn etwas programmiert
-werden soll, frage weiterhin zuerst nach dem Zielordner."""
+zeige Differenzen oder genaue Schritte und bleibe knapp. Soll etwas
+programmiert werden, gib den Auftrag wie immer sofort per opencode weiter —
+ohne nach einem Zielordner zu fragen."""
 
 
 def _user_content(user_message: str, images: list[str] | None):
@@ -517,73 +517,6 @@ def _post_chat(messages: list) -> dict:
                 raise ModelError(data.get("error", {}).get("message", "Das Modell lieferte keine Antwort."))
             _note_active_target(base_url, model)
             return data
-        except (requests.RequestException, ModelError) as exc:
-            print(f"[model] {base_url} nicht verfügbar, versuche nächstes Ziel: {exc}")
-            last_exc = exc
-    raise last_exc
-
-
-_GENERATE_FILES_PROMPT = (
-    "Du bist ein Programmier-Assistent. Antworte NUR mit den Dateien, die "
-    "gebaut werden sollen, eine nach der anderen, in exakt diesem Format — "
-    "kein Text davor oder danach, keine Markdown-Codezäune:\n\n"
-    "===FILE: relativer/pfad.ext===\n"
-    "<kompletter Dateiinhalt>\n"
-    "===FILE: naechste/datei.ext===\n"
-    "<Inhalt>\n\n"
-    "Baue immer vollständig und lauffähig, mit allen nötigen Dateien. Bei "
-    "einer Web-Oberfläche eine index.html erstellen, die direkt im Browser "
-    "funktioniert (eingebettetes CSS/JS ist in Ordnung, wenn das einfacher "
-    "und robuster ist als mehrere Dateien zu verknüpfen)."
-)
-
-_GENERATED_FILE_RE = re.compile(
-    r"===\s*FILE:\s*(?P<path>[^\n=]+?)\s*===\s*\n(?P<content>.*?)(?=\n===\s*FILE:|\Z)",
-    re.DOTALL | re.IGNORECASE,
-)
-
-
-def _parse_generated_files(text: str) -> dict[str, str]:
-    files = {}
-    for m in _GENERATED_FILE_RE.finditer(text or ""):
-        path = m.group("path").strip().strip("`\"'").strip()
-        content = m.group("content")
-        # A model that ignores "no code fences" still sometimes wraps the
-        # very last file's content in one — strip a trailing fence line.
-        content = re.sub(r"\n```[a-zA-Z]*\s*$", "", content).rstrip("\n") + "\n"
-        if path and ".." not in Path(path).parts:
-            files[path] = content
-    return files
-
-
-def generate_files(description: str) -> dict[str, str]:
-    """One-shot code generation for backend/coder.py's build_project.
-
-    Deliberately bypasses _post_chat's tool definitions — this is a single
-    text-generation request, not a conversational tool-calling turn, and
-    tool schemas in context just tempt the model to emit a bogus call
-    instead of writing files. Goes through the same DeepSeek/LM-Studio
-    fallback chain as everything else, just without tools attached.
-    """
-    messages = [
-        {"role": "system", "content": _GENERATE_FILES_PROMPT},
-        {"role": "user", "content": description},
-    ]
-    last_exc: Exception = ModelError("Kein Modell-Ziel konfiguriert.")
-    for base_url, model, headers, extra in _request_targets():
-        try:
-            resp = requests.post(
-                f"{base_url}/chat/completions",
-                json={"model": model, "messages": messages, "temperature": 0.2, **extra},
-                headers=headers,
-                timeout=300,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            if not data.get("choices"):
-                raise ModelError(data.get("error", {}).get("message", "Das Modell lieferte keine Antwort."))
-            content = data["choices"][0]["message"].get("content", "")
-            return _parse_generated_files(content)
         except (requests.RequestException, ModelError) as exc:
             print(f"[model] {base_url} nicht verfügbar, versuche nächstes Ziel: {exc}")
             last_exc = exc
@@ -1186,6 +1119,15 @@ _CHECK_PARTICIPLE_RE = re.compile(
     re.IGNORECASE,
 )
 _NEGATION_RE = re.compile(r"\b(?:nicht|nichts|kein|keine|keinen|keinem|keiner)\b", re.IGNORECASE)
+# A statement about whether a file/folder exists or was already removed is a
+# check result, so negation doesn't excuse it either — observed live: after an
+# unrecognized "Ja bitte" to a delete confirmation, the model claimed "Die
+# Datei wurde bereits gelöscht oder existiert gar nicht mehr" while the file
+# was still there.
+_FS_STATE_CLAIM_RE = re.compile(
+    r"\b(?:datei|ordner|verzeichnis)\w*\b[^.!?]{0,80}\b(?:existiert|existieren|vorhanden|gelöscht|entfernt)\b",
+    re.IGNORECASE,
+)
 
 # "I'm doing/will do X" reads as just as done as a past participle to a
 # listener, in any tense or mood — observed live first with present tense
@@ -1328,6 +1270,7 @@ def _sentence_is_claim(sentence: str) -> bool:
         or (_bare_participle_claim(sentence, _ACTION_PARTICIPLE_RE) and not negated)
         or _direct_ich_claim(sentence)
         or (bool(_TASK_HANDOFF_RE.search(sentence)) and not negated)
+        or bool(_FS_STATE_CLAIM_RE.search(sentence))
     )
     if not is_claim:
         return False

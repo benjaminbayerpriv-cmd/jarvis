@@ -899,6 +899,9 @@ def resize_tty(tty: TtyHandle, cols: int, rows: int) -> None:
     tty.resize(cols, rows)
 
 
+_TERM_QUERY_RE = re.compile(rb"\x1b\[>0q|\x1b\[14t|\x1bP\+q([0-9A-Za-z]+)\x1b\\")
+
+
 def answer_terminal_queries(tty: TtyHandle, data: bytes, state: dict) -> None:
     r"""Beantworte OpenTUI-Terminalanfragen, die xterm.js nicht abdeckt.
 
@@ -916,21 +919,25 @@ def answer_terminal_queries(tty: TtyHandle, data: bytes, state: dict) -> None:
     tun würde).
     """
     buf = state.get("term_buf", b"") + data
-    state["term_buf"] = buf[-512:]
     cols = int(state.get("cols", 80))
     rows = int(state.get("rows", 24))
     answers: list[bytes] = []
 
-    if b"\x1b[>0q" in buf:
-        answers.append(b"\x1b[>1;276;0c")  # xterm-like, 256 Farben, DA2-Antwort
+    for m in _TERM_QUERY_RE.finditer(buf):
+        query = m.group(0)
+        if query == b"\x1b[>0q":
+            answers.append(b"\x1b[>1;276;0c")  # xterm-like, 256 Farben, DA2-Antwort
+        elif query == b"\x1b[14t":
+            # Pixelgröße, ~19px/Zeile und ~8px/Spalte bei einer 13px-Monospace-Zelle.
+            answers.append(b"\x1b[4;%d;%dt" % (rows * 19, cols * 8))
+        else:
+            # Gemeldete Terminfo-Strings als nicht unterstützt (leerer Wert) deklarieren.
+            answers.append(b"\x1bP1+r" + m.group(1) + b"=\x1b\\")
 
-    for m in re.finditer(rb"\x1bP\+q([0-9A-Za-z]+)\x1b\\", buf):
-        # Gemeldete Terminfo-Strings als nicht unterstützt (leerer Wert) deklarieren.
-        answers.append(b"\x1bP1+r" + m.group(1) + b"=\x1b\\")
-
-    if b"\x1b[14t" in buf:
-        # Pixelgröße, ~19px/Zeile und ~8px/Spalte bei einer 13px-Monospace-Zelle.
-        answers.append(b"\x1b[4;%d;%dt" % (rows * 19, cols * 8))
+    # Beantwortete Anfragen aus dem Puffer entfernen — sonst würden sie bei
+    # jedem weiteren read erneut beantwortet und landeten als Tastatureingabe
+    # in der TUI. Nur eine über die read-Grenze geteilte Anfrage bleibt stehen.
+    state["term_buf"] = _TERM_QUERY_RE.sub(b"", buf)[-512:]
 
     for a in answers:
         try:

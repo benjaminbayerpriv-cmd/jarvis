@@ -22,15 +22,35 @@ from __future__ import annotations
 import re
 from typing import Callable
 
-_YES_RE = re.compile(
-    r"^\s*(ja+|jup+|jep+|klar|genau|korrekt|okay|ok|mach'?s?|mach das|mach es|"
-    r"los|bitte|tu es|tu's|do it|yes|yep|jo)\W*$",
-    re.IGNORECASE,
-)
-_NO_RE = re.compile(
-    r"^\s*(nein+|nope|nee+|lass(?: mal)?|abbrechen|stopp?|nicht|no)\W*$",
-    re.IGNORECASE,
-)
+_YES_RE = re.compile(r"^(ja+|jup+|jep+|klar|genau|korrekt|okay|ok|mach'?s?|los|bitte|yes|yep|jo|sicher|gerne?)$")
+_NO_RE = re.compile(r"^(nein+|nope|nee+|lass|abbrechen|stopp?|nicht|no)$")
+
+# Words that may follow the leading yes/no without changing its meaning
+# ("ja bitte", "ja, mach das", "nein danke, lass mal"). Anything outside this
+# set ("ja, aber nur die andere Datei") is a new instruction, not a plain yes.
+_YES_FILLER = {
+    "ja", "jo", "bitte", "klar", "genau", "gerne", "gern", "sicher", "natürlich",
+    "unbedingt", "mach", "machs", "mach's", "das", "es", "tu", "tus", "tu's", "los",
+    "ok", "okay", "danke", "do", "it", "yes", "weg", "damit", "doch", "einfach",
+    "mal", "schon", "passt", "go",
+}
+_NO_FILLER = {
+    "nein", "nee", "danke", "lass", "mal", "es", "das", "lieber", "doch", "nicht",
+    "bitte", "abbrechen", "stopp", "stop", "sein", "no", "löschen", "machen",
+    "verschieben", "tun",
+}
+
+
+def _classify(text: str) -> str | None:
+    words = re.findall(r"[\wäöüß']+", (text or "").lower())
+    if not words:
+        return None
+    first, rest = words[0], words[1:]
+    if _YES_RE.match(first) and all(w in _YES_FILLER for w in rest):
+        return "yes"
+    if _NO_RE.match(first) and all(w in _NO_FILLER for w in rest):
+        return "no"
+    return None
 
 _pending: dict | None = None
 
@@ -66,9 +86,9 @@ def resolve(user_message: str) -> str | None:
         return None
     pending, _pending = _pending, None
 
-    text = (user_message or "").strip()
-    if _YES_RE.match(text):
+    verdict = _classify(user_message)
+    if verdict == "yes":
         return pending["run"]()
-    if _NO_RE.match(text):
+    if verdict == "no":
         return "Alles klar, abgebrochen."
     return None

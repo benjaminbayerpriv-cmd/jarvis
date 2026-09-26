@@ -49,17 +49,22 @@ thinking_filler_url: str | None = None
 # Emoji-Defaults wie ⏰⌚), regionale Flags (U+1F1E6–U+1F1FF), Skin-Tones
 # (U+1F3FB–U+1F3FF), das Joiner-Zeichen (U+200D, zerlegt ZWJ-Komposita wie
 # 👨‍👩‍👧 in Einzelzeichen) und die Variationsselektoren (U+FE00–U+FE0F).
+# Aus den BMP-Symbolblöcken nur die Zeichen, die standardmäßig als buntes
+# Emoji dargestellt werden (Unicode Emoji_Presentation) plus ⚠ und ❤ —
+# ganze Blöcke zu entfernen hat auch normale Textsymbole wie ✓ ➜ ⌘ ☀ aus
+# Antworten und Code-Ausgaben gelöscht. Jedes andere Symbol wird nur dann
+# entfernt, wenn ihm U+FE0F folgt (die ausdrückliche Emoji-Variante, z.B. ☀️).
 _EMOJI_RE = re.compile(
-    "["
+    "(?:[ -⯿]️)"
+    "|["
     "\U0001F000-\U0001FAFF"  # Piktogramme: Smileys, 💡, 🚀, Tiere, …
-    "\U0001F1E6-\U0001F1FF"  # regionale Indikatoren (Flaggen)
-    "\U00002300-\U000023FF"  # ⌚⏰⌛⏳ (emoji-default)
-    "\U00002600-\U000027BF"  # ⭐❌✅⚠❤✨ …
-    "\U00002B00-\U00002BFF"  # wiederkehrende Symbolpfeile/Formen
-    "\U0001F3FB-\U0001F3FF"  # Hauttöne
-    "\U0000200D"  # ZWJ (Zero-Width-Joiner)
-    "\U000020E3"  # Keycap-Combiner
-    "\U0000FE00-\U0000FE0F"  # Variationsselektoren
+    "⌚⌛⏩-⏬⏰⏳◽◾☔☕♈-♓"
+    "♿⚓⚠⚡⚪⚫⚽⚾⛄⛅⛎⛔"
+    "⛪⛲⛳⛵⛺⛽✅✊✋✨❌❎"
+    "❓-❕❗❤➕-➗➰➿⬛⬜⭐⭕"
+    "‍"  # ZWJ (Zero-Width-Joiner)
+    "⃣"  # Keycap-Combiner
+    "︀-️"  # Variationsselektoren
     "]"
 )
 
@@ -625,6 +630,8 @@ def get_conversation(conv_id: str, project_id: str | None = None):
 def update_conversation(conv_id: str, req: UpdateConversationRequest, project_id: str | None = None):
     """Rename and/or pin a conversation from the sidebar's three-dot menu."""
     base_dir = _project_chats_dir(project_id) if project_id else None
+    if not conversations.file_path(conv_id, base_dir).exists():
+        raise HTTPException(status_code=404, detail="Konversation nicht gefunden")
     if req.title is not None:
         if not req.title.strip():
             raise HTTPException(status_code=422, detail="Titel darf nicht leer sein")
@@ -637,7 +644,8 @@ def update_conversation(conv_id: str, req: UpdateConversationRequest, project_id
 @app.delete("/conversations/{conv_id}")
 def delete_conversation(conv_id: str, project_id: str | None = None):
     base_dir = _project_chats_dir(project_id) if project_id else None
-    conversations.delete(conv_id, base_dir)
+    if not conversations.delete(conv_id, base_dir):
+        raise HTTPException(status_code=404, detail="Konversation nicht gefunden")
     return {"ok": True}
 
 
@@ -668,7 +676,7 @@ def create_project(req: CreateProjectRequest):
         raise HTTPException(status_code=422, detail="Ordner darf nicht leer sein")
     try:
         return projects.create(req.dir, req.name, req.description, req.tag)
-    except OSError as exc:
+    except (OSError, ValueError) as exc:
         raise HTTPException(status_code=422, detail=f"Ordner konnte nicht angelegt/geöffnet werden: {exc}")
 
 
@@ -819,10 +827,13 @@ async def model_scan(body: dict | None = None):
     the LM Studio default (1234, single quick scan); the frontend's
     "Erweiterte Suche" button passes EXTENDED_SCAN_PORTS instead.
     """
-    ports = (body or {}).get("ports")
-    if not ports:
-        ports = [int((body or {}).get("port") or 1234)]
-    ports = sorted({int(p) for p in ports})
+    ports = (body or {}).get("ports") or [(body or {}).get("port") or 1234]
+    try:
+        ports = sorted({int(p) for p in ports})
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=422, detail="Ports müssen Zahlen sein.")
+    if not all(1 <= p <= 65535 for p in ports):
+        raise HTTPException(status_code=422, detail="Ports müssen zwischen 1 und 65535 liegen.")
     network = _local_subnet()
 
     async def gen():
