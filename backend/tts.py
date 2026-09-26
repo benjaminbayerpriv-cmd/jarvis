@@ -208,7 +208,14 @@ _MATH_SYMBOL_PATTERNS = [
 ]
 
 
+# "9-17 Uhr", "Seiten 5-7": an unspaced hyphen between numbers is a range,
+# not a subtraction — unless the text is an actual equation ("17-5=12").
+_RANGE_RE = re.compile(r"(?<=\d)-(?=\d)")
+
+
 def _expand_math_symbols_for_speech(text: str) -> str:
+    if "=" not in text:
+        text = _RANGE_RE.sub(" bis ", text)
     for pattern, replacement in _MATH_SYMBOL_PATTERNS:
         text = pattern.sub(replacement, text)
     return text
@@ -222,6 +229,37 @@ def _spell_date(match: re.Match) -> str:
     month_name = _MONTH_NAMES[month]
     year_words = num2words(year, lang="de")
     return f"{day_words} {month_name} {year_words}"
+
+
+_ISO_DATE_RE = re.compile(r"\b(\d{4})-(\d{2})-(\d{2})\b")
+
+
+def _spell_iso_date(match: re.Match) -> str:
+    year, month, day = (int(g) for g in match.groups())
+    if not (1 <= day <= 31 and 1 <= month <= 12):
+        return match.group(0)
+    return f"{num2words(day, lang='de', to='ordinal')} {_MONTH_NAMES[month]} {num2words(year, lang='de')}"
+
+
+# "am 26.09." — a date without a year. Only after a word that introduces a
+# date (preposition/article/weekday), since a bare "3.11." could just as well
+# be a version number at the end of a sentence.
+_DATE_NO_YEAR_RE = re.compile(
+    r"\b(am|an|den|der|dem|vom|zum|bis|ab|seit|ist|Montag|Dienstag|Mittwoch|Donnerstag|Freitag|Samstag|Sonntag)"
+    r"(,?\s+)(\d{1,2})\.(\d{1,2})\.(?!\d)",
+    re.IGNORECASE,
+)
+
+
+def _spell_date_no_year(match: re.Match) -> str:
+    lead, gap, day, month = match.group(1), match.group(2), int(match.group(3)), int(match.group(4))
+    if not (1 <= day <= 31 and 1 <= month <= 12):
+        return match.group(0)
+    ordinal = num2words(day, lang="de", to="ordinal")
+    # "am sechsundzwanzigsten", not "am sechsundzwanzigste".
+    if lead.lower() in ("am", "an", "den", "dem", "vom", "zum", "ab", "seit"):
+        ordinal += "n"
+    return f"{lead}{gap}{ordinal} {_MONTH_NAMES[month]}"
 
 
 def _spell_number(match: re.Match) -> str:
@@ -321,6 +359,8 @@ def _expand_numbers_for_speech(text: str) -> str:
     # just protect its match verbatim instead of actually expanding it.
     expanded = _TIME_RE.sub(_spell_time, text)
     expanded = _DATE_RE.sub(_spell_date, expanded)
+    expanded = _ISO_DATE_RE.sub(_spell_iso_date, expanded)
+    expanded = _DATE_NO_YEAR_RE.sub(_spell_date_no_year, expanded)
     expanded = _DATE_WORDS_RE.sub(_spell_date_words, expanded)
     # Phone-number-shaped runs before the math pass — after conversion the
     # result is words, not digits, so it can't be re-matched by _NUMBER_RE

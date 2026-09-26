@@ -136,7 +136,7 @@ Obsidian-Vault): [SETUP.md](SETUP.md).
 
 | Verzeichnis | Inhalt |
 |---|---|
-| `backend/` | FastAPI-Server: `main.py` (Endpoints, SSE-Streaming), `llm_client.py`, `tools.py`, `tts.py`, `stt.py`, `memory.py` + `vector_memory.py`, `conversations.py`, `browser_agent.py`, `coder.py`, `opencode_agent.py` (Code-Tab: PTY-Start von OpenCode/Claude Code/Codex), `panel.py`, `confirm.py` |
+| `backend/` | FastAPI-Server: `main.py` (Endpoints, SSE-Streaming), `llm_client.py`, `tools.py`, `tts.py`, `stt.py`, `memory.py` + `vector_memory.py`, `conversations.py`, `browser_agent.py`, `opencode_agent.py` (Code-Tab: PTY-Start von OpenCode/Claude Code/Codex), `panel.py`, `confirm.py` |
 | `frontend/` | UI: `index.html`/`app.js` (legacy), `claude.html`/`claude-app.js` (aktive UI), `style.css` |
 | `launcher/` | Globaler Hotkey, Server-Start, macOS-Login-Plist, Windows-`.bat`/`.exe`-Build |
 | `chrome-extension/` | Browser-Agent-Erweiterung (Tabs lesen/öffnen/suchen) |

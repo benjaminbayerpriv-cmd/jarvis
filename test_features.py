@@ -23,12 +23,9 @@ def test_memory_vault():
         try:
             memory.initialize()
             memory.add_note("Milch kaufen")
-            memory.remember_preference("Antworten kurz halten")
-            memory.add_task("Browser-Erweiterung installieren")
             assert "type: jarvis-notes" in memory.NOTES.read_text()
             assert "Milch kaufen" in memory.NOTES.read_text()
-            assert "Antworten kurz halten" in memory.PROFILE.read_text()
-            assert "Browser-Erweiterung installieren" in memory.TASKS.read_text()
+            assert memory.PROFILE.exists() and memory.TASKS.exists()
         finally:
             memory.ROOT, memory.KNOWLEDGE, memory.JOURNAL, memory.PROFILE, memory.TASKS, memory.NOTES = old
             vector_memory.INDEX_FILE, vector_memory._cache = old_index

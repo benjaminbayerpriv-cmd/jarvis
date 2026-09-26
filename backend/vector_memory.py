@@ -113,7 +113,11 @@ def index_entry(source: str, text: str) -> None:
 
 # Frontmatter/heading noise that would otherwise get embedded as if it
 # were real content — skipped rather than indexed.
-NON_CONTENT_LINE_RE = re.compile(r"^\s*(---|#|type:|updated:|created:|date:|tags:|imported_from:)")
+NON_CONTENT_LINE_RE = re.compile(r"^\s*(---|#|type:|updated:|created:|date:|tags:|imported_from:|status::|erstellt::)")
+
+# Every source reindex_all() scans — entries from these whose line no longer
+# exists in the vault get pruned there.
+_VAULT_SOURCE_RE = re.compile(r"^(Profil|Aufgaben|Notizen|Wissen/.+|Tagebuch/.+)$")
 
 
 def reindex_all() -> None:
@@ -135,21 +139,42 @@ def reindex_all() -> None:
     sources += [(f"Tagebuch/{p.stem}", p) for p in memory.JOURNAL.glob("*.md")]
 
     added = 0
+    current_ids: set[str] = set()
+    unreadable: set[str] = set()
     for source, path in sources:
         try:
             lines = path.read_text(encoding="utf-8").splitlines()
         except OSError:
+            unreadable.add(source)
             continue
         for raw_line in lines:
             line = raw_line.strip()
             if not line or NON_CONTENT_LINE_RE.match(line):
                 continue
-            if line_id(source, line) in existing_ids:
+            entry_id = line_id(source, line)
+            current_ids.add(entry_id)
+            if entry_id in existing_ids:
                 continue
             index_entry(source, line)
             added += 1
     if added:
         print(f"[memory] {added} Vault-Zeile(n) neu indiziert für die semantische Suche.")
+
+    # Lines deleted or edited in Obsidian would otherwise stay findable
+    # forever — semantic search kept "remembering" notes that no longer exist.
+    with _lock:
+        cache = _load()
+        stale = [
+            entry_id for entry_id, entry in cache.items()
+            if entry_id not in current_ids
+            and entry.get("source") not in unreadable
+            and _VAULT_SOURCE_RE.match(entry.get("source", ""))
+        ]
+        for entry_id in stale:
+            del cache[entry_id]
+        if stale:
+            _save()
+            print(f"[memory] {len(stale)} veraltete Zeile(n) aus dem Suchindex entfernt.")
 
 
 def semantic_context_for(query: str, limit: int = 4) -> str | None:

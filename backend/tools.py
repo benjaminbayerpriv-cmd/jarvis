@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import datetime
+import math
 import operator
 import os
 import platform
@@ -400,15 +401,20 @@ _BLOCKED = [
     r"\bmkfs\b",
     r"\bdd\s+.*of=/dev/",
     r":\(\)\s*\{.*\}\s*;\s*:",          # fork bomb
-    r"\bshutdown\b|\breboot\b",
+    # Only in command position — "echo shutdown notes" must stay allowed.
+    r"(?:^|[;&|(]|\bcmd(?:\.exe)?\s+/[ck]|\bpowershell(?:\.exe)?(?:\s+-\w+)*)\s*[\"']?(?:sudo\s+)?(?:shutdown|reboot|halt|poweroff)(?:\.exe)?\b",
+    r"\b(?:stop|restart)-computer\b",
     r"\bsudo\b",
     r">\s*/dev/(disk|sd)",
     r"\bdiskutil\s+(erase|reformat)",
     r"\bchmod\s+-R\s+777\s+/(\s|$)",
     # Windows equivalents of the above.
     r"\bformat\s+[a-z]:",
-    r"\bdel\s+/[a-z]*\s+.*[a-z]:\\\\?\s*$",
-    r"remove-item\s+.*-recurse\b.*[a-z]:\\\\?\s*$",
+    # Deleting a drive root, everything on it, or the Windows/Users/Program
+    # Files trees — via cmd (rd/rmdir/del/erase) or PowerShell (Remove-Item
+    # and its ri/rm/del aliases).
+    r"\b(?:rd|rmdir|del|erase|remove-item|ri|rm)\b.*\b[a-z]:[\\/]+"
+    r"(?:\*(?:\.\*)?|windows|users|program files(?: \(x86\))?)?[\\/]*[\"']?\s*$",
     r"\bvssadmin\s+delete\b",
 ]
 
@@ -450,8 +456,14 @@ def _get_weather(city: str) -> str:
         return f"Wetterabfrage fehlgeschlagen: {exc}"
 
 
+_WEEKDAYS_DE = ("Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag")
+
+
 def _get_time() -> str:
-    return datetime.datetime.now().strftime("%A, %d.%m.%Y %H:%M")
+    # %A follows the process locale (English on a default Python install),
+    # not the German the rest of Jarvis speaks.
+    now = datetime.datetime.now()
+    return f"{_WEEKDAYS_DE[now.weekday()]}, {now:%d.%m.%Y %H:%M}"
 
 
 def _add_note(text: str) -> str:
@@ -499,12 +511,16 @@ def _calculate(expression: str) -> str:
     expr = expression.strip().lower()
     expr = re.sub(r"geteilt\s+durch|:", "/", expr)
     expr = re.sub(r"\bdurch\b", "/", expr)
-    expr = re.sub(r"\bmal\b|×", "*", expr)
+    expr = re.sub(r"÷", "/", expr)
+    expr = re.sub(r"\bmal\b|×|·", "*", expr)
     expr = re.sub(r"\bhoch\b|\^", "**", expr)
     expr = re.sub(r"\bplus\b", "+", expr)
-    expr = re.sub(r"\bminus\b", "-", expr)
+    expr = re.sub(r"\bminus\b|[−–]", "-", expr)
+    expr = re.sub(r"\bmodulo\b", "%", expr)
     expr = re.sub(r"(?<=\d),(?=\d)", ".", expr)
-    expr = re.sub(r"(\d+(?:\.\d+)?)\s*%", r"(\1/100)", expr)
+    # A trailing "%" is a percentage ("20% * 50"); one between two operands is
+    # modulo ("10 % 3").
+    expr = re.sub(r"(\d+(?:\.\d+)?)\s*%(?!\s*[\d(])", r"(\1/100)", expr)
     if not re.fullmatch(r"[\d\s+\-*/().%]*", expr):
         return f"'{expression}' ist kein Rechenausdruck, den ich auswerten kann."
     try:
@@ -520,11 +536,16 @@ def _calculate(expression: str) -> str:
         return f"Das Ergebnis von '{expression}' ist zu groß, um es auszurechnen."
     except (SyntaxError, ValueError, TypeError):
         return f"'{expression}' ist kein Rechenausdruck, den ich auswerten kann."
+    if isinstance(result, int) and result.bit_length() > 13000:
+        # str() refuses ints this long (Python's int-to-str digit limit).
+        digits = int(result.bit_length() * math.log10(2)) + 1
+        return f"{expression} ergibt eine Zahl mit rund {digits} Stellen — zu lang zum Ausgeben."
     return f"{expression} = {_format_calc_result(result)}"
 
 
 def _open_url(url: str) -> str:
-    if not (url.startswith("http://") or url.startswith("https://")):
+    url = url.strip()
+    if not url.lower().startswith(("http://", "https://")):
         url = "https://" + url
     if browser_agent.agent.connected():
         result = browser_agent.agent.command("open_url", {"url": url})
@@ -695,9 +716,21 @@ def _resolve_fs_path(description: str, *, require_dir: bool) -> tuple[Path | Non
     shared by every tool that takes a spoken folder/file reference, so they
     all fail the same way.
     """
-    text = (description or "").strip()
+    text = (description or "").strip().strip("\"'")
     if not text:
         return None, ""
+
+    # A real path ("C:\Users\me\Desktop\x", "~/Downloads/a.txt",
+    # "Projekte/alt") — the word-based lookup below would shred it into
+    # "C Users me Desktop x". Tried as-is first, then relative to home and
+    # Desktop.
+    if "/" in text or "\\" in text:
+        raw = Path(os.path.expanduser(text))
+        candidates = [raw] if raw.is_absolute() else [Path.home() / raw, Path.home() / "Desktop" / raw]
+        for candidate in candidates:
+            if candidate.exists() and (not require_dir or candidate.is_dir()):
+                last_target.remember(candidate)
+                return candidate, candidate.name
 
     lowered = text.lower()
     base = Path.home() / "Desktop"
@@ -821,8 +854,6 @@ def _build_project(location: str, description: str) -> str:
 
 def _move_file(source: str, destination: str) -> str:
     """Move a file or folder; safer than a raw `mv` via run_shell."""
-    import shutil
-
     src = Path(os.path.expanduser((source or "").strip().strip("\"'")))
     dst = Path(os.path.expanduser((destination or "").strip().strip("\"'")))
 
@@ -838,9 +869,20 @@ def _move_file(source: str, destination: str) -> str:
         if dst.suffix == "" and not dst.exists():
             dst = dst / src.name
 
+    if dst.exists():
+        # shutil.move silently replaces an existing file at the destination.
+        return f"Am Ziel gibt es '{dst.name}' schon ({dst.parent}) — ich überschreibe nichts. Nenn mir einen anderen Zielnamen oder -ordner."
+
     dst.parent.mkdir(parents=True, exist_ok=True)
     shutil.move(str(src), str(dst))
     return f"'{src.name}' nach '{dst.parent}' verschoben."
+
+
+def _is_protected_location(target: Path) -> bool:
+    resolved = target.resolve()
+    home = Path.home().resolve()
+    protected = {home, *(Path(os.path.expanduser(p)).resolve() for p in _LOCATION_ALIASES.values())}
+    return resolved in protected or resolved == Path(resolved.anchor) or resolved in home.parents
 
 
 def _delete_path(description: str) -> str:
@@ -867,6 +909,10 @@ def _delete_path(description: str) -> str:
     target, name = _resolve_fs_path(description, require_dir=False)
     if target is None:
         return f"Konnte '{name}' nicht finden — da ist nichts zu löschen."
+    if _is_protected_location(target):
+        # A description made only of filler/location words ("den Ordner auf
+        # dem Schreibtisch") resolves to the base folder itself.
+        return f"'{target}' ist ein ganzer Hauptordner — den lösche ich nicht. Welche Datei oder welchen Ordner darin meinst du?"
 
     def _do_delete() -> str:
         try:
@@ -893,9 +939,10 @@ _CODE_SUFFIXES = {
 
 
 def _write_file(path: str, content: str) -> str:
-    target = Path(os.path.expanduser((path or "").strip().strip("\"'")))
-    if not str(target):
+    raw = (path or "").strip().strip("\"'")
+    if not raw:
         return "Welche Datei soll ich schreiben?"
+    target = Path(os.path.expanduser(raw))
     if target.suffix.lower() in _CODE_SUFFIXES:
         # Ein bloßes Verweigern reichte nicht: das Modell meldete danach
         # trotzdem Vollzug und rief opencode NICHT auf — die Datei entstand
@@ -909,7 +956,7 @@ def _write_file(path: str, content: str) -> str:
             task += " Sie soll das hier leisten:\n\n" + draft
         return _opencode(task)
     target.parent.mkdir(parents=True, exist_ok=True)
-    # Same cp1252-vs-UTF-8 trap as elsewhere in this file (see coder.py):
+    # Same cp1252-vs-UTF-8 trap as elsewhere in this file:
     # without an explicit encoding, any character outside the Windows
     # locale's codepage — an emoji, a checkmark, non-Latin text — raises
     # UnicodeEncodeError instead of writing.
@@ -962,7 +1009,13 @@ def _opencode(task: str) -> str:
 
 # Dateien, die das Betriebssystem beim Öffnen AUSFÜHREN würde. "Zeig mir die
 # Datei" darf kein Skript starten, also gehen die in den Editor.
-_RUNNABLE_SUFFIXES = {".py", ".js", ".mjs", ".cjs", ".ps1", ".bat", ".cmd", ".sh", ".vbs", ".jar"}
+_RUNNABLE_SUFFIXES = {
+    ".py", ".js", ".mjs", ".cjs", ".ps1", ".psm1", ".bat", ".cmd", ".sh", ".vbs", ".vbe",
+    ".jse", ".wsf", ".wsh", ".hta", ".reg", ".jar",
+}
+# Programs/installers: "opening" them means running them, which is open_app's
+# job, not a request to look at a file.
+_EXECUTABLE_SUFFIXES = {".exe", ".msi", ".msix", ".appx", ".scr", ".com", ".cpl", ".pif", ".lnk"}
 
 
 def _open_in_editor(target: Path) -> None:
@@ -995,6 +1048,8 @@ def _open_file(path: str) -> str:
                 break
     if not target.exists():
         return f"Die Datei {raw} finde ich nicht."
+    if target.suffix.lower() in _EXECUTABLE_SUFFIXES:
+        return f"{target.name} ist ein Programm bzw. Installer — das starte ich nicht einfach beim Öffnen. Soll es wirklich ausgeführt werden, sag es ausdrücklich."
     try:
         if target.suffix.lower() in _RUNNABLE_SUFFIXES:
             # "Öffne zahlen.py" darf das Skript NICHT ausführen: unter Windows

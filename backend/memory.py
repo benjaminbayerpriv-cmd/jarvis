@@ -64,42 +64,6 @@ def add_note(text: str) -> str:
     return "Notiz in Obsidian gespeichert."
 
 
-def add_task(text: str, status: str = "offen") -> str:
-    initialize()
-    stamp = dt.datetime.now().strftime("%Y-%m-%d %H:%M")
-    marker = "x" if status == "erledigt" else " "
-    with _lock, TASKS.open("a", encoding="utf-8") as handle:
-        # A literal "\n" (two characters) was being written here instead of
-        # an actual line break — the trailing double-space + real newline is
-        # Markdown's soft-break convention, meant to keep each Obsidian
-        # property (status::, erstellt::) on its own visual line within the
-        # same list item. With a literal backslash-n, every task instead
-        # showed up as one line with visible "\n" text right in the note.
-        handle.write(f"- [{marker}] {text}  \n  status:: {status}  \n  erstellt:: {stamp}\n")
-    _index_new_line("Aufgaben", f"- [{marker}] {text}")
-    return f"Aufgabe als {status} in Obsidian gespeichert."
-
-
-def remember_preference(text: str) -> str:
-    initialize()
-    line = f"- {text}"
-    with _lock, PROFILE.open("a", encoding="utf-8") as handle:
-        handle.write(line + "\n")
-    _index_new_line("Profil", line)
-    return "Präferenz in Obsidian gespeichert."
-
-
-def add_knowledge(title: str, content: str) -> str:
-    initialize()
-    slug = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-") or "wissen"
-    path = KNOWLEDGE / f"{slug}.md"
-    path.write_text(_frontmatter("jarvis-knowledge", created=dt.date.today().isoformat(), tags="[jarvis]") + f"# {title}\n\n{content}\n", encoding="utf-8")
-    # Indexed as one chunk (title + content), not line by line — unlike
-    # notes/tasks, a knowledge entry is prose meant to be found as a whole.
-    _index_new_line(f"Wissen/{slug}", f"{title}: {content}")
-    return f"Wissen in [[Jarvis/Wissen/{slug}]] gespeichert."
-
-
 def context_for(query: str, limit: int = 4) -> str:
     """Return only matching local memories for a model prompt.
 
