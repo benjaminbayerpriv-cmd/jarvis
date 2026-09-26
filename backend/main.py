@@ -126,6 +126,12 @@ async def on_startup():
         thinking_filler_url = fillers.ensure_thinking_filler()
 
     loop = asyncio.get_event_loop()
+    if fit["fits"] and healthy:
+        # Siehe llm_client.warm_system_prompt: sonst zahlt die erste echte
+        # Nachricht nach jedem Programmstart das Prefill des ganzen
+        # System-Prompts, nicht nur nach einem Modellwechsel im laufenden
+        # Betrieb (dort schon über /models/select abgedeckt).
+        loop.run_in_executor(None, llm_client.warm_system_prompt, config.LM_STUDIO_BASE_URL, config.LM_STUDIO_MODEL)
     loop.run_in_executor(None, _generate)
     # Whisper's first load takes ~15s — do it now instead of on the user's
     # first spoken sentence. selftest() (not just _get_model()) also runs a
@@ -1050,6 +1056,13 @@ def select_model(req: SelectModelRequest):
             return
         if not eject_first and previous_model and previous_model != req.model:
             llm_client.eject_model(previous_model)
+        # Zweiter, separater Warmlauf: der obige lädt nur das Modell (JIT),
+        # verarbeitet aber keinen System-Prompt. Ohne diesen zweiten Schritt
+        # zahlt die erste ECHTE Nachricht des Nutzers noch das Prefill des
+        # ganzen (bei großen Modellen mehrere tausend Tokens langen)
+        # System-Prompts obendrauf — sichtbar als spürbar langsamere erste
+        # Antwort nach jedem Modellwechsel (beobachtet mit Qwen3.6 35B A3B).
+        llm_client.warm_system_prompt(config.LM_STUDIO_BASE_URL, req.model)
 
     threading.Thread(target=_switch, daemon=True).start()
     return {"ok": True}
@@ -1236,9 +1249,21 @@ async def code_tty_ws(websocket: WebSocket):
 
     sender_task = asyncio.create_task(_sender())
 
-    def _cleanup() -> None:
+    def _cleanup_blocking() -> None:
         opencode_agent.kill_tty(tty)
         tty.close()
+
+    async def _cleanup() -> None:
+        # kill_tty() can block for up to its grace period (POSIX: proc.wait,
+        # Windows: winpty.terminate waiting for the child to actually exit) —
+        # running it inline on this coroutine would stall the ONE shared
+        # asyncio event loop that also serves /chat/stream and every other
+        # request, freezing the whole app for that long. Observed live: two
+        # back-to-back model switches (each closes+reopens this socket, see
+        # frontend's renderPanelItem for "opencode_model") made Jarvis stop
+        # answering entirely while the second restart's cleanup blocked the
+        # loop underneath the first's.
+        await loop.run_in_executor(None, _cleanup_blocking)
 
     try:
         while True:
@@ -1267,7 +1292,7 @@ async def code_tty_ws(websocket: WebSocket):
     except WebSocketDisconnect:
         pass
     finally:
-        _cleanup()
+        await _cleanup()
         sender_task.cancel()
         try:
             await sender_task
