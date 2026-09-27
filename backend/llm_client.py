@@ -1717,6 +1717,13 @@ def _stream_reply_impl(user_message: str, history: list | None = None, turn_id: 
     # those, never for a claim about something new (see
     # _history_has_recent_action_claim).
     recent_action_confirmed = _history_has_recent_action_claim(user_message, history)
+    # Statt der immer gleichen "Denkt nach…"-Anzeige im Frontend: einmalige
+    # Status-Events ("thinking"/"answering"/"tool"), sobald der jeweilige
+    # Zustand tatsächlich zum ersten Mal eintritt — siehe deren Yield-Stellen
+    # unten. Ein Set statt einzelner Bools, weil "tool" pro Turn mehrfach
+    # (mit wechselndem Werkzeugnamen) auftreten kann, "thinking"/"answering"
+    # aber jeweils nur einmal.
+    status_sent: set[str] = set()
 
     def _vet(text: str) -> str:
         """Swap a sentence for an honest one if it fails the same checks
@@ -1806,12 +1813,27 @@ def _stream_reply_impl(user_message: str, history: list | None = None, turn_id: 
                 choice = chunk["choices"][0]
                 delta = choice.get("delta", {})
 
+                # Modelle, die Reasoning im eigenen "reasoning_content"-Feld
+                # senden (statt es als <think>-Text in "content" zu leaken —
+                # siehe _filter_think), sagen uns hierüber trotzdem, dass
+                # gerade nachgedacht wird — reicht für den Status, auch wenn
+                # der Inhalt selbst nirgends angezeigt wird.
+                if delta.get("reasoning_content") and "thinking" not in status_sent:
+                    status_sent.add("thinking")
+                    yield {"type": "status", "phase": "thinking"}
+                if think_state["in_think"] and "thinking" not in status_sent:
+                    status_sent.add("thinking")
+                    yield {"type": "status", "phase": "thinking"}
+
                 # Reasoning text (<think>...</think>) is filtered out right
                 # here, before anything downstream ever sees it — see
                 # _filter_think for why that has to happen at this exact
                 # point rather than later on individual sentences.
                 visible = _filter_think(think_state, delta["content"]) if delta.get("content") else ""
                 if visible:
+                    if "answering" not in status_sent:
+                        status_sent.add("answering")
+                        yield {"type": "status", "phase": "answering"}
                     buffer += visible
                     content_acc += visible
 
@@ -1940,6 +1962,7 @@ def _stream_reply_impl(user_message: str, history: list | None = None, turn_id: 
                     args = json.loads(c["arguments"] or "{}")
                 except json.JSONDecodeError:
                     args = {}
+                yield {"type": "status", "phase": "tool", "tool": c["name"]}
                 result = tools.call_tool(c["name"], args)
                 tools_used.append(c["name"])
                 last_tool_result = result
@@ -1970,6 +1993,7 @@ def _stream_reply_impl(user_message: str, history: list | None = None, turn_id: 
                     yield {"type": "done", "full_text": ""}
                     return
                 name, args = recovered_trailing
+                yield {"type": "status", "phase": "tool", "tool": name}
                 result = tools.call_tool(name, args)
                 tools_used.append(name)
                 last_tool_result = result
@@ -2016,6 +2040,7 @@ def _stream_reply_impl(user_message: str, history: list | None = None, turn_id: 
                 yield {"type": "done", "full_text": ""}
                 return
             name, args = recovered
+            yield {"type": "status", "phase": "tool", "tool": name}
             result = tools.call_tool(name, args)
             tools_used.append(name)
             last_tool_result = result
