@@ -920,23 +920,34 @@ def _stream_chat(messages: list):
     if resp is None:
         raise last_exc
 
-    for line in resp.iter_lines():
-        if not line:
-            continue
-        line = line.decode("utf-8")
-        if not line.startswith("data: "):
-            continue
-        payload = line[len("data: "):].strip()
-        if payload == "[DONE]":
-            break
-        try:
-            data = json.loads(payload)
-        except json.JSONDecodeError:
-            continue
-        if "error" in data or not data.get("choices"):
-            message = (data.get("error") or {}).get("message", "LM Studio-Stream ist ungültig.")
-            raise ModelError(message)
-        yield data
+    # Closing `resp` (not just returning/breaking) is what actually severs the
+    # TCP connection to LM Studio — without it, a caller stopping this
+    # generator early (the Stop button, see _turn_cancelled below) leaves the
+    # socket open and LM Studio never notices the client is gone, so it keeps
+    # generating regardless of what the UI shows. `finally` covers every exit
+    # path: the normal [DONE]/break below, an early `return`/`break` in the
+    # caller's `for chunk in stream:` loop, and an explicit `stream.close()`
+    # (raises GeneratorExit here).
+    try:
+        for line in resp.iter_lines():
+            if not line:
+                continue
+            line = line.decode("utf-8")
+            if not line.startswith("data: "):
+                continue
+            payload = line[len("data: "):].strip()
+            if payload == "[DONE]":
+                break
+            try:
+                data = json.loads(payload)
+            except json.JSONDecodeError:
+                continue
+            if "error" in data or not data.get("choices"):
+                message = (data.get("error") or {}).get("message", "LM Studio-Stream ist ungültig.")
+                raise ModelError(message)
+            yield data
+    finally:
+        resp.close()
 
 
 # This model intermittently writes a function call into its reply as plain
@@ -1674,6 +1685,18 @@ def _stream_reply_impl(user_message: str, history: list | None = None, turn_id: 
             stream = _stream_chat(messages)
 
             for chunk in stream:
+                # The Stop button (chat/cancel) used to only be checked
+                # between tool-call rounds — while the model was still
+                # generating plain text, nothing here ever looked at the
+                # flag, so Stop neither ended the reply nor (since the
+                # connection to LM Studio stayed open) actually interrupted
+                # LM Studio's own generation. Checked on every chunk now, and
+                # stream.close() (see _stream_chat's finally) really closes
+                # that connection instead of just abandoning the generator.
+                if _turn_cancelled(turn_id):
+                    stream.close()
+                    yield {"type": "done", "full_text": "".join(full_text_parts)}
+                    return
                 if not chunk.get("choices"):
                     message = (chunk.get("error") or {}).get("message", "LM Studio-Stream ist ungültig.")
                     raise ModelError(message)

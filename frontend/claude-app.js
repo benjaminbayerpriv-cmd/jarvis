@@ -12,6 +12,20 @@
 
   const $ = (s, r = document) => r.querySelector(s);
 
+  // Setzt den Cursor eines (leeren) contenteditable an dessen Anfang. Nötig,
+  // weil der Platzhalter (CSS ::before) im Renderfluss vor dem echten, leeren
+  // Inhalt steht — der Browser platziert den Cursor beim Fokussieren sonst
+  // dahinter (sichtbar hinter dem Platzhaltertext statt davor).
+  function placeCaretAtStart(el) {
+    if (!el || el.innerText.trim().length > 0) return;
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    range.collapse(true);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+  }
+
   // ------------------------------------------------ claude-design-tokens
   // Jeder Farbwert ist eine CSS-Variable statt eines festen Hex-Codes — ein
   // Theme-Wechsel (siehe JARVIS_THEMES/applyJarvisTheme unten) ändert nur die
@@ -2405,6 +2419,12 @@
         updateSlashMenu();
       });
       composerInput.addEventListener('blur', () => setTimeout(closeSlashMenu, 150));
+      // Der Platzhalter kommt als ::before-Pseudo-Element VOR dem (leeren)
+      // echten Inhalt im Fluss — der Cursor eines leeren contenteditable
+      // landet dadurch beim Fokussieren hinter dem Platzhaltertext statt
+      // davor (beobachtet: Cursor nach "...helfen?" statt vor "Wie...").
+      // Bei leerem Feld den Cursor deshalb explizit an den Anfang setzen.
+      composerInput.addEventListener('focus', () => placeCaretAtStart(composerInput));
     }
     wireSetupField($('.js-setup-lmurl', uiEl), $('.js-setup-test-lm', uiEl), $('.js-setup-activate-lm', uiEl), $('.js-setup-lm-status', uiEl), 'lm_studio_base_url');
     wireSetupField($('.js-setup-apikey', uiEl), $('.js-setup-test-api', uiEl), $('.js-setup-activate-api', uiEl), $('.js-setup-api-status', uiEl), 'deepseek_api_key');
@@ -2422,7 +2442,27 @@
     );
     updateSendSlot();
     if (speechBtn) speechBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); speechMode ? exitSpeech() : enterSpeech(); });
-    if (noteBtn) noteBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); setDictating(!dictating); });
+    if (noteBtn) noteBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      setDictating(!dictating);
+      // Ohne das bleibt der Tastaturfokus auf DIESEM Button (er wurde ja
+      // gerade geklickt) — ein Enter landet dann nicht im Composer-Feld
+      // (siehe dessen eigene Enter-Behandlung: erster Druck stoppt nur das
+      // Mikro, zweiter schickt ab), sondern klickt als natives Button-
+      // Verhalten den fokussierten Button selbst nochmal an. Beobachtet
+      // live: erstes Enter schaltete Diktat aus (= Klick), zweites Enter
+      // schaltete es prompt wieder EIN (= nochmal Klick), statt zu senden.
+      if (composerInput) {
+        composerInput.focus();
+        const range = document.createRange();
+        range.selectNodeContents(composerInput);
+        range.collapse(false);
+        const sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(range);
+      }
+    });
     if (uploadBtn) uploadBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); if (fileInput) fileInput.click(); });
 
     // Projekt-Detailseite: eigener kleiner Composer, der bei jeder echten
@@ -2434,6 +2474,7 @@
       pdEditorEl.addEventListener('keydown', (e) => {
         if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); if (pdSendBtn) pdSendBtn.click(); }
       });
+      pdEditorEl.addEventListener('focus', () => placeCaretAtStart(pdEditorEl));
     }
     if (pdSendBtn) pdSendBtn.addEventListener('click', (e) => {
       e.preventDefault();
@@ -4600,7 +4641,13 @@
         setSpeechStatus('Denke');
         sendMessage(text);
       } else if (dictating && composerInput) {
-        const base = dictBase || (composerInput.innerText || '').trim();
+        // dictBase ist die alleinige Quelle des bestätigten Texts (siehe
+        // setDictating) — NICHT mehr composerInput.innerText nachlesen: das
+        // Feld enthält zu diesem Zeitpunkt schon die (noch unbestätigte)
+        // Zwischenvorschau derselben Äußerung (siehe runInterimTranscription),
+        // ein Rückfall darauf hängte das gerade Gesagte dadurch ein zweites
+        // Mal an — beobachtet live als mitten in den Text gehängte Dopplung.
+        const base = dictBase || '';
         if (base && base.toLowerCase().endsWith(text.toLowerCase())) return;
         const composed = base ? base + ' ' + text : text;
         clearDictInterimSpan();
@@ -5153,12 +5200,21 @@
   // für das nächste (dictBase).
   function setDictating(should) {
     dictating = should;
+    // dictBase ist ab hier die alleinige Quelle für den "bestätigten" Text
+    // (schon Getipptes + vorige fertige Äußerungen dieser Diktat-Sitzung) —
+    // sofort beim Einschalten aus dem aktuellen Feldinhalt gesetzt, statt
+    // null zu bleiben und später an drei verschiedenen Stellen (Web-Speech-
+    // onresult, Whisper-Zwischenvorschau, Whisper-Endergebnis) uneinheitlich
+    // nachgeholt zu werden. Beobachtet live: die Zwischenvorschau (siehe
+    // runInterimTranscription) las bei null einfach '' statt des schon
+    // Getippten und überschrieb das Feld damit — bereits eingetippter Text
+    // ging verloren, sobald man zu diktieren anfing.
     if (should && !micReady) {
       ensureMic().then(() => {
         if (!dictating) return;
         if (noteBtn) noteBtn.classList.add('on');
         if (noteBtn) noteBtn.title = 'Dictation off';
-        dictBase = null;
+        dictBase = composerInput ? composerInput.innerText.trim() : '';
         startListening();
       }).catch(() => {
         if (noteBtn) noteBtn.title = 'Microphone denied';
@@ -5169,7 +5225,10 @@
     dictating = should;
     if (noteBtn) noteBtn.classList.toggle('on', should);
     if (noteBtn) noteBtn.title = should ? 'Diktat aus' : 'Diktieren';
-    if (should) { dictBase = null; startListening(); } else stopListening();
+    if (should) {
+      dictBase = composerInput ? composerInput.innerText.trim() : '';
+      startListening();
+    } else stopListening();
   }
 
     // ------------------------------------------- Leuchtender Ring (Sprachmodus)
