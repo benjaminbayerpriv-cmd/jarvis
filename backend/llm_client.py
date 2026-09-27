@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import platform
 import re
 import subprocess
 
@@ -188,6 +189,15 @@ def _note_active_target(base_url: str, model: str) -> None:
     _active_model_provider = "DeepSeek" if base_url == config.DEEPSEEK_BASE_URL else "ein lokales Modell über LM Studio"
 
 
+# (connect, read). The read timeout covers the silence while LM Studio
+# prefills the prompt before the first token — with the full system prompt
+# plus every tool schema (~6k tokens) that took 94 s cold on a model larger
+# than VRAM. A 60 s limit aborted it, LM Studio threw the half-built prompt
+# cache away with the dropped connection, and every retry started cold
+# again: Jarvis could never answer until something else warmed the cache.
+_CHAT_TIMEOUT = (10, 300)
+
+
 def warm_system_prompt(base_url: str, model: str) -> None:
     """Throwaway completion carrying the real system prompt, so LM Studio's
     llama.cpp backend prefills and caches those tokens ahead of time.
@@ -212,12 +222,34 @@ def warm_system_prompt(base_url: str, model: str) -> None:
                     {"role": "system", "content": _system_prompt(False)},
                     {"role": "user", "content": "hi"},
                 ],
+                # The chat template renders the tool schemas right after the
+                # system prompt, so they belong to the cached prefix too —
+                # without them the first real message still prefilled ~3k
+                # tokens of tool definitions from scratch.
+                "tools": tools.TOOL_SCHEMAS,
+                "tool_choice": "auto",
                 "max_tokens": 1,
+                "reasoning_effort": "none",
             },
-            timeout=180,
+            timeout=_CHAT_TIMEOUT,
         )
     except requests.RequestException as exc:
         print(f"[model] Vorwärmen des System-Prompts für {model} fehlgeschlagen: {exc}")
+
+
+def _platform_note() -> str:
+    # Without this the model assumed macOS/Linux (the prompt used to mention
+    # only Finder/killall): benchmarked on Windows it ran `free -h` and
+    # `sysctl` via run_shell and gave Mac-only instructions.
+    system = platform.system()
+    if system == "Windows":
+        return ("Der Computer läuft unter Windows. run_shell nutzt cmd.exe — verwende Windows-"
+                "Befehle (z.B. powershell -Command \"...\", tasklist, systeminfo), niemals "
+                "Linux/macOS-Befehle wie free, top, sysctl, killall, pmset. Tastenkürzel und "
+                "Anleitungen gibst du für Windows an.")
+    if system == "Darwin":
+        return "Der Computer läuft unter macOS. Verwende macOS-Befehle und -Tastenkürzel."
+    return "Der Computer läuft unter Linux. Verwende Linux-Befehle."
 
 
 # Kept deliberately short: measured against this model, a long rule-list prompt
@@ -260,6 +292,8 @@ Du kannst seinen Computer wirklich bedienen: Programme und Webseiten öffnen,
 Shell-Befehle ausführen, Dateien schreiben, im Web suchen, Projekte
 programmieren und Inhalte im Interface anzeigen.
 
+{_platform_note()}
+
 WICHTIG — sofort handeln statt nachfragen: "Kannst du X öffnen?" ist KEINE
 Ja/Nein-Frage, sondern ein Befehl — die richtige Antwort ist, X sofort zu
 öffnen, nicht "ja, klar" oder eine Rückfrage zu sagen. Bei "mach X auf",
@@ -299,13 +333,13 @@ Zahlwörter in Ziffern um und gib calculate einen reinen Rechenausdruck wie
 "8/2".
 
 Ein run_shell-Befehl ohne Ausgabe ist KEIN Beweis für Erfolg — Befehle wie
-killall geben bei Erfolg und bei Misserfolg oft gar nichts aus. Behaupte
+taskkill oder killall geben bei Erfolg und bei Misserfolg oft gar nichts aus. Behaupte
 nach run_shell niemals zuversichtlich Erfolg, wenn die Ausgabe das nicht
 wirklich belegt — prüfe im Zweifel mit einem zweiten Befehl nach oder sag
 ehrlich, dass du es nicht sicher weißt.
 
 Für einen Ordner (z.B. "Ordner Projekte auf dem Desktop") open_folder zum
-Öffnen im Finder, list_folder um zu sagen was drin liegt — niemals open_app
+Öffnen im Explorer/Finder, list_folder um zu sagen was drin liegt — niemals open_app
 dafür. "Desktop", "Dokumente", "Downloads" und "Schreibtisch" sind FESTE,
 bereits bekannte Orte — ruf list_folder oder open_folder SOFORT mit genau
 diesem einen Wort auf (z.B. list_folder("Dokumente")). Niemals nach dem
@@ -566,7 +600,7 @@ def _post_chat(messages: list) -> dict:
                     **extra,
                 },
                 headers=headers,
-                timeout=60,
+                timeout=_CHAT_TIMEOUT,
             )
             resp.raise_for_status()
             data = resp.json()
@@ -676,6 +710,10 @@ def is_deepseek_model_id(model_id: str) -> bool:
     return str(model_id or "").startswith(DEEPSEEK_MODEL_ID_PREFIX)
 
 
+def is_embedding_model_id(model_id: str) -> bool:
+    return "embed" in str(model_id or "").lower()
+
+
 def list_models() -> list[str]:
     """Every model LM Studio currently reports via its OpenAI-compatible
     /models endpoint, plus a synthetic "deepseek:<model>" entry when a
@@ -687,7 +725,12 @@ def list_models() -> list[str]:
     try:
         response = requests.get(f"{config.LM_STUDIO_BASE_URL}/models", timeout=5)
         response.raise_for_status()
-        models = sorted(entry.get("id") for entry in response.json().get("data", []) if entry.get("id"))
+        # Embedding models can't chat — picking one in the model menu used
+        # to break every following message.
+        models = sorted(
+            entry.get("id") for entry in response.json().get("data", [])
+            if entry.get("id") and not is_embedding_model_id(entry["id"])
+        )
     except requests.RequestException:
         # LM Studio unreachable must not hide DeepSeek from the picker too —
         # DeepSeek can be perfectly healthy while LM Studio is down.
@@ -894,7 +937,7 @@ def _open_stream(messages: list, base_url: str, model: str, headers: dict, extra
             "stream": True,
         },
         headers=headers,
-        timeout=60,
+        timeout=_CHAT_TIMEOUT,
         stream=True,
     )
     resp.raise_for_status()
@@ -990,7 +1033,12 @@ def _first_param_name(tool_name: str) -> str | None:
 # or a lowercase function name. Since there's no fix available here, the
 # round is scrapped and retried — cheap, since it's caught within the first
 # few characters, before any of it has been spoken.
-_CORRUPT_PREFIX_RE = re.compile(r"^[A-ZÄÖÜ]{4,}")
+# The capital run must be glued to more word characters ("_", or a lowercase
+# letter right after the caps) — a bare `^[A-ZÄÖÜ]{4,}` also matched every
+# ordinary answer starting with an acronym ("HTML (HyperText …", "JSON ist …",
+# "WLAN", "NVIDIA"): benchmarked 6/6 such answers were retried ten times and
+# then replaced by "Alles klar.".
+_CORRUPT_PREFIX_RE = re.compile(r"^[A-ZÄÖÜ]{4,}(?:[a-zäöüß]{2}|[A-ZÄÖÜ0-9]*_)")
 
 
 def _call_prefix_verdict(partial: str):
@@ -1005,12 +1053,21 @@ def _call_prefix_verdict(partial: str):
         return None
     if _CORRUPT_PREFIX_RE.match(t):
         return "corrupt"
-    if re.match(r"^[A-Za-z_][A-Za-z0-9_]{2,29}\s*\(", t):
+    m = re.match(r"^([A-Za-z_][A-Za-z0-9_]{2,29})\s*\(", t)
+    if m and _looks_like_call_name(m.group(1)):
         return True
     # Still a bare word — could turn into either a call or ordinary prose.
+    # (Or an acronym still growing, e.g. "HTM" -> "HTMLi…": wait for more.)
     if re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", t) and len(t) <= 30:
         return None
     return False
+
+
+def _looks_like_call_name(name: str) -> bool:
+    """A leaked call is a real tool name (any case) or a snake_case
+    identifier (an invented tool) — not prose like "HTML (HyperText …)"
+    or "Python (die Sprache)", which also starts with word + "("."""
+    return name.lower() in tools.DISPATCH or "_" in name or name[:1].islower()
 
 
 _TRIPLE_QUOTED_RE = re.compile(r'"""(.*?)"""', re.DOTALL)
@@ -1278,6 +1335,46 @@ _CAPABILITY_WORDS = {"kann", "könnte"}
 _WORD_OR_COMMA_RE = re.compile(r"[\wÄÖÜäöüß]+|,")
 
 
+# A participle alone ("ausgeführt", "gespeichert", "gefunden") is just as
+# common in explanations ("JavaScript wird im Browser ausgeführt", "Die Mauer
+# wurde 1989 geöffnet", "Penicillin wurde 1928 gefunden") as in a report of
+# Jarvis's own action — benchmarked, such sentences made up most of what the
+# filter replaced with "Das habe ich nicht ausgeführt.". It only reads as a
+# self-report when the sentence is about Jarvis/the user right now, or is a
+# terse status line ("Ordner gelöscht.", "Spotify ist geöffnet.").
+_SELF_REPORT_RE = re.compile(
+    r"\b(?:ich|hab|habe|habs|hab's|mir|jetzt|gerade|soeben|eben|nun|erfolgreich|erledigt|dir|dich|deine[mnrs]?|dein)\b",
+    re.IGNORECASE,
+)
+
+
+def _self_report_context(sentence: str) -> bool:
+    words = [t for t in _WORD_OR_COMMA_RE.findall(sentence) if t != ","]
+    return len(words) <= 5 or bool(_SELF_REPORT_RE.search(sentence))
+
+
+# "Ich zeige dir ein Beispiel", "ich schreibe dir das als Liste auf", "ich
+# starte mit den Grundlagen" describe the reply itself, not an action on the
+# computer — unless a real target (file, app, browser …) is named.
+_CONVERSATIONAL_ICH_RE = re.compile(
+    r"\bich\s+(?:zeige|schreibe|erkläre|erstelle|suche|fasse|liste|gebe|starte|beginne|lade)\s+"
+    r"(?:dir|euch|dich|mal|kurz|gern|gerne|mit|zusammen|hier|ein|eine|einen)\b",
+    re.IGNORECASE,
+)
+_REAL_OBJECT_RE = re.compile(
+    r"\b(?:datei\w*|ordner\w*|verzeichnis\w*|programm\w*|apps?|browser|terminal|notiz\w*|desktop|"
+    r"schreibtisch|webseite\w*|website\w*|youtube|spotify|tabs?|fenster|screenshot\w*|papierkorb|"
+    r"downloads?|dokumente|e-?mails?|opencode|codex|coding-agent\w*|internet|web|google|netz)\b"
+    r"|\w\.(?:txt|py|md|js|json|csv|pdf)\b",
+    re.IGNORECASE,
+)
+# A sentence opening with a condition is an offer or hypothetical ("Wenn du
+# mir das sagst, kann ich es mir notieren"), not a report.
+_CONDITIONAL_START_RE = re.compile(r"^\s*(?:wenn|falls|sobald|sofern)\b", re.IGNORECASE)
+# "kann ich", "könnte ich", "würde ich" — capability/offer, same as "ich kann".
+_MODAL_BEFORE_ICH = {"kann", "könnte", "könnten", "würde", "würden", "möchte", "darf", "soll", "sollte"}
+
+
 def _bare_participle_claim(sentence: str, participle_re: re.Pattern) -> bool:
     """Whether `participle_re` matches outside any embedded clause.
 
@@ -1291,6 +1388,8 @@ def _bare_participle_claim(sentence: str, participle_re: re.Pattern) -> bool:
     such a clause — entered at a subordinator, closed at the next comma —
     and only counts a match found outside one.
     """
+    if not _self_report_context(sentence):
+        return False
     in_subordinate = False
     for tok in _WORD_OR_COMMA_RE.findall(sentence):
         lowered = tok.lower()
@@ -1315,12 +1414,14 @@ def _direct_ich_claim(sentence: str) -> bool:
     boundary or comma, and treats a negation word hit first as canceling
     the claim — "ich werde das nicht löschen" is an honest denial, not one.
     """
+    if _CONVERSATIONAL_ICH_RE.search(sentence) and not _REAL_OBJECT_RE.search(sentence):
+        return False
     tokens = _WORD_OR_COMMA_RE.findall(sentence)
     lowered = [t.lower() for t in tokens]
     for i, tok in enumerate(lowered):
         if tok != "ich":
             continue
-        if i > 0 and lowered[i - 1] in _CLAUSE_BOUNDARY_WORDS:
+        if i > 0 and (lowered[i - 1] in _CLAUSE_BOUNDARY_WORDS or lowered[i - 1] in _MODAL_BEFORE_ICH):
             continue
         negated = False
         capability = False
@@ -1362,6 +1463,8 @@ _SENTENCE_BOUNDARY_RE = re.compile(r"(?<=[.!?])\s+")
 
 
 def _sentence_is_claim(sentence: str) -> bool:
+    if _CONDITIONAL_START_RE.match(sentence):
+        return False
     negated = _NEGATION_RE.search(sentence)
     is_claim = (
         _bare_participle_claim(sentence, _CHECK_PARTICIPLE_RE)
@@ -1730,7 +1833,10 @@ def _stream_reply_impl(user_message: str, history: list | None = None, turn_id: 
                                     trailing_suspect_text = s
                                     break
                                 clean = _strip_think_tags(s)
-                                if clean and _is_pending_claim_risk(clean):
+                                # Once a sentence is held, everything after it
+                                # waits too — otherwise later sentences overtook
+                                # it and the reply came out of order.
+                                if clean and (pending_claims or _is_pending_claim_risk(clean)):
                                     # Might still be backed by a tool_calls
                                     # delta arriving later in this very
                                     # round — held instead of vetted now,
@@ -1927,7 +2033,7 @@ def _stream_reply_impl(user_message: str, history: list | None = None, turn_id: 
 
         if suspect == "corrupt":
             # All retries came back corrupted too — silently drop it rather
-            # than read garbage aloud. Falls through to the "Alles klar."
+            # than read garbage aloud. Falls through to the empty-reply
             # fallback below, or to last_tool_result if a tool did run.
             print("[llm] Streaming blieb nach 10 Versuchen korrupt, verwerfe den Rest.")
             buffer = ""
@@ -1955,8 +2061,11 @@ def _stream_reply_impl(user_message: str, history: list | None = None, turn_id: 
             full_text_parts.append(last_tool_result)
             yield {"type": "sentence", "text": last_tool_result}
         elif not full_text_parts:
-            yield {"type": "sentence", "text": "Alles klar."}
-            full_text_parts.append("Alles klar.")
+            # Nothing ran and nothing was said — "Alles klar." here read like
+            # a confirmation of something that never happened.
+            empty = "Da ist bei mir gerade keine Antwort zustande gekommen, frag bitte nochmal."
+            yield {"type": "sentence", "text": empty}
+            full_text_parts.append(empty)
 
         yield {"type": "done", "full_text": " ".join(full_text_parts)}
         return
@@ -1997,7 +2106,9 @@ def get_reply(user_message: str, history: list | None = None, mode: str | None =
         tool_calls = choice.get("tool_calls")
 
         if not tool_calls:
-            content = _strip_think_tags(choice.get("content", ""))
+            # "content": null (not just missing) is valid OpenAI output and
+            # crashed _strip_think_tags with a TypeError -> HTTP 500.
+            content = _strip_think_tags(choice.get("content") or "")
             # Keep the legacy non-streaming endpoint as safe as the normal
             # streaming path: LM Studio may put a call in a JSON code block
             # here as well, rather than using `tool_calls`.
@@ -2021,7 +2132,7 @@ def get_reply(user_message: str, history: list | None = None, mode: str | None =
                 return content
             # Model sometimes returns empty text right after a tool call —
             # fall back to the tool's own result instead of reading nothing.
-            return last_tool_result or "Alles klar."
+            return last_tool_result or "Da ist bei mir gerade keine Antwort zustande gekommen, frag bitte nochmal."
 
         messages.append(_clean_assistant_message(choice))
         for call in tool_calls:

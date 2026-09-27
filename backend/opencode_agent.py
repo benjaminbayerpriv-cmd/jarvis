@@ -72,7 +72,31 @@ if os.name == "nt":
 else:
     _arch = "arm64" if os.uname().machine == "arm64" else "x64"
     _JARVIS_CODE_BIN = str(_RELEASES_DIR / f"jarvis-code-darwin-{_arch}")
-OPENCODE_BIN = os.environ.get("OPENCODE_BIN", _JARVIS_CODE_BIN)
+def _installed_opencode() -> str | None:
+    """A regular OpenCode install (e.g. `npm i -g opencode-ai`) — used when the
+    self-built JARVIS Code binary under releases/ doesn't exist (it's not in
+    git and needs bun to build). Without this fallback the Code tab and the
+    opencode tool were dead on any fresh checkout, even with OpenCode itself
+    installed. npm's Windows shim is a .cmd; prefer the native exe it wraps,
+    since ConPTY/Popen start that directly."""
+    found = shutil.which("opencode")
+    if not found:
+        return None
+    if found.lower().endswith((".cmd", ".ps1")) or os.name == "nt" and not found.lower().endswith(".exe"):
+        native = pathlib.Path(found).parent / "node_modules" / "opencode-ai" / "bin" / "opencode.exe"
+        if native.exists():
+            return str(native)
+        cmd = pathlib.Path(found).with_suffix(".cmd")
+        return str(cmd) if cmd.exists() else found
+    return found
+
+
+if os.environ.get("OPENCODE_BIN"):
+    OPENCODE_BIN = os.environ["OPENCODE_BIN"]
+elif pathlib.Path(_JARVIS_CODE_BIN).exists():
+    OPENCODE_BIN = _JARVIS_CODE_BIN
+else:
+    OPENCODE_BIN = _installed_opencode() or _JARVIS_CODE_BIN
 
 # Claude Code and Codex are both installed by the user themselves (`npm i -g
 # @anthropic-ai/claude-code` / `npm i -g @openai/codex`) and picked up from

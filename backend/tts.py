@@ -533,15 +533,28 @@ def _supertonic_say(text: str) -> bytes:
     return buf.getvalue()
 
 
+def synthesize_with_mime(text: str) -> tuple[bytes, str]:
+    """Like synthesize(), but also returns the mime type of exactly this clip.
+    Reading VoiceInfo.engine after the fact races with any concurrent
+    synthesis (a /tts notice during a streamed reply) and could label a WAV
+    as MP3 or vice versa."""
+    audio, engine = _synthesize(text)
+    return audio, ENGINE_MEDIA.get(engine, ("mp3", "audio/mpeg"))[1]
+
+
 def synthesize(text: str) -> bytes:
     """Return spoken audio for `text`. Never raises for ordinary failures —
     silence is the one outcome that makes Jarvis look broken."""
+    return _synthesize(text)[0]
+
+
+def _synthesize(text: str) -> tuple[bytes, str]:
     global _elevenlabs_blocked
 
     try:
         audio = _supertonic_say(text)
         VoiceInfo.engine = "supertonic"
-        return audio
+        return audio, "supertonic"
     except Exception as exc:  # noqa: BLE001 - fall through to ElevenLabs/OS
         print(f"[tts] Supertonic nicht verfügbar, nutze Ausweich-Stimme: {exc}")
 
@@ -549,7 +562,7 @@ def synthesize(text: str) -> bytes:
         try:
             audio = _elevenlabs(text)
             VoiceInfo.engine = "elevenlabs"
-            return audio
+            return audio, "elevenlabs"
         except requests.HTTPError as exc:
             status = exc.response.status_code if exc.response is not None else 0
             body = (exc.response.text if exc.response is not None else "")[:200]
@@ -561,4 +574,4 @@ def synthesize(text: str) -> bytes:
         except requests.RequestException as exc:
             print(f"[tts] ElevenLabs Netzwerkfehler, nutze lokale Stimme: {exc}")
 
-    return _local_say(text)
+    return _local_say(text), ("windows" if IS_WINDOWS else "macos")

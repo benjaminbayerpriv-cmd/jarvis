@@ -152,8 +152,8 @@
   }
 
   const SETTINGS_SECTIONS = [
-    { id: 'sprachausgabe', title: 'Sprachausgabe', desc: 'ElevenLabs (Cloud) oder Supertonic — lokal und kostenlos', icon: SETTINGS_ICONS.speaker, fields: [
-      { key: 'elevenlabs_api_key', label: 'ElevenLabs API-Key (optional, sonst lokale Stimme)', placeholder: 'sk_…', type: 'password' },
+    { id: 'sprachausgabe', title: 'Sprachausgabe', desc: 'Supertonic (lokal, kostenlos), ElevenLabs nur als Ausweich-Stimme', icon: SETTINGS_ICONS.speaker, fields: [
+      { key: 'elevenlabs_api_key', label: 'ElevenLabs API-Key (optional — nur Ausweich-Stimme, falls die lokale Supertonic-Stimme nicht lädt)', placeholder: 'sk_…', type: 'password' },
       { key: 'elevenlabs_voice_id', label: 'ElevenLabs Voice-ID', placeholder: 'pNInz6obpgDQGcFmaJgB' },
       { key: 'supertonic_voice', label: 'Lokale Stimme (Supertonic)', placeholder: 'M1' },
       { key: 'supertonic_lang', label: 'Sprache (Supertonic)', placeholder: 'de' },
@@ -359,6 +359,7 @@
   //  - Alles andere wird als Text gelesen und inline in die Nachricht
   //    eingefügt (PDFs/Audio landen ehrlich als "kann ich nicht lesen"
   //    statt stillschweigend Datenmüll in den Prompt zu kippen).
+  const MODEL_UNREACHABLE_TEXT = 'Ich erreiche mein Sprachmodell gerade nicht. Läuft LM Studio und ist das Modell dort geladen?';
   const ATTACH_MAX_CHARS = 20000;
   let pendingImages = [];  // {name, image: Data-URL} der aktuell angehängten Bilder, siehe sendMessage
   // Ungesendeter Entwurf pro Chat: ohne das wanderte getippter (aber nicht
@@ -759,7 +760,7 @@
   function stopSpeech() {
     turnAborted = true;
     try { if (abortController) abortController.abort(); } catch (e) {}
-    try { if (activeReader) activeReader.cancel(); } catch (e) {}
+    try { if (activeReader) activeReader.cancel().catch(() => {}); } catch (e) {}
     streamStillGenerating = false;
     silenceAudio();
     if (busy) setBusy(false);
@@ -796,7 +797,7 @@
   // Antwort arbeitet — komplett eigener Request/eigene History, rührt
   // NICHT an `busy`/`history`/`currentTurnId` des Hauptchats.
   let btwEl = null, btwIntroEl = null, btwBodyEl = null, btwInputEl = null, btwSendBtn = null;
-  let btwBusy = false, btwConversationId = null, btwTurnCounter = 0;
+  let btwBusy = false, btwConversationId = null, btwTurnCounter = 0, btwHistory = [];
   let btwDragging = false, btwDragStartX = 0, btwDragStartY = 0, btwDragBaseX = 0, btwDragBaseY = 0;
   let speechBarEl = null, spMuteBtn = null, spStopBtn = null, spSendBtn = null, spChatBtn = null;
   let speechCaptionEl = null, spcStatusEl = null, spcUserEl = null, spcReplyEl = null;
@@ -1015,7 +1016,7 @@
             <span>Chats und Aufgaben</span>
             <span class="js-chats-chevron" style="display:inline-flex;transition:transform .15s;">${ICONS.chevronDown}</span>
           </button>
-          <button class="js-chats-sort" title="Filtern und gruppieren" style="background:none;border:none;color:${C.textDim};cursor:pointer;display:inline-flex;padding:5px;">${jsIcon('0xe070', 20)}</button>
+          <button class="js-chats-sort" title="Liste aktualisieren" style="background:none;border:none;color:${C.textDim};cursor:pointer;display:inline-flex;padding:5px;">${jsIcon('0xe070', 20)}</button>
         </div>
         <div class="js-chats" style="flex:1 1 auto;overflow-y:auto;padding:2px 8px 10px;position:relative;"></div>
         <div class="js-chatitem-menu" style="display:none;position:absolute;width:180px;background:${C.bgSoft};border:1px solid ${C.border};border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.4);overflow:hidden;z-index:35;"></div>
@@ -1197,7 +1198,7 @@
         <div style="padding:18px;display:flex;flex-direction:column;gap:12px;">
           <div class="js-newproject-dir-row" style="display:flex;flex-direction:column;gap:6px;">
             <label style="font-size:12px;color:${C.textSoft};">Ordner</label>
-            <input class="js-newproject-dir" type="text" placeholder="z. B. C:\Users\du\Documents\MeinProjekt" spellcheck="false" style="width:100%;box-sizing:border-box;padding:9px 10px;background:${C.bg};border:1px solid ${C.border};border-radius:8px;color:${C.text};font-size:13px;outline:none;font-family:${C.font};" />
+            <input class="js-newproject-dir" type="text" placeholder="z. B. C:\\Users\\du\\Documents\\MeinProjekt" spellcheck="false" style="width:100%;box-sizing:border-box;padding:9px 10px;background:${C.bg};border:1px solid ${C.border};border-radius:8px;color:${C.text};font-size:13px;outline:none;font-family:${C.font};" />
             <span style="font-size:11px;color:${C.textDim};">Pfad eines bestehenden Ordners, oder ein neuer wird angelegt. Die Chats dieses Projekts landen dort drin.</span>
           </div>
           <div class="js-newproject-dir-display" style="display:none;font-size:12px;color:${C.textDim};font-family:monospace;word-break:break-all;"></div>
@@ -2114,7 +2115,10 @@
         });
       } else {
         const dir = $('.js-newproject-dir', newProjectSheetEl).value.trim();
-        if (!dir) return;
+        if (!dir) {
+          if (errEl) errEl.textContent = 'Bitte einen Ordnerpfad angeben.';
+          return;
+        }
         const r = await fetch('/projects', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -2255,15 +2259,46 @@
       return;
     }
     try {
-      await fetch(`/conversations/${encodeURIComponent(id)}${pid ? '?project_id=' + encodeURIComponent(pid) : ''}`, {
+      const r = await fetch(`/conversations/${encodeURIComponent(id)}${pid ? '?project_id=' + encodeURIComponent(pid) : ''}`, {
         method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title }),
       });
-    } catch (e) {}
+      if (!r.ok) showNotice('Umbenennen hat nicht geklappt — die Unterhaltung wurde nicht gefunden.');
+    } catch (e) { showNotice('Umbenennen hat nicht geklappt — keine Verbindung zu Jarvis.'); }
     loadConversationList();
     if (viewingProjectId) loadProjectRecent();
   }
 
+  // The current chat only exists on disk after its first answer. Slash
+  // commands on a fresh chat used to hit a 404 and fail without a word.
+  function requireSavedConversation() {
+    const id = currentConversationId;
+    if (id && findConv(id)) return id;
+    showNotice('Diese Unterhaltung ist noch nicht gespeichert — schick zuerst eine Nachricht.');
+    return null;
+  }
+
+  // Escape closes the topmost open menu/dialog — before, only the slash menu
+  // reacted to it and settings, menus and dialogs needed a mouse click.
+  function closeTopOverlayOnEscape(e) {
+    if (e.key !== 'Escape' || e.defaultPrevented) return;
+    const shown = (el) => !!el && getComputedStyle(el).display !== 'none';
+    const chatItemMenu = uiEl && $('.js-chatitem-menu', uiEl);
+    const cardMenu = uiEl && $('.js-project-card-menu', uiEl);
+    const sortMenu = uiEl && $('.js-projects-sort-menu', uiEl);
+    if (shown(modelMenuEl)) { modelMenuEl.style.display = 'none'; modelMenuAnchor = null; }
+    else if (shown(chatItemMenu)) closeChatItemMenu();
+    else if (shown(cardMenu)) closeProjectCardMenu();
+    else if (shown(sortMenu)) closeProjectsSortMenu();
+    else if (shown(renameChatSheetEl)) closeRenameChatModal();
+    else if (shown(newProjectSheetEl)) closeNewProjectModal();
+    else if (shown(btwEl)) closeBtwWindow();
+    else if (uiEl && uiEl.classList.contains('js-settings-active')) closeSettings();
+    else return;
+    e.preventDefault();
+  }
+
   function wireUi() {
+    document.addEventListener('keydown', closeTopOverlayOnEscape);
     $('.js-new', uiEl).addEventListener('click', () => {
       closeProjectsView();
       closeProjectDetail();
@@ -3121,7 +3156,14 @@
     } catch (err) {
       // Abbruch durch den Stop-Button ist KEIN Fehler — keine Meldung anzeigen.
       if (turnAborted) { fullText = fullText || ''; }
-      else if (!fullText) { const fb = "I can't reach my language model right now. Is LM Studio running with Gemma loaded?"; fullText = fb; said.classList.remove('thinking'); setAssistantText(said, fb); }
+      else if (!fullText) { fullText = MODEL_UNREACHABLE_TEXT; said.classList.remove('thinking'); setAssistantText(said, fullText); }
+    }
+    // Stream ended without a "done" and without any text (backend crashed
+    // mid-turn): the bubble used to stay on "Denkt nach…" forever.
+    if (!turnAborted && !fullText && !parts.length) {
+      fullText = 'Es kam keine Antwort zurück. Versuch es bitte nochmal.';
+      said.classList.remove('thinking');
+      setAssistantText(said, fullText);
     }
     activeReader = null;
     abortController = null;
@@ -3135,6 +3177,15 @@
       // antwortet auf seine Frage, und er weiß nichts mehr davon.
       turnAborted = false;
       const spoken = (fullText || parts.join(' ')).trim();
+      // Stopped before any word arrived: the bubble still said "Denkt nach…"
+      // and kept pulsing after Stop — it must visibly end.
+      said.classList.remove('thinking');
+      if (!spoken) {
+        said.textContent = 'Abgebrochen.';
+        said.style.color = C.textDim;
+      } else {
+        setAssistantText(said, spoken);
+      }
       if (spoken) {
         history.push({ role: 'user', content: outgoingText });
         history.push({ role: 'assistant', content: spoken });
@@ -3238,7 +3289,7 @@
     { cmd: 'modell', label: 'Modell wechseln', desc: 'Anderes LM-Studio-Modell wählen', run: () => toggleModelMenu() },
     { cmd: 'einstellungen', label: 'Einstellungen', desc: 'Einstellungen öffnen', run: () => openSettings() },
     { cmd: 'btw', label: 'Nebenfrage', desc: 'Kurz was anderes fragen, ohne den Hauptchat zu unterbrechen', run: () => openBtwWindow() },
-    { cmd: 'umbenennen', label: 'Umbenennen', desc: 'Aktuelle Unterhaltung umbenennen', run: () => openRenameChatModal(ensureConversationId()) },
+    { cmd: 'umbenennen', label: 'Umbenennen', desc: 'Aktuelle Unterhaltung umbenennen', run: () => { const id = requireSavedConversation(); if (id) openRenameChatModal(id); } },
     { cmd: 'anheften', label: 'Anheften', desc: 'Aktuelle Unterhaltung an-/loslösen', run: () => togglePinCurrentConversation() },
     { cmd: 'ordner', label: 'Im Ordner anzeigen', desc: 'Unterhaltungsdatei im Explorer/Finder zeigen', run: () => revealCurrentConversation() },
     { cmd: 'löschen', label: 'Löschen', desc: 'Aktuelle Unterhaltung löschen', run: () => deleteCurrentConversation() },
@@ -3249,7 +3300,7 @@
   // Punkte-Menü im Verlauf pro Eintrag anbietet — hier nur ohne Umweg über
   // die Sidebar, direkt auf die gerade offene Unterhaltung angewendet.
   async function togglePinCurrentConversation() {
-    const id = currentConversationId;
+    const id = requireSavedConversation();
     if (!id) return;
     const c = findConv(id);
     const pid = c && c.project_id;
@@ -3257,11 +3308,12 @@
       await fetch(`/conversations/${encodeURIComponent(id)}${pid ? '?project_id=' + encodeURIComponent(pid) : ''}`, {
         method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pinned: !(c && c.pinned) }),
       });
+      showNotice(c && c.pinned ? 'Unterhaltung gelöst.' : 'Unterhaltung angeheftet.');
     } catch (e) {}
     loadConversationList();
   }
   async function revealCurrentConversation() {
-    const id = currentConversationId;
+    const id = requireSavedConversation();
     if (!id) return;
     const c = findConv(id);
     const pid = c && c.project_id;
@@ -3270,7 +3322,7 @@
     } catch (e) {}
   }
   async function deleteCurrentConversation() {
-    const id = currentConversationId;
+    const id = requireSavedConversation();
     if (!id) return;
     const c = findConv(id);
     if (!confirm(`"${c ? (c.title || 'Unbenannt') : 'Diese Konversation'}" wirklich löschen?`)) return;
@@ -3492,17 +3544,23 @@
     addBtwLine('Du', text);
     const replyEl = addBtwLine('Jarvis', '');
     let full = '';
+    const btwParts = [];
     try {
       const resp = await fetch('/chat/stream', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           message: text,
-          history: [],
+          // The window promises "Jarvis sieht den vollständigen Kontext" —
+          // it used to send an empty history, so it knew nothing of the main
+          // chat (nor its own previous side questions). Read-only copy: the
+          // main chat's history array itself is never touched.
+          history: [...history.slice(-20), ...btwHistory],
           turn_id: 'btw-' + (++btwTurnCounter),
           mode: 'chat',
           conversation_id: btwConversationId,
           images: [],
+          ephemeral: true,
         }),
       });
       const reader = resp.body.getReader();
@@ -3522,11 +3580,14 @@
           // Nur Text — die Nebenfrage bekommt bewusst keine eigene
           // Sprachausgabe, die sich mit einer laufenden Hauptantwort
           // überlagern könnte.
-          if (evt.type === 'partial') { replyEl.textContent = evt.text || ''; btwBodyEl.scrollTop = btwBodyEl.scrollHeight; }
+          if (evt.type === 'partial') { replyEl.textContent = [...btwParts, evt.text || ''].join(' '); btwBodyEl.scrollTop = btwBodyEl.scrollHeight; }
+          else if (evt.type === 'sentence') { if (evt.text) btwParts.push(evt.text); replyEl.textContent = btwParts.join(' '); btwBodyEl.scrollTop = btwBodyEl.scrollHeight; }
           else if (evt.type === 'done') { full = evt.full_text || full; }
         }
       }
       replyEl.textContent = full || replyEl.textContent;
+      if (full) btwHistory.push({ role: 'user', content: text }, { role: 'assistant', content: full });
+      if (btwHistory.length > 12) btwHistory = btwHistory.slice(-12);
     } catch (e) {
       replyEl.textContent = 'Konnte gerade nicht antworten.';
     } finally {
@@ -3833,6 +3894,8 @@
       if (j && j.ok === false) {
         showModelFitBlockedNotice(j.model || id, j.error || 'Das Modell konnte nicht geladen werden.');
         if (j.current) { setModelLabel(j.current); selectModelCaps(j.current); }
+      } else if (j && j.warning) {
+        showNotice(j.warning);
       }
     } catch (e) {}
   }
@@ -4263,7 +4326,14 @@
     let msg; try { msg = JSON.parse(text); } catch (e) { return; }
     if (msg.type === 'exit') {
       codeExited = true;
-      updateCodeStatus('beendet (Code ' + String(msg.code == null ? '?' : msg.code) + ')', '#e5534b');
+      if (msg.error) {
+        // e.g. "OpenCode ist nicht installiert …" — used to be dropped, the
+        // tab only said "beendet" with an empty terminal and no hint why.
+        updateCodeStatus('konnte nicht starten', '#e5534b');
+        if (codeTerm) codeTerm.write('\r\n\x1b[31m' + String(msg.error).replace(/\n/g, '\r\n') + '\x1b[0m\r\n');
+      } else {
+        updateCodeStatus('beendet (Code ' + String(msg.code == null ? '?' : msg.code) + ')', '#e5534b');
+      }
       setCodeRestartBtn(true);
     }
   }
@@ -5002,6 +5072,18 @@
         if (ev.data instanceof ArrayBuffer && speechTerm) {
           speechTerm.write(new Uint8Array(ev.data));
           markSpeechTermReady();
+          return;
+        }
+        // Text frame = control message; {"type":"exit","error":...} when the
+        // agent couldn't start. Ignored before, so Jarvis kept announcing
+        // "ist offen" and buffered tasks silently went nowhere.
+        let msg; try { msg = JSON.parse(ev.data); } catch (e) { return; }
+        if (msg && msg.type === 'exit') {
+          const why = msg.error ? String(msg.error) : (speechTermAgentName + ' wurde beendet.');
+          if (speechTerm) speechTerm.write('\r\n\x1b[31m' + why.replace(/\n/g, '\r\n') + '\x1b[0m\r\n');
+          if (speechTermPending) { speechTermPending = null; }
+          noteSpeechReply(why);
+          if (msg.error && speechMode) speakNotice(why);
         }
       };
       speechTermWs.onclose = () => { speechTermWsOpen = false; speechTermWs = null; };

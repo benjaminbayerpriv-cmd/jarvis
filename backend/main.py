@@ -11,6 +11,7 @@ import subprocess
 import sys
 import threading
 import time
+import traceback
 from pathlib import Path
 
 import requests
@@ -23,12 +24,51 @@ from pydantic import BaseModel
 from . import browser_agent, config, conversations, fillers, hardware, llm_client, memory, opencode_agent, panel, projects, stt, transcript_log, tts, vector_memory
 
 app = FastAPI(title="Jarvis")
+
+# Only Jarvis's own pages and the local Chrome extension may talk to this
+# server from a browser. With allow_origins=["*"] any website the user
+# visited could read /settings (API keys), POST /shutdown or drive
+# /chat/stream (which can run shell commands via run_shell).
+_EXTENSION_ORIGIN_RE = r"^chrome-extension://[a-z]{32}$"
+
+
+def _origin_allowed(origin: str | None, host: str | None) -> bool:
+    """No Origin header = not a cross-site browser request (curl, the hotkey
+    listener, the launcher) — allowed. Otherwise only same-origin pages and
+    the Chrome extension."""
+    if not origin:
+        return True
+    if re.match(_EXTENSION_ORIGIN_RE, origin):
+        return True
+    netloc = origin.split("://", 1)[-1].rstrip("/")
+    return bool(host) and netloc.lower() == host.lower()
+
+
+@app.middleware("http")
+async def _reject_foreign_origins(request, call_next):
+    # CORS alone only hides responses; "simple" cross-site requests (a form
+    # POST to /shutdown, say) still reach the handler. Reject them outright.
+    if not _origin_allowed(request.headers.get("origin"), request.headers.get("host")):
+        return Response(status_code=403, content=b"Forbidden origin")
+    return await call_next(request)
+
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # local Chrome extension uses a generated chrome-extension:// origin
-    allow_methods=["GET", "POST"],
+    allow_origin_regex=_EXTENSION_ORIGIN_RE,
+    allow_methods=["GET", "POST", "PATCH", "DELETE"],
     allow_headers=["*"],
 )
+
+
+async def _accept_ws(websocket: WebSocket) -> bool:
+    """WebSockets aren't covered by CORS at all — /code/tty/ws hands out a
+    terminal running the coding agent, so a foreign page must never get one."""
+    if not _origin_allowed(websocket.headers.get("origin"), websocket.headers.get("host")):
+        await websocket.close(code=1008)
+        return False
+    await websocket.accept()
+    return True
 
 FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
 # Frozen copy of the UI from before a redesign (see /backup below) — kept as
@@ -76,9 +116,15 @@ def _strip_emojis(text: str) -> str:
     return _EMOJI_RE.sub("", text)
 
 
+_MODEL_UNREACHABLE = (
+    "Ich erreiche mein Sprachmodell gerade nicht. Läuft LM Studio und ist "
+    "das Modell dort geladen?"
+)
+
+
 async def broadcast(payload: dict) -> None:
     dead = []
-    for ws in active_sockets:
+    for ws in list(active_sockets):
         try:
             await ws.send_text(json.dumps(payload))
         except Exception:
@@ -119,6 +165,10 @@ async def on_startup():
         print(f"[model] {detail}")
         if not healthy:
             panel.push("notify", text=detail)
+        slow = hardware.vram_warning(config.LM_STUDIO_MODEL)
+        if slow:
+            print(f"[model] {slow}")
+            panel.push("notify", text=slow)
 
     def _generate():
         global filler_urls, thinking_filler_url
@@ -170,6 +220,10 @@ class ChatRequest(BaseModel):
     # der System-Prompt das für JEDEN Turn an, auch getippten Text im
     # normalen Chat, und Jarvis antwortete dort unnötig einsilbig.
     is_speech: bool = False
+    # Side questions from the "/btw" window: answered like any other turn,
+    # but never written to the conversation store or transcript — that
+    # window promises "nichts davon wird der Sitzung hinzugefügt".
+    ephemeral: bool = False
 
 
 class CancelRequest(BaseModel):
@@ -267,6 +321,11 @@ def _freeze_snapshot(html: str) -> str:
     """
     html = re.sub(r"<script\b[^>]*>(?:(?!</script>).)*?</script>\s*", "", html, flags=re.DOTALL | re.IGNORECASE)
     html = re.sub(r"<script\b[^>]*/>", "", html, flags=re.IGNORECASE)
+    # The snapshot also embeds Anthropic's analytics iframe and links assets
+    # on their CDN — without this every page load still phoned home.
+    html = re.sub(r"<iframe\b[^>]*>.*?</iframe>\s*", "", html, flags=re.DOTALL | re.IGNORECASE)
+    html = re.sub(r"<iframe\b[^>]*/?>", "", html, flags=re.IGNORECASE)
+    html = re.sub(r"<(?:link|img)\b[^>]*https?://[^\"'>]*anthropic\.com[^>]*>", "", html, flags=re.IGNORECASE)
     return html
 
 
@@ -361,10 +420,7 @@ def chat(req: ChatRequest):
     except llm_client.ModelTooLargeError as exc:
         reply = str(exc)
     except (requests.RequestException, llm_client.ModelError):
-        reply = (
-            "I can't reach my language model right now. "
-            "Is LM Studio running and has its server been started?"
-        )
+        reply = _MODEL_UNREACHABLE
     return ChatResponse(reply=reply)
 
 
@@ -383,10 +439,9 @@ async def summarize(req: SummarizeRequest):
 @app.post("/tts")
 def speak(req: ChatResponse):
     try:
-        audio = tts.synthesize(req.reply)
+        audio, mime = tts.synthesize_with_mime(req.reply)
     except Exception:
         return Response(status_code=502, content=b"")
-    _, mime = tts.ENGINE_MEDIA.get(tts.VoiceInfo.engine, ("mp3", "audio/mpeg"))
     return Response(content=audio, media_type=mime)
 
 
@@ -517,9 +572,8 @@ def chat_stream(req: ChatRequest):
                         # Teilsatz, während der Rest noch synthetisiert wird,
                         # statt auf den ganzen Satz warten zu müssen.
                         for chunk in tts.split_for_speech(text):
-                            audio = tts.synthesize(chunk)
+                            audio, mime = tts.synthesize_with_mime(chunk)
                             audio_b64 = base64.b64encode(audio).decode("ascii")
-                            _, mime = tts.ENGINE_MEDIA.get(tts.VoiceInfo.engine, ("mp3", "audio/mpeg"))
                             yield json.dumps({"type": "audio", "audio": audio_b64, "mime": mime}) + "\n"
                     except Exception as exc:  # noqa: BLE001 - nie nur-wortlos
                         print(f"[tts] Sprachausgabe fehlgeschlagen: {exc}")
@@ -532,7 +586,7 @@ def chat_stream(req: ChatRequest):
                     yield json.dumps(
                         {"type": "done", "full_text": full_text, "conversation_id": conv_id}
                     ) + "\n"
-            if full_text:
+            if full_text and not req.ephemeral:
                 transcript_log.log_turn(req.message, full_text, req.mode)
                 conv = conversations.append_turn(
                     conv_id, req.message, full_text, req.project_id, chats_base_dir,
@@ -540,13 +594,15 @@ def chat_stream(req: ChatRequest):
                 )
                 if conv.get("title") is None and len(conv.get("turns", [])) == 2:
                     _generate_title_in_background(req.message, full_text)
-        except (requests.RequestException, llm_client.ModelError, KeyError, IndexError) as exc:
-            fallback = (
-                str(exc) if isinstance(exc, llm_client.ModelTooLargeError) else
-                "I can't reach my language model right now. "
-                "Please check whether Gemma is loaded in LM Studio."
-            )
-            print(f"[model] Anfrage fehlgeschlagen: {exc}")
+        except Exception as exc:  # noqa: BLE001 - the frontend must always get a "done"
+            # Any exception escaping here used to end the HTTP stream without
+            # a "done" event, leaving the chat bubble on "Denkt nach…" forever.
+            if isinstance(exc, (requests.RequestException, llm_client.ModelError, KeyError, IndexError)):
+                fallback = str(exc) if isinstance(exc, llm_client.ModelTooLargeError) else _MODEL_UNREACHABLE
+                print(f"[model] Anfrage fehlgeschlagen: {exc}")
+            else:
+                fallback = "Da ist bei mir intern etwas schiefgelaufen, frag bitte nochmal."
+                print(f"[chat] Unerwarteter Fehler: {exc}\n{traceback.format_exc()}")
             if isinstance(exc, llm_client.ModelTooLargeError):
                 # Structured event alongside the plain text, so the frontend
                 # can attach real "Trotzdem laden" / "Modell entladen"
@@ -913,7 +969,7 @@ def model_force_load():
     try:
         requests.post(
             f"{hardware.lm_studio_root()}/api/v1/models/load",
-            json={"model": config.LM_STUDIO_MODEL}, timeout=120,
+            json={"model": config.LM_STUDIO_MODEL}, timeout=600,
         )
     except requests.RequestException as exc:
         print(f"[model] /api/v1/models/load für {config.LM_STUDIO_MODEL} fehlgeschlagen ({exc}), JIT-Laden bleibt als Fallback.")
@@ -1018,6 +1074,8 @@ def select_model(req: SelectModelRequest):
     # sonst würde ein weiterhin konfigurierter DeepSeek-Key diese Wahl im
     # nächsten Request wieder überstimmen (siehe _request_targets).
     previous_model = config.LM_STUDIO_MODEL
+    if llm_client.is_embedding_model_id(req.model):
+        return {"ok": False, "error": "Das ist ein Embedding-Modell, damit kann Jarvis nicht chatten.", "current": previous_model, "model": req.model}
     fit = hardware.check_model(req.model, freeable_ids=[previous_model])
     if not fit["fits"] and not req.force:
         print(f"[model] {fit['message']}")
@@ -1049,7 +1107,8 @@ def select_model(req: SelectModelRequest):
             requests.post(
                 f"{config.LM_STUDIO_BASE_URL}/chat/completions",
                 json={"model": req.model, "messages": [{"role": "user", "content": "hi"}], "max_tokens": 1},
-                timeout=120,
+                # Loading a model larger than VRAM was measured at ~400 s.
+                timeout=600,
             ).raise_for_status()
         except requests.RequestException as exc:
             print(f"[model] Warmladen von {req.model} fehlgeschlagen: {exc}")
@@ -1065,7 +1124,7 @@ def select_model(req: SelectModelRequest):
         llm_client.warm_system_prompt(config.LM_STUDIO_BASE_URL, req.model)
 
     threading.Thread(target=_switch, daemon=True).start()
-    return {"ok": True}
+    return {"ok": True, "warning": hardware.vram_warning(req.model)}
 
 
 @app.get("/browser/status")
@@ -1190,7 +1249,8 @@ async def code_tty_ws(websocket: WebSocket):
     write happens from one coroutine (Starlette's WebSocket does not allow
     concurrent sends), while the input/resize receive loop stays independent.
     """
-    await websocket.accept()
+    if not await _accept_ws(websocket):
+        return
     wdir = opencode_agent.get_code_dir()
     session_id = websocket.query_params.get("session_id") or None
     try:
@@ -1302,7 +1362,8 @@ async def code_tty_ws(websocket: WebSocket):
 
 @app.websocket("/ws")
 async def ws_endpoint(websocket: WebSocket):
-    await websocket.accept()
+    if not await _accept_ws(websocket):
+        return
     active_sockets.append(websocket)
     try:
         while True:
@@ -1315,7 +1376,8 @@ async def ws_endpoint(websocket: WebSocket):
 @app.websocket("/browser/ws")
 async def browser_ws(websocket: WebSocket):
     """Persistent command channel for the local Jarvis Chrome extension."""
-    await websocket.accept()
+    if not await _accept_ws(websocket):
+        return
     browser_agent.agent.connect(websocket, asyncio.get_running_loop())
     try:
         while True:

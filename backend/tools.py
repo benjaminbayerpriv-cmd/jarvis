@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import webbrowser
 from pathlib import Path
+from urllib.parse import quote_plus
 
 import requests
 
@@ -536,6 +537,10 @@ def _calculate(expression: str) -> str:
         return f"Das Ergebnis von '{expression}' ist zu groß, um es auszurechnen."
     except (SyntaxError, ValueError, TypeError):
         return f"'{expression}' ist kein Rechenausdruck, den ich auswerten kann."
+    if isinstance(result, complex):
+        # e.g. (-8)**(1/3): Python returns a complex number, which used to be
+        # printed raw as "(1.0000000000000002+1.7320508075688772j)".
+        return f"'{expression}' hat kein reelles Ergebnis."
     if isinstance(result, int) and result.bit_length() > 13000:
         # str() refuses ints this long (Python's int-to-str digit limit).
         digits = int(result.bit_length() * math.log10(2)) + 1
@@ -556,16 +561,39 @@ def _open_url(url: str) -> str:
     return f"{url} geöffnet."
 
 
+def _open_in_browser(url: str, via_agent) -> str:
+    """Use the Chrome extension when it's connected, otherwise the default
+    browser — like _open_url. Without this fallback YouTube/web searches
+    simply failed on every machine without the extension installed."""
+    if browser_agent.agent.connected():
+        result = via_agent()
+        if not result.startswith("Browser-Agent nicht verbunden"):
+            return result
+    webbrowser.open(url)
+    panel.push("link", title="Geöffnet", url=url)
+    return f"{url} im Standardbrowser geöffnet (die Jarvis-Chrome-Erweiterung ist nicht verbunden)."
+
+
 def _youtube_search(query: str) -> str:
-    return browser_agent.agent.youtube_search(query)
+    query = (query or "").strip()
+    if not query:
+        # "Öffne YouTube" regularly arrives here with an empty query.
+        return _open_url("https://www.youtube.com")
+    url = f"https://www.youtube.com/results?search_query={quote_plus(query)}"
+    return _open_in_browser(url, lambda: browser_agent.agent.youtube_search(query))
 
 
 def _web_search(query: str) -> str:
-    """Real search when a Tavily key is configured; otherwise the old
-    behaviour (open a results page in the connected browser) so this still
-    works, just without spoken answers, when nobody has set up a key."""
+    """Real search when a Tavily key is configured; otherwise open a results
+    page in the browser — and say plainly that no results came back, so the
+    model doesn't make some up."""
     if not config.TAVILY_API_KEY:
-        return browser_agent.agent.web_search(query)
+        url = f"https://www.google.com/search?q={quote_plus(query or '')}"
+        opened = _open_in_browser(url, lambda: browser_agent.agent.web_search(query))
+        return (
+            f"{opened} Ich habe keine Suchergebnisse zurückbekommen (kein Tavily-API-Key "
+            "eingerichtet) — die Ergebnisse stehen nur im Browser."
+        )
 
     try:
         resp = requests.post(
@@ -943,6 +971,10 @@ def _write_file(path: str, content: str) -> str:
     if not raw:
         return "Welche Datei soll ich schreiben?"
     target = Path(os.path.expanduser(raw))
+    if not target.is_absolute():
+        # A bare "einkauf.txt" used to land in the backend's working
+        # directory — the Jarvis repo itself.
+        target = platform_utils.desktop_dir() / target
     if target.suffix.lower() in _CODE_SUFFIXES:
         # Ein bloßes Verweigern reichte nicht: das Modell meldete danach
         # trotzdem Vollzug und rief opencode NICHT auf — die Datei entstand
@@ -1000,6 +1032,16 @@ def _opencode(task: str) -> str:
     task = " ".join(str(task or "").split())
     if not task:
         return "Kein Auftrag angegeben."
+    agent_id = opencode_agent.get_code_agent()
+    if not opencode_agent.agent_available(agent_id):
+        # Used to report "weitergegeben" regardless — with the binary missing
+        # the task silently went nowhere.
+        name = opencode_agent.CODE_AGENTS.get(agent_id, agent_id)
+        return (
+            f"Konnte den Auftrag nicht weitergeben: {name} ist auf diesem Rechner nicht installiert "
+            "bzw. nicht gebaut (siehe SETUP.md). Mit set_code_agent kann auf einen installierten "
+            "Coding-Agenten umgestellt werden."
+        )
     # Zeilenumbrüche sind oben schon weg: ein "\n" im PTY wäre ein Absenden
     # mitten im Satz, OpenCode bekäme nur das erste Fragment.
     panel.push("opencode", task=task[:2000])
@@ -1097,7 +1139,7 @@ def _opencode_model(name: str) -> str:
             return "Welches Modell soll Claude Code benutzen?"
         opencode_agent.set_selected_model(chosen, "claude")
         panel.push("opencode_model", model=chosen)
-        return f"Claude Code arbeitet ab jetzt mit {chosen} (Terminal startet neu)."
+        return f"Claude Code arbeitet ab jetzt mit {chosen}. Ein gerade offenes Terminal wird dafür neu gestartet, sonst gilt es ab dem nächsten Start."
 
     if agent == "codex":
         chosen = opencode_agent.resolve_codex_model(name)
@@ -1105,7 +1147,7 @@ def _opencode_model(name: str) -> str:
             return "Welches Modell soll Codex benutzen?"
         opencode_agent.set_selected_model(chosen, "codex")
         panel.push("opencode_model", model=chosen)
-        return f"Codex arbeitet ab jetzt mit {chosen} (Terminal startet neu)."
+        return f"Codex arbeitet ab jetzt mit {chosen}. Ein gerade offenes Terminal wird dafür neu gestartet, sonst gilt es ab dem nächsten Start."
 
     # opencode (Standard) — hier gibt es einen echten lokalen Katalog
     # (LM Studio + OpenCodes eigene kostenlose Modelle), gegen den sich der
@@ -1121,7 +1163,7 @@ def _opencode_model(name: str) -> str:
     if lm_models:
         opencode_agent.ensure_provider_config(lm_models, chosen)
     panel.push("opencode_model", model=chosen)
-    return f"OpenCode arbeitet ab jetzt mit {chosen}."
+    return f"OpenCode arbeitet ab jetzt mit {chosen}. Ein gerade offenes Terminal wird dafür neu gestartet, sonst gilt es ab dem nächsten Start."
 
 
 def _set_code_agent(name: str) -> str:
