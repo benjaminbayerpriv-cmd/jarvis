@@ -325,6 +325,7 @@
     stop: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect width="18" height="18" x="3" y="3" rx="4" fill="currentColor"/></svg>',
     restart: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 2.64-6.36L3 8"/><path d="M3 3v5h5"/></svg>',
     close: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>',
+    camera: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m16 13 5.223 3.482a.5.5 0 0 0 .777-.416V7.87a.5.5 0 0 0-.752-.432L16 10.5"/><rect x="2" y="6" width="14" height="12" rx="2"/></svg>',
     volume: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 4.702a.705.705 0 0 0-1.203-.498L6.413 7.587A1.4 1.4 0 0 1 5.416 8H3a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2.416a1.4 1.4 0 0 1 .997.413l3.383 3.384A.705.705 0 0 0 11 19.298z"/><path d="M16 9a5 5 0 0 1 0 6"/><path d="M19.364 18.364a9 9 0 0 0 0-12.728"/></svg>',
     muted: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 4.702a.7.7 0 0 0-1.203-.498L6.413 7.587A1.4 1.4 0 0 1 5.416 8H3a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2.416a1.4 1.4 0 0 1 .997.413l3.383 3.384A.7.7 0 0 0 11 19.298z"/><path d="m16.5 14.5 5-5"/><path d="m16.5 9.5 5 5"/></svg>',
     folder: '<svg viewBox="131 97 738 806" fill="currentColor" fill-rule="evenodd" aria-hidden="true"><path d="M225 303Q213 303 205.0 295.0Q197 287 197 275Q197 263 205.0 255.0Q213 247 225 247H775Q787 247 795.0 255.0Q803 263 803 275Q803 287 795.0 295.0Q787 303 775 303ZM300 153Q288 153 280.0 145.0Q272 137 272 125Q272 113 280.0 105.0Q288 97 300 97H700Q712 97 720.0 105.0Q728 113 728 125Q728 137 720.0 145.0Q712 153 700 153ZM209 397H791Q815 397 834.0 410.0Q853 423 862.5 443.5Q872 464 868 488L810 838Q805 866 783.0 884.5Q761 903 733 903H267Q239 903 217.0 884.5Q195 866 190 838L132 488Q128 464 137.5 443.5Q147 423 166.0 410.0Q185 397 209 397ZM209 453Q199 453 192.5 461.0Q186 469 187 479L246 829Q247 837 253.0 842.0Q259 847 267 847H733Q741 847 747.0 842.0Q753 837 754 829L813 479Q814 469 807.5 461.0Q801 453 791 453Z"/></svg>',
@@ -779,6 +780,12 @@
   let uiEl = null, sidebarEl = null, chatListEl = null, chatRootEl = null, threadEl = null;
   let composerTray = null, composerInput = null, sendBtn = null, speechBtn = null, noteBtn = null;
   let uploadBtn = null, settingsBtn = null, modelEl = null, modelBtnEl = null, modelMenuEl = null, fileInput = null;
+  // Kamera-Fenster (nur im Sprachmodus, siehe openCameraWindow/closeCameraWindow):
+  // spCamBtn ist der Ein-/Aus-Knopf in der Sprachmodus-Leiste, camWinEl das
+  // ziehbare/skalierbare Fenster selbst (nach demselben Muster wie das
+  // OpenCode-Terminal, siehe speechTermEl weiter unten).
+  let spCamBtn = null, camWinEl = null, camWinHostEl = null, camWinOpen = false, camWinUserRect = null;
+  const CAMERA_WIN_MIN_W = 320, CAMERA_WIN_MIN_H = 260;
   // Ob gerade irgendein Chat-Modell erreichbar ist (LM Studio oder der
   // DeepSeek-Fallback, siehe GET /model/health) — false blendet den
   // normalen Composer-Inhalt komplett aus und zeigt stattdessen nur das
@@ -1156,6 +1163,7 @@
     speechBarEl.innerHTML = `
       <div style="pointer-events:auto;display:flex;align-items:center;gap:10px;padding:8px 12px;background:${C.bgSurface3};border:1px solid ${C.border};border-radius:16px;box-shadow:0 12px 40px rgba(0,0,0,.5);">
         <button class="js-sp-mute" title="Mikrofon aus" style="width:44px;height:44px;border-radius:14px;background:${C.bgHover};border:1px solid ${C.border};color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;">${jsIcon('0xe0ab', 24)}</button>
+        <button class="js-sp-cam" title="Kamera mit Hand- und Körpertracking ein-/ausblenden" aria-pressed="false" style="width:44px;height:44px;border-radius:14px;background:${C.bgHover};border:1px solid ${C.border};color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;">${ICONS.camera}</button>
         <button class="js-sp-stop" title="Stopp" style="width:44px;height:44px;border-radius:14px;background:${C.bgHover};border:1px solid ${C.border};color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;">${ICONS.stop}</button>
         <button class="js-sp-send" title="Senden" style="width:44px;height:44px;border-radius:14px;background:${C.bgHover};border:1px solid ${C.border};color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;">${jsIcon('0xe013', 24)}</button>
         <button class="js-sp-chat" title="Chat-Modus" style="width:44px;height:44px;border-radius:14px;background:${C.bgHover};border:1px solid ${C.border};color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;">${ICONS.close}</button>
@@ -1369,6 +1377,7 @@
     // lässt (siehe positionModelMenu) — nicht nur dem im Haupt-Composer.
     uiEl.appendChild(modelMenuEl);
     spMuteBtn = $('.js-sp-mute', speechBarEl);
+    spCamBtn = $('.js-sp-cam', speechBarEl);
     spStopBtn = $('.js-sp-stop', speechBarEl);
     spSendBtn = $('.js-sp-send', speechBarEl);
     spChatBtn = $('.js-sp-chat', speechBarEl);
@@ -1404,7 +1413,7 @@
       .jarvis-reduce-motion, .jarvis-reduce-motion * {
         transition-duration: 0s !important; animation-duration: 0s !important; animation-delay: 0s !important;
       }
-      body.js-app-active > :not(#jsApp):not(#jarvisOrb):not(#jarvisOrbHit):not(#jsSpeechTerm):not(#jsSpeechbar):not(#jsSpeechCaption):not(#jsSettingsSheet):not(#jsNewProjectSheet):not(#jsRenameChatSheet):not(#jsBtwWindow):not(#jsNotice):not(script):not(style) { display:none !important; }
+      body.js-app-active > :not(#jsApp):not(#jarvisOrb):not(#jarvisOrbHit):not(#jsSpeechTerm):not(#jsCamWindow):not(#jsSpeechbar):not(#jsSpeechCaption):not(#jsSettingsSheet):not(#jsNewProjectSheet):not(#jsRenameChatSheet):not(#jsBtwWindow):not(#jsNotice):not(script):not(style) { display:none !important; }
       body.js-app-active { overflow:hidden; }
       /* Sanftes Einblenden bei jedem Stream-Update (siehe setAssistantText)
          statt abruptem Aufploppen des neuen Texts. */
@@ -1449,12 +1458,16 @@
       .js-project-menu-btn svg { width:16px; height:16px; display:block; }
       .js-upload svg, .js-note svg, .js-settings svg { width:18px; height:18px; }
       .js-speech svg, .js-send svg { width:18px; height:18px; display:block; }
-      .js-sp-mute svg, .js-sp-stop svg, .js-sp-chat svg, .js-sp-send svg { width:20px; height:20px; display:block; }
+      .js-sp-mute svg, .js-sp-stop svg, .js-sp-chat svg, .js-sp-send svg, .js-sp-cam svg { width:20px; height:20px; display:block; }
       .js-pill svg { width:16px; height:16px; display:block; }
-      .js-new:hover, .js-projects:hover, .js-upload:hover, .js-note:hover, .js-speech:hover, .js-model:hover, .js-settings-row:hover, .js-sp-mute:hover, .js-sp-stop:hover, .js-sp-chat:hover { background:${C.bgHover}; color:${C.text}; }
+      .js-new:hover, .js-projects:hover, .js-upload:hover, .js-note:hover, .js-speech:hover, .js-model:hover, .js-settings-row:hover, .js-sp-mute:hover, .js-sp-stop:hover, .js-sp-chat:hover, .js-sp-cam:hover { background:${C.bgHover}; color:${C.text}; }
       .js-navrow:not([disabled]):not(.js-artifacts):not(.js-customize):hover { background:${C.bgHover}; color:${C.text}; }
       .js-pill.active { color:${C.text} !important; }
       .js-pill:not(.active):hover { color:${C.text}; }
+      /* Kamera-Fenster: nur im Sprachmodus vorhanden (siehe openCameraWindow/
+         closeCameraWindow) — kein eigenes CSS hier, das Fenster bringt sein
+         Aussehen als Inline-Style mit, wie das Speech-Terminal (jsSpeechTerm). */
+      .js-sp-cam.on { background:${C.accent} !important; border-color:${C.accent} !important; color:#fff !important; }
       .js-note.on { color:${C.accent} !important; background:${C.accentTint} !important; }
       .js-note.on svg { animation:js-note-pulse 1.4s ease-in-out infinite; }
       @keyframes js-note-pulse { 0%,100% { opacity:1; } 50% { opacity:.45; } }
@@ -2279,6 +2292,7 @@
 
   // Escape closes the topmost open menu/dialog — before, only the slash menu
   // reacted to it and settings, menus and dialogs needed a mouse click.
+
   function closeTopOverlayOnEscape(e) {
     if (e.key !== 'Escape' || e.defaultPrevented) return;
     const shown = (el) => !!el && getComputedStyle(el).display !== 'none';
@@ -2691,6 +2705,7 @@
 
     // Sprachmodus-Bottom-Leiste
     if (spMuteBtn) spMuteBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); muted = !muted; updateMuteIcon(); if (muted) stopListening(); else startListening(); });
+    if (spCamBtn) spCamBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); toggleCameraWindow(); });
     if (spStopBtn) spStopBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); stopSpeech(); });
     if (spSendBtn) spSendBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); const t = composerInput ? composerInput.innerText.trim() : ''; if (t) sendMessage(t); });
     if (spChatBtn) spChatBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); exitSpeech(); });
@@ -4943,6 +4958,7 @@
     silenceAudio();
     clearViz();
     closeSpeechTerminal();
+    closeCameraWindow();
     stopListening();
     hideOrb();
     hideSpeechCaption();
@@ -4994,15 +5010,40 @@
     return /^(open ?-? ?code|opencode|obencode|terminal|konsole)$/.test(bare) ? 'open' : null;
   }
 
+  // Dasselbe Muster wie matchSpeechTerminalCommand, für "öffne die Kamera" /
+  // "schalt die Kamera aus" — die Kamera ist ein reines Sprachmodus-Fenster
+  // (siehe openCameraWindow), kein Composer-Werkzeug, deshalb hier lokal
+  // erkannt statt über ein Modell-Tool geroutet.
+  function matchCameraCommand(text) {
+    const t = normalizeSpoken(text);
+    if (!t) return null;
+    if (!/\b(kamera|camera)\b/.test(t)) return null;
+    const bareWords = t.replace(/\b(jarvis|bitte|mal|doch|hey|der|die|das|den|dem|mir|mal|meine)\b/g, ' ')
+      .split(/\s+/).filter(Boolean);
+    if (bareWords.length > 5) return null;
+    if (/(schlie|zumach|mach .*aus|schalt.*aus|ausschalt|beend|close|stopp|stop)/.test(t)) return 'close';
+    if (/(öffne|offne|oeffne|aufmach|mach .*an|schalt.*(an|ein)|einschalt|starte|start|zeig|hol)/.test(t)) return 'open';
+    // Ohne Verb: "Kamera"/"Kamera an" für an, "Kamera aus" für aus — nur die
+    // blanke Nennung bzw. Nennung+"an"/"aus", kein generisches \baus\b/\ban\b
+    // (das würde z.B. "zeig mal die Kamera aus dem Urlaub" fehlzünden).
+    const bare = t.replace(/\b(jarvis|bitte|mal|doch|hey|meine)\b/g, ' ').replace(/\s+/g, ' ').trim();
+    if (/^(kameras?|cameras?)( an)?$/.test(bare)) return 'open';
+    if (/^(kameras?|cameras?) aus$/.test(bare)) return 'close';
+    return null;
+  }
+
   // Rückgabe true = Äußerung ist hier erledigt und geht NICHT ans Chat-Modell.
-  // Bewusst NUR die beiden Fensterbefehle: alles andere — auch bei offenem
-  // Terminal — geht weiter an Jarvis. Der Nutzer soll mit Jarvis reden, nicht
+  // Bewusst NUR die Fensterbefehle (OpenCode-Terminal, Kamera): alles
+  // andere geht weiter an Jarvis. Der Nutzer soll mit Jarvis reden, nicht
   // mit OpenCode; was davon bei OpenCode landet, entscheidet Jarvis selbst
   // über das opencode-Tool (siehe renderPanelItem/sendTaskToOpenCode).
   function handleSpeechUtterance(text) {
     const cmd = matchSpeechTerminalCommand(text);
     if (cmd === 'open') { openSpeechTerminal(); return true; }
     if (cmd === 'close') { closeSpeechTerminal(); return true; }
+    const camCmd = matchCameraCommand(text);
+    if (camCmd === 'open') { openCameraWindow(); return true; }
+    if (camCmd === 'close') { closeCameraWindow(); return true; }
     return false;
   }
 
@@ -5113,6 +5154,167 @@
     speechTermEl = null;
     speechTermUserRect = null;
     if (speechMode) { setSpeechStatus('Bereit'); noteSpeechReply(''); }
+  }
+
+  // ------------------------------------------- Kamera-Fenster (Sprachmodus)
+  // Ziehbares, skalierbares Fenster für Hand-/Körpertracking (camera-
+  // tracking.js) — nur im Sprachmodus vorhanden, nie im getippten Chat: die
+  // Kamera ist ein Sprachmodus-Feature, kein Composer-Werkzeug. Öffnet über
+  // den js-sp-cam-Knopf in der Sprachmodus-Leiste oder per Sprachbefehl
+  // ("öffne die Kamera" / "schließ die Kamera", siehe matchCameraCommand
+  // weiter unten). Baut bewusst auf demselben Muster wie das OpenCode-
+  // Terminal (speechTermEl) auf, statt eine feste Seitenleiste zu sein —
+  // beides sind "bei Bedarf sichtbare Extra-Fenster über dem Interface".
+  function openCameraWindow() {
+    if (camWinOpen) return;
+    const cam = window.JarvisCamera;
+    if (!cam) {
+      if (speechMode) noteSpeechReply('Das Kamera-Modul konnte nicht geladen werden.');
+      return;
+    }
+    camWinOpen = true;
+
+    camWinEl = document.createElement('div');
+    camWinEl.id = 'jsCamWindow';
+    // z-index 43: über dem OpenCode-Terminal (42), falls ausnahmsweise beide
+    // gleichzeitig offen sind — die Kamera ist dann das aktivere Fenster.
+    camWinEl.style.cssText = 'position:fixed;z-index:43;display:flex;flex-direction:column;'
+      + `background:${C.bgSurface3};border:1px solid ${C.border};border-radius:14px;`
+      + 'box-shadow:0 12px 40px rgba(0,0,0,.5);overflow:hidden;';
+    // Kein eigener Fensterkopf hier: camera-tracking.js bringt seinen eigenen
+    // Kopf mit (Titel, Status-Punkt, ×), dem mount() unten die Klasse
+    // js-camwin-drag mitgibt — ein Kopf statt zwei übereinander.
+    camWinEl.innerHTML = `
+      <div class="js-camwin-host" style="flex:1 1 auto;min-height:0;display:flex;flex-direction:column;"></div>
+      <div class="js-camwin-resize" title="Größe ändern" style="position:absolute;right:0;bottom:0;width:16px;height:16px;cursor:nwse-resize;">
+        <svg viewBox="0 0 16 16" width="16" height="16" style="display:block;"><path d="M14 2 2 14M14 8 8 14" stroke="${C.textDim}" stroke-width="1.5" fill="none"/></svg>
+      </div>
+    `;
+    document.body.appendChild(camWinEl);
+    // Gleich hier einmessen statt erst im nächsten drawOrb-Frame (dasselbe
+    // Argument wie bei openSpeechTerminal: die erste sichtbare Größe soll
+    // schon stimmen, nicht erst einen Frame später aufspringen).
+    if (chatRootEl) layoutCameraWindow(chatRootEl.getBoundingClientRect());
+    camWinHostEl = camWinEl.querySelector('.js-camwin-host');
+    // mount() muss zuerst laufen: erst danach existiert die .js-camwin-drag-
+    // Kopfzeile, die wireCameraWinDrag im DOM sucht.
+    cam.mount(camWinHostEl, { onRequestClose: closeCameraWindow });
+    wireCameraWinDrag();
+    wireCameraWinResize();
+    cam.start();
+    setSpCamButtonState(true);
+  }
+
+  function closeCameraWindow() {
+    if (!camWinOpen) return;
+    camWinOpen = false;
+    const cam = window.JarvisCamera;
+    if (cam) cam.stop();
+    if (camWinEl && camWinEl.parentNode) camWinEl.parentNode.removeChild(camWinEl);
+    camWinEl = null;
+    camWinHostEl = null;
+    setSpCamButtonState(false);
+  }
+
+  function toggleCameraWindow() {
+    if (camWinOpen) closeCameraWindow();
+    else openCameraWindow();
+  }
+
+  function setSpCamButtonState(on) {
+    if (!spCamBtn) return;
+    spCamBtn.classList.toggle('on', on);
+    spCamBtn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    spCamBtn.title = on ? 'Kamera ausblenden' : 'Kamera mit Hand- und Körpertracking einblenden';
+  }
+
+  // Kopfzeile zum Ziehen: Fenster einmal manuell verschoben, merkt sich
+  // camWinUserRect Position und Größe fortan (siehe layoutCameraWindow) —
+  // bleibt bewusst auch über ein Schließen/Wiederöffnen hinweg erhalten
+  // (anders als beim OpenCode-Terminal), weil Kamera an/aus im Sprachmodus
+  // eher ein häufiger Umschalter ist als ein einmaliges Öffnen.
+  function wireCameraWinDrag() {
+    const handle = camWinEl.querySelector('.js-camwin-drag');
+    if (!handle) return;
+    handle.addEventListener('mousedown', (e) => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      const startX = e.clientX, startY = e.clientY;
+      const rect = camWinEl.getBoundingClientRect();
+      const baseX = rect.left, baseY = rect.top;
+      const onMove = (ev) => {
+        const w = rect.width, h = rect.height;
+        const x = Math.max(0, Math.min(baseX + (ev.clientX - startX), window.innerWidth - w));
+        const y = Math.max(0, Math.min(baseY + (ev.clientY - startY), window.innerHeight - h));
+        camWinUserRect = { x, y, w, h };
+        camWinEl.style.left = x + 'px';
+        camWinEl.style.top = y + 'px';
+      };
+      const onUp = () => {
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+      };
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+    });
+  }
+
+  // Ecke unten rechts zum Skalieren, wie beim OpenCode-Terminal.
+  function wireCameraWinResize() {
+    const handle = camWinEl.querySelector('.js-camwin-resize');
+    if (!handle) return;
+    handle.addEventListener('mousedown', (e) => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const startX = e.clientX, startY = e.clientY;
+      const rect = camWinEl.getBoundingClientRect();
+      const baseW = rect.width, baseH = rect.height;
+      const onMove = (ev) => {
+        const w = Math.max(CAMERA_WIN_MIN_W, Math.min(baseW + (ev.clientX - startX), window.innerWidth - rect.left));
+        const h = Math.max(CAMERA_WIN_MIN_H, Math.min(baseH + (ev.clientY - startY), window.innerHeight - rect.top));
+        camWinUserRect = { x: rect.left, y: rect.top, w, h };
+        camWinEl.style.width = w + 'px';
+        camWinEl.style.height = h + 'px';
+      };
+      const onUp = () => {
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+      };
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+    });
+  }
+
+  // Positionierung/Größe wie beim OpenCode-Terminal (layoutSpeechTerminal):
+  // ohne Nutzereingriff mittig über dem oberen Drittel des Chat-Bereichs,
+  // sobald gezogen/skaliert wurde gewinnt camWinUserRect, geklemmt ins
+  // (ggf. seither veränderte) Fenster.
+  function layoutCameraWindow(rect) {
+    if (!camWinEl) return;
+    const S = GRID_STEP;
+    if (camWinUserRect) {
+      const w = Math.max(CAMERA_WIN_MIN_W, Math.min(camWinUserRect.w, window.innerWidth - S));
+      const h = Math.max(CAMERA_WIN_MIN_H, Math.min(camWinUserRect.h, window.innerHeight - S));
+      const x0 = Math.max(S / 2, Math.min(camWinUserRect.x, window.innerWidth - w - S / 2));
+      const y0 = Math.max(S / 2, Math.min(camWinUserRect.y, window.innerHeight - h - S / 2));
+      camWinEl.style.width = w + 'px';
+      camWinEl.style.height = h + 'px';
+      camWinEl.style.left = x0 + 'px';
+      camWinEl.style.top = y0 + 'px';
+      return;
+    }
+    const availW = Math.max(CAMERA_WIN_MIN_W, window.innerWidth - S);
+    const availH = Math.max(CAMERA_WIN_MIN_H, window.innerHeight - S);
+    const wantW = Math.min(Math.max(rect.width * 0.34, CAMERA_WIN_MIN_W), availW);
+    const wantH = Math.min(Math.max(wantW * 0.82, CAMERA_WIN_MIN_H), availH);
+    const w = Math.round(wantW / S) * S, h = Math.round(wantH / S) * S;
+    const x0 = Math.max(S / 2, Math.min(rect.left + Math.round((rect.width - w) / 2 / S) * S, window.innerWidth - w - S / 2));
+    const y0 = Math.max(S / 2, Math.min(rect.top + Math.round(rect.height * 0.12 / S) * S, window.innerHeight - h - S / 2));
+    camWinEl.style.width = w + 'px';
+    camWinEl.style.height = h + 'px';
+    camWinEl.style.left = x0 + 'px';
+    camWinEl.style.top = y0 + 'px';
   }
 
   // Kopfzeile zum Ziehen: Fenster einmal manuell verschoben, merkt sich
@@ -5573,7 +5775,7 @@
     // gesetzter Versatz (bleibt fest, bis der Nutzer erneut zieht).
     const rect = chatRootEl ? chatRootEl.getBoundingClientRect() : { left: 0, top: 0, width: cw, height: ch };
     // Mit Grafik rückt die Kugel klein nach oben und macht Platz auf dem Raster.
-    vizAmt += (((vizState || speechTermOpen) ? 1 : 0) - vizAmt) * 0.12;
+    vizAmt += (((vizState || speechTermOpen || camWinOpen) ? 1 : 0) - vizAmt) * 0.12;
     const cx = rect.left + rect.width / 2 + orbOffsetX;
     const cy = rect.top + rect.height * (0.5 - 0.34 * vizAmt) + orbOffsetY;
     // R1: weißer Ring direkt um die Schrift, mit Innenabstand links/rechts.
@@ -5603,6 +5805,7 @@
     }
     orbBoundsRect = { width: rect.width, height: rect.height, margin: hitR };
     layoutSpeechTerminal(rect);
+    layoutCameraWindow(rect);
   }
 
   // Das Terminal sitzt dort, wo auch eine Grafik (drawViz) liegen würde: auf

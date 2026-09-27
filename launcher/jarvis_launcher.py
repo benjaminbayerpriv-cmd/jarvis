@@ -21,6 +21,7 @@ dragging the .app to /Applications) breaks that lookup.
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 import threading
@@ -33,8 +34,7 @@ URL = "http://127.0.0.1:8000"
 
 # A normal, opaque app window — its own title bar (with the OS's native
 # close/minimize controls) is how you close it, no custom frameless/
-# transparent/always-on-top widget behaviour. Wider than before to fit the
-# orb column plus a real webcam view side by side (see frontend/index.html).
+# transparent/always-on-top widget behaviour.
 WINDOW_WIDTH = 960
 WINDOW_HEIGHT = 640
 
@@ -118,6 +118,30 @@ def _allow_microphone_macos() -> None:
         )
     except Exception as exc:
         print(f"[launcher] Mikrofon-Patch fehlgeschlagen (Spracheingabe im App-Fenster bleibt ggf. stumm): {exc!r}")
+
+
+def _webview_storage_dir() -> Path | None:
+    """Fester Ort für localStorage/Cookies des App-Fensters.
+
+    pywebview startet standardmäßig im privaten Modus: beim Schließen des
+    Fensters wird der gesamte Browser-Speicher verworfen. Die UI legt dort
+    aber ihre Einstellungen ab (Farbschema/Hintergrund, Kamera-Einstellungen,
+    eingeklappte Listen, …) — im App-Fenster war deshalb nach jedem Neustart
+    alles wieder auf Standard, im normalen Browser-Tab nicht. Liegt bewusst
+    im Benutzerprofil statt im Projektordner, damit es einen Neubau der App
+    übersteht und nie in git landet."""
+    if IS_WINDOWS:
+        base = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
+        path = Path(base) / "Jarvis" / "webview"
+    elif sys.platform.startswith("darwin"):
+        path = Path.home() / "Library" / "Application Support" / "Jarvis" / "webview"
+    else:
+        path = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share") / "Jarvis" / "webview"
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return None
+    return path
 
 
 def _warn_if_icon_stale(root_dir: Path, log) -> None:
@@ -209,7 +233,13 @@ def main() -> None:
             height=WINDOW_HEIGHT,
             min_size=(640, 480),
         )
-        webview.start()
+        # private_mode=False: Einstellungen der UI (localStorage) über
+        # Neustarts hinweg behalten, siehe _webview_storage_dir().
+        storage_dir = _webview_storage_dir()
+        if storage_dir is not None:
+            webview.start(private_mode=False, storage_path=str(storage_dir))
+        else:
+            webview.start(private_mode=False)
     finally:
         # The window closing is the signal to shut everything down — a
         # server left running invisibly in the background, un-killable
