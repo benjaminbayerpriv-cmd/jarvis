@@ -1441,7 +1441,12 @@
          gezeigte Zeichen werden bei jedem Stream-Update zwar neu aufgebaut
          (kompletter innerHTML-Ersatz), aber ohne diese Klasse, damit sie
          nicht bei jedem Tick erneut unscharf aufblitzen. */
-      .js-char-new { display:inline; animation: jsCharBlurIn .4s ease-out both; }
+      /* Kurz gehalten (statt z.B. .4s): partial-Events (siehe sendMessage)
+         feuern oft alle paar hundert Millisekunden und lösen jeweils einen
+         kompletten innerHTML-Neuaufbau aus, der jede noch laufende
+         Animation sofort beendet — eine lange Dauer wurde dadurch
+         praktisch nie sichtbar zu Ende gespielt. */
+      .js-char-new { display:inline; animation: jsCharBlurIn .18s ease-out both; }
       @keyframes jsCharBlurIn { from { filter: blur(6px); opacity: 0; } to { filter: blur(0); opacity: 1; } }
       @media (prefers-reduced-motion: reduce) { .js-char-new { animation: none; } }
       /* Echter claude.ai "Squish"-Press-Effekt (aus --cds-btn-spring extrahiert): schnelles
@@ -3708,20 +3713,23 @@
     let n;
     while ((n = walker.nextNode())) textNodes.push(n);
     let idx = 0;
-    let newCount = 0;
     for (const node of textNodes) {
       const frag = document.createDocumentFragment();
       for (const ch of node.nodeValue) {
         if (idx >= prevLen) {
           const span = document.createElement('span');
           span.className = 'js-char-new';
-          // Leichte Staffelung übers gerade neu hinzugekommene Stück, statt
-          // dass ein ganzer Nachschub-Batch (partial-Events liefern oft
-          // mehrere Zeichen auf einmal) gleichzeitig aufblitzt.
-          span.style.animationDelay = Math.min(newCount * 14, 900) + 'ms';
+          // KEINE Staffelung mehr — alle neu hinzugekommenen Zeichen eines
+          // Updates blenden gleichzeitig ein, nicht nacheinander (Nutzer-
+          // Feedback: "soll auf mehrere Buchstaben gleichzeitig sein
+          // können"). Nebeneffekt, der auch den eigentlichen Bug behebt:
+          // jedes Stream-Update baut das komplette innerHTML neu auf (siehe
+          // setAssistantText), was jede noch laufende Animation sofort
+          // abwürgt — eine Verzögerung ließ spätere Zeichen eines Batches
+          // regelmäßig gar nicht erst zum Start kommen, bevor der nächste
+          // Rebuild sie schon wieder ersetzt hatte.
           span.textContent = ch;
           frag.appendChild(span);
-          newCount++;
         } else {
           frag.appendChild(document.createTextNode(ch));
         }
