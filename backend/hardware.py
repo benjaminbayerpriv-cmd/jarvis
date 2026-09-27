@@ -330,6 +330,27 @@ def check_model(model_id: str, freeable_ids: list[str] | tuple = ()) -> dict:
     return check_models([model_id], freeable_ids)[model_id]
 
 
+def vram_warning(model_id: str) -> str | None:
+    """check_models() only guards against crashes (RAM + VRAM combined). A
+    model that fits there but not into the GPU alone still loads — and then
+    runs from system memory, orders of magnitude slower (measured: a 22 GB
+    model on a 16 GB card needed minutes per reply, past every timeout)."""
+    if is_remote_lm_studio():
+        return None
+    size = _model_sizes().get(_model_key(model_id))
+    vram_total, _ = _gpu_vram()
+    if not size or not vram_total:
+        return None
+    needed = size * _OVERHEAD_FACTOR + _OVERHEAD_FIXED
+    if needed <= vram_total:
+        return None
+    return (
+        f"{model_id} braucht etwa {_gb(needed)} GB, deine Grafikkarte hat nur {_gb(vram_total)} GB. "
+        "Es läuft dann größtenteils aus dem Arbeitsspeicher und antwortet sehr langsam. "
+        "Ein kleineres Modell oder ein geringerer GPU-Anteil in LM Studio ist deutlich schneller."
+    )
+
+
 def block(model_id: str, message: str) -> None:
     _blocked[model_id] = message
 

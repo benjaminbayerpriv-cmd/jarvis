@@ -184,7 +184,8 @@ bun build --compile packages/opencode/src/index.ts --outfile releases/jarvis-cod
 
 Unter Windows entsprechend mit `--outfile releases\jarvis-code-windows-x64.exe`.
 `releases/` ist absichtlich nicht Teil des Git-Repos (zu groß) — jede*r
-baut sich die Binary einmal selbst. Ohne sie bleibt der Rest von Jarvis
+baut sich die Binary einmal selbst. Fehlt sie, nutzt Jarvis automatisch ein
+normal installiertes OpenCode (`npm i -g opencode-ai`), falls vorhanden. Ohne sie bleibt der Rest von Jarvis
 (Sprache, Chat, Tools) unverändert nutzbar; nur der Code-Tab meldet dann
 "Binary nicht gefunden".
 

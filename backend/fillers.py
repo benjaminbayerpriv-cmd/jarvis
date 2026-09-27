@@ -39,8 +39,8 @@ def ensure_fillers() -> list[str]:
         path = next(FILLER_DIR.glob(f"filler_{i}.*"), None)
         if path is None:
             try:
-                audio = tts.synthesize(phrase)
-                ext, _ = tts.ENGINE_MEDIA.get(tts.VoiceInfo.engine, ("mp3", "audio/mpeg"))
+                audio, engine = tts._synthesize(phrase)
+                ext, _ = tts.ENGINE_MEDIA.get(engine, ("mp3", "audio/mpeg"))
                 path = FILLER_DIR / f"filler_{i}.{ext}"
                 path.write_bytes(audio)
             except Exception:
@@ -70,8 +70,8 @@ def ensure_thinking_filler() -> str | None:
     path = next(FILLER_DIR.glob(f"{THINKING_FILLER_STEM}.*"), None)
     if path is None:
         try:
-            audio = tts.synthesize(THINKING_PHRASE)
-            ext, _ = tts.ENGINE_MEDIA.get(tts.VoiceInfo.engine, ("mp3", "audio/mpeg"))
+            audio, engine = tts._synthesize(THINKING_PHRASE)
+            ext, _ = tts.ENGINE_MEDIA.get(engine, ("mp3", "audio/mpeg"))
             path = FILLER_DIR / f"{THINKING_FILLER_STEM}.{ext}"
             path.write_bytes(audio)
         except Exception:
