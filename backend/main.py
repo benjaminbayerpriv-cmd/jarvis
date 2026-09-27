@@ -21,7 +21,7 @@ from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import browser_agent, config, conversations, fillers, hardware, llm_client, memory, opencode_agent, panel, projects, stt, transcript_log, tts, vector_memory
+from . import browser_agent, config, conversations, fillers, hardware, llm_client, mcp_server, memory, opencode_agent, panel, projects, stt, transcript_log, tts, vector_memory
 
 app = FastAPI(title="Jarvis")
 
@@ -122,6 +122,27 @@ _MODEL_UNREACHABLE = (
 )
 
 
+def _warm_with_load_progress(model: str) -> bool:
+    """llm_client.warm_system_prompt, with LM Studio's model-load progress
+    shown in the interface — a model swap or cold start otherwise sat
+    silent for up to minutes. Whole 5 % steps only: every panel item also
+    lands in transcript.log."""
+    last_step = -1
+
+    def on_progress(progress: float) -> None:
+        nonlocal last_step
+        step = int(progress * 20)
+        if step != last_step:
+            last_step = step
+            panel.push("model_load", model=model, progress=step * 5)
+
+    ok = llm_client.warm_system_prompt(model, on_load_progress=on_progress)
+    # An already-loaded model reports no progress — no "geladen" flash then.
+    if not ok or last_step >= 0:
+        panel.push("model_load", model=model, progress=100 if ok else None)
+    return ok
+
+
 async def broadcast(payload: dict) -> None:
     dead = []
     for ws in list(active_sockets):
@@ -181,7 +202,7 @@ async def on_startup():
         # Nachricht nach jedem Programmstart das Prefill des ganzen
         # System-Prompts, nicht nur nach einem Modellwechsel im laufenden
         # Betrieb (dort schon über /models/select abgedeckt).
-        loop.run_in_executor(None, llm_client.warm_system_prompt, config.LM_STUDIO_BASE_URL, config.LM_STUDIO_MODEL)
+        loop.run_in_executor(None, _warm_with_load_progress, config.LM_STUDIO_MODEL)
     loop.run_in_executor(None, _generate)
     # Whisper's first load takes ~15s — do it now instead of on the user's
     # first spoken sentence. selftest() (not just _get_model()) also runs a
@@ -426,7 +447,7 @@ if FRONTEND_BACKUP_DIR.exists():
 def chat(req: ChatRequest):
     try:
         reply = llm_client.get_reply(req.message, req.history, req.mode)
-    except llm_client.ModelTooLargeError as exc:
+    except (llm_client.ModelTooLargeError, llm_client.LmStudioError, mcp_server.ToolServerError) as exc:
         reply = str(exc)
     except (requests.RequestException, llm_client.ModelError):
         reply = _MODEL_UNREACHABLE
@@ -449,7 +470,7 @@ async def summarize(req: SummarizeRequest):
     # lassen. Fire-and-forget, damit es die Antwort hier nicht verzögert.
     threading.Thread(
         target=llm_client.warm_system_prompt,
-        args=(config.LM_STUDIO_BASE_URL, config.LM_STUDIO_MODEL),
+        args=(config.LM_STUDIO_MODEL,),
         daemon=True,
     ).start()
     return SummarizeResponse(summary=summary)
@@ -561,7 +582,7 @@ def chat_stream(req: ChatRequest):
             # cached at startup/model-switch, so the NEXT chat turn (of THIS
             # conversation, or a brand new one) would silently pay the full
             # prefill cost again. Re-warm right away instead of only once.
-            llm_client.warm_system_prompt(config.LM_STUDIO_BASE_URL, config.LM_STUDIO_MODEL)
+            llm_client.warm_system_prompt(config.LM_STUDIO_MODEL)
 
         threading.Thread(target=_job, daemon=True).start()
 
@@ -611,7 +632,7 @@ def chat_stream(req: ChatRequest):
                     # Ersetzt im Frontend das starre "Denkt nach…" durch einen
                     # Live-Status (denkt nach / schreibt / nutzt Werkzeug X) —
                     # siehe llm_client._stream_reply_impl für die Sendestellen.
-                    yield json.dumps({"type": "status", "phase": event["phase"], "tool": event.get("tool")}) + "\n"
+                    yield json.dumps({"type": "status", "phase": event["phase"], "tool": event.get("tool"), "progress": event.get("progress")}) + "\n"
                 elif event["type"] == "done":
                     full_text = _strip_emojis(event["full_text"])
                     yield json.dumps(
@@ -628,8 +649,12 @@ def chat_stream(req: ChatRequest):
         except Exception as exc:  # noqa: BLE001 - the frontend must always get a "done"
             # Any exception escaping here used to end the HTTP stream without
             # a "done" event, leaving the chat bubble on "Denkt nach…" forever.
-            if isinstance(exc, (requests.RequestException, llm_client.ModelError, KeyError, IndexError)):
-                fallback = str(exc) if isinstance(exc, llm_client.ModelTooLargeError) else _MODEL_UNREACHABLE
+            if isinstance(exc, (llm_client.ModelTooLargeError, llm_client.LmStudioError, mcp_server.ToolServerError)):
+                # These say what's wrong and what to do about it.
+                fallback = str(exc)
+                print(f"[model] Anfrage fehlgeschlagen: {exc}")
+            elif isinstance(exc, (requests.RequestException, llm_client.ModelError, KeyError, IndexError)):
+                fallback = _MODEL_UNREACHABLE
                 print(f"[model] Anfrage fehlgeschlagen: {exc}")
             else:
                 fallback = "Da ist bei mir intern etwas schiefgelaufen, frag bitte nochmal."
@@ -1123,9 +1148,10 @@ def select_model(req: SelectModelRequest):
     def _switch():
         if eject_first:
             llm_client.eject_model(previous_model)
-        # A minimal completion request is what actually makes LM Studio's
-        # just-in-time loading load the new model — it won't otherwise
-        # happen until the next real chat turn. Only once that succeeds is
+        # The warm-up request is what actually makes LM Studio's
+        # just-in-time loading load the new model (with live progress) and
+        # prefill the system prompt — otherwise both would only happen on,
+        # and slow down, the next real chat turn. Only once that succeeds is
         # the previous model explicitly ejected (see llm_client.eject_model)
         # — JIT loading alone was observed to leave it resident in VRAM
         # instead of reliably swapping it out, so without this, switching
@@ -1134,25 +1160,10 @@ def select_model(req: SelectModelRequest):
         # all if the new model fails to load. All fire-and-forget in a
         # background thread so this route returns immediately instead of
         # blocking on however long the model takes to load.
-        try:
-            requests.post(
-                f"{config.LM_STUDIO_BASE_URL}/chat/completions",
-                json={"model": req.model, "messages": [{"role": "user", "content": "hi"}], "max_tokens": 1},
-                # Loading a model larger than VRAM was measured at ~400 s.
-                timeout=600,
-            ).raise_for_status()
-        except requests.RequestException as exc:
-            print(f"[model] Warmladen von {req.model} fehlgeschlagen: {exc}")
+        if not _warm_with_load_progress(req.model):
             return
         if not eject_first and previous_model and previous_model != req.model:
             llm_client.eject_model(previous_model)
-        # Zweiter, separater Warmlauf: der obige lädt nur das Modell (JIT),
-        # verarbeitet aber keinen System-Prompt. Ohne diesen zweiten Schritt
-        # zahlt die erste ECHTE Nachricht des Nutzers noch das Prefill des
-        # ganzen (bei großen Modellen mehrere tausend Tokens langen)
-        # System-Prompts obendrauf — sichtbar als spürbar langsamere erste
-        # Antwort nach jedem Modellwechsel (beobachtet mit Qwen3.6 35B A3B).
-        llm_client.warm_system_prompt(config.LM_STUDIO_BASE_URL, req.model)
 
     threading.Thread(target=_switch, daemon=True).start()
     return {"ok": True, "warning": hardware.vram_warning(req.model)}

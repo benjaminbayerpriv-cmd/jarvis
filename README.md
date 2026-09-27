@@ -4,7 +4,7 @@ Ein lokaler, sprachgesteuerter KI-Assistent für den Desktop — läuft auf
 **macOS** und **Windows**, spricht mit dir in Deutsch und erledigt echte
 Aufgaben am Rechner: Programme öffnen, Dateien schreiben und verschieben,
 im Web suchen, Projekte bauen, Notizen führen und Dinge merken. Das Modell
-kommt aus **LM Studio** (OpenAI-kompatibel, läuft komplett lokal) — optional
+kommt aus **LM Studio** (nativer `/api/v1/chat`, läuft komplett lokal) — optional
 lässt sich die Text-Generierung auf DeepSeek Cloud umstellen. Echte
 Programmierarbeit an einem Projekt gibt Jarvis an einen eingebetteten
 Coding-Agenten weiter — wählbar zwischen **OpenCode**, **Claude Code** und
@@ -36,7 +36,7 @@ DeepSeek, Tavily, experimentelles Gemini) verlassen die Maschine.
 │   wird gesprochen                                                           │
 └──────────────┬──────────────────────────────────────────────────────────────┘
                │
-      LM Studio (OpenAI-kompatible API, lokal) — Modell + Embeddings
+      LM Studio (/api/v1/chat, Tools per MCP, lokal) — Modell + Embeddings
       optional: DeepSeek Cloud · Tavily Search · ElevenLabs · Gemini (experimentell)
       Coding-Agent (Code-Tab): OpenCode (LM Studio) · Claude Code · Codex (eigene CLIs)
 ```
@@ -129,6 +129,7 @@ Obsidian-Vault): [SETUP.md](SETUP.md).
 | `TAVILY_API_KEY` | (optional, kostenlos) Echte Web-Suchergebnisse; ohne Key öffnet `web_search` die Suche im Browser. |
 | `GEMINI_API_KEY` / `GEMINI_MODEL` | Nur für das experimentelle `backend/live_voice_test.py`, nicht Teil der normalen Pipeline. |
 | `JARVIS_HOST` / `JARVIS_PORT` | Bind-Adresse und Port des Servers. |
+| `JARVIS_MCP_PORT` | Port des MCP-Servers, über den LM Studio Jarvis' Werkzeuge aufruft (Standard 8765, token-geschützt). In LM Studio muss „Allow per-request MCPs“ an sein, siehe [SETUP.md](SETUP.md). |
 | `config.json` | Name, Persönlichkeit (`locker_direkt`), Standard-Stadt für „Wetter“, `code_dir`, `code_agent` (`opencode`/`claude`/`codex`, Code-Tab). |
 | `OPENCODE_BIN` / `CLAUDE_BIN` / `CODEX_BIN` | (optional) Pfad zur jeweiligen CLI überschreiben, falls sie nicht im PATH liegt. Claude Code (`npm i -g @anthropic-ai/claude-code`) und Codex (`npm i -g @openai/codex`) bringen ihre eigene Authentifizierung/Modellwahl mit. |
 

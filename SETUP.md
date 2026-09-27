@@ -15,6 +15,15 @@ unten unterschiedlich sind, ist es gekennzeichnet.
   `LM_STUDIO_BASE_URL` verwenden — unter Windows verzögert die
   "localhost"-Namensauflösung sonst jede einzelne Anfrage an LM Studio um
   rund 2 Sekunden.
+- **LM Studio 0.4.0 oder neuer**, und in LM Studio unter "Developer" ->
+  "Server Settings" einmalig **"Allow per-request MCPs"** einschalten.
+  Jarvis chattet über LM Studios nativen Endpunkt `/api/v1/chat` und gibt
+  dem Modell seine Werkzeuge über einen eigenen MCP-Server
+  (`backend/mcp_server.py`, Port `JARVIS_MCP_PORT`, Standard 8765) — ohne
+  diese Einstellung lehnt LM Studio jede Anfrage ab, und Jarvis sagt das
+  genau so. Läuft LM Studio auf einem anderen Rechner im Netzwerk, muss
+  dieser Rechner Jarvis unter Port 8765 erreichen können (Firewall-Abfrage
+  beim ersten Start von Jarvis zulassen).
 - ElevenLabs API-Key in `.env` ist optional — ohne Key (oder wenn das
   Kontingent aufgebraucht ist) spricht Jarvis automatisch mit der lokalen
   Supertonic-Stimme weiter, siehe unten.

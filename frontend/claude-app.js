@@ -383,9 +383,12 @@
     get_time: 'Schaut auf die Uhr …', get_weather: 'Prüft das Wetter …',
     calculate: 'Rechnet …', add_note: 'Schreibt eine Notiz …', visualize: 'Erstellt eine Grafik …',
   };
-  function statusPhaseText(phase, tool) {
+  function statusPhaseText(phase, tool, progress) {
     if (phase === 'tool') return TOOL_STATUS_LABELS[tool] || `Nutzt „${tool}“ …`;
     if (phase === 'answering') return 'Schreibt …';
+    // Echte Fortschrittswerte von LM Studio (model_load/prompt_processing).
+    if (phase === 'loading') return `Lädt das Modell … ${progress} %`;
+    if (phase === 'prompt') return `Liest die Anfrage … ${progress} %`;
     return 'Denkt nach …';
   }
   const ATTACH_MAX_CHARS = 20000;
@@ -1440,7 +1443,7 @@
       .jarvis-reduce-motion, .jarvis-reduce-motion * {
         transition-duration: 0s !important; animation-duration: 0s !important; animation-delay: 0s !important;
       }
-      body.js-app-active > :not(#jsApp):not(#jarvisOrb):not(#jarvisOrbHit):not(#jsSpeechTerm):not(#jsCamWindow):not(#jsSpeechbar):not(#jsSpeechCaption):not(#jsSettingsSheet):not(#jsNewProjectSheet):not(#jsRenameChatSheet):not(#jsBtwWindow):not(#jsNotice):not(script):not(style) { display:none !important; }
+      body.js-app-active > :not(#jsApp):not(#jarvisOrb):not(#jarvisOrbHit):not(#jsSpeechTerm):not(#jsCamWindow):not(#jsSpeechbar):not(#jsSpeechCaption):not(#jsSettingsSheet):not(#jsNewProjectSheet):not(#jsRenameChatSheet):not(#jsBtwWindow):not(#jsNotice):not(#jsModelLoad):not(script):not(style) { display:none !important; }
       body.js-app-active { overflow:hidden; }
       /* Jeder neu gestreamte Buchstabe (siehe setAssistantText/wrapCharsForReveal)
          erscheint erst unscharf und schärft sich dann ein, statt abrupt
@@ -3207,7 +3210,7 @@
             // solange noch kein echter Text da ist — sobald ein Tool-Aufruf
             // NACH schon sichtbarem Text passiert, bliebe sonst der bereits
             // gezeigte Text durch die Status-Zeile überschrieben.
-            if (said.classList.contains('thinking')) said.textContent = statusPhaseText(evt.phase, evt.tool);
+            if (said.classList.contains('thinking')) said.textContent = statusPhaseText(evt.phase, evt.tool, evt.progress);
           }
         }
       }
@@ -3847,6 +3850,28 @@
       o.textContent = 'An ' + speechTermAgentName + ': ' + String(item.task || '');
       hostO.appendChild(o);
       scrollThread();
+      return;
+    }
+    if (item.kind === 'model_load') {
+      // Echter Ladefortschritt von LM Studio (model_load.progress), beim
+      // Modellwechsel und beim Kaltstart — unabhängig von einem Chat-Turn,
+      // deshalb eine feste Anzeige oben statt eines Verlaufseintrags.
+      // progress null = Laden fehlgeschlagen.
+      let box = document.getElementById('jsModelLoad');
+      if (!box) {
+        box = document.createElement('div');
+        box.id = 'jsModelLoad';
+        box.style.cssText = `position:fixed;top:16px;left:50%;transform:translateX(-50%);z-index:10000;width:min(360px,calc(100vw - 32px));padding:10px 14px;border:1px solid ${C.border};border-radius:10px;background:${C.bgSurface3};color:${C.text};font-size:13px;box-shadow:0 6px 24px rgba(0,0,0,.25);display:flex;flex-direction:column;gap:7px;`;
+        box.innerHTML = `<div class="js-ml-text"></div><div style="height:4px;border-radius:2px;background:${C.border};overflow:hidden;"><div class="js-ml-bar" style="height:100%;width:0;background:${C.accent};transition:width .3s ease;"></div></div>`;
+        document.body.appendChild(box);
+      }
+      clearTimeout(box._hideTimer);
+      const pct = item.progress;
+      $('.js-ml-text', box).textContent = pct === null || pct === undefined
+        ? `${item.model} konnte nicht geladen werden.`
+        : pct >= 100 ? `${item.model} ist geladen.` : `Lädt ${item.model} … ${pct} %`;
+      $('.js-ml-bar', box).style.width = `${pct || 0}%`;
+      if (pct === null || pct === undefined || pct >= 100) box._hideTimer = setTimeout(() => box.remove(), 2500);
       return;
     }
     if (item.kind === 'viz') {

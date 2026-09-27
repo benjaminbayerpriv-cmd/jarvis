@@ -4,10 +4,11 @@ import json
 import platform
 import re
 import subprocess
+from typing import Callable
 
 import requests
 
-from . import confirm, config, hardware, last_target, memory, tools
+from . import confirm, config, hardware, last_target, mcp_server, memory, tools
 
 
 class ModelError(RuntimeError):
@@ -16,6 +17,12 @@ class ModelError(RuntimeError):
 
 class ModelTooLargeError(ModelError):
     """The configured model doesn't fit into this PC's memory; the message
+    is meant to be shown/spoken to the user as-is."""
+
+
+class LmStudioError(ModelError):
+    """LM Studio refused or aborted a native chat request (too old, per-request
+    MCPs switched off, tool server unreachable, …); the message says why and
     is meant to be shown/spoken to the user as-is."""
 
 # Some local reasoning models (observed with VibeThinker-3B) put their
@@ -177,8 +184,8 @@ def _pop_complete_sentences(buffer: str) -> tuple[list[str], str]:
 # every real request (see _request_targets), so this must reflect whichever
 # target actually answered last, not just which key happens to be present —
 # otherwise Jarvis confidently claims to be DeepSeek while every reply is
-# secretly coming from the local model. Updated in _post_chat/_stream_chat
-# right after a request actually succeeds.
+# secretly coming from the local model. Updated in _open_round right after
+# a request actually succeeds.
 _active_model_name = config.DEEPSEEK_MODEL if (config.DEEPSEEK_API_KEY and config.DEEPSEEK_ENABLED) else config.LM_STUDIO_MODEL
 _active_model_provider = "DeepSeek" if (config.DEEPSEEK_API_KEY and config.DEEPSEEK_ENABLED) else "ein lokales Modell über LM Studio"
 
@@ -198,43 +205,36 @@ def _note_active_target(base_url: str, model: str) -> None:
 _CHAT_TIMEOUT = (10, 300)
 
 
-def warm_system_prompt(base_url: str, model: str) -> None:
-    """Throwaway completion carrying the real system prompt, so LM Studio's
-    llama.cpp backend prefills and caches those tokens ahead of time.
+def warm_system_prompt(model: str, on_load_progress: Callable[[float], None] | None = None) -> bool:
+    """Throwaway native chat request carrying the real system prompt and the
+    real tool integration, so LM Studio loads the model (just-in-time, if it
+    isn't yet) and its llama.cpp backend prefills and caches those tokens
+    ahead of time. Returns whether that worked.
 
     Observed live: with a big model (Qwen3.6 35B A3B), the FIRST real message
     after a (re)load took noticeably longer than every one after it — because
     that first request pays for prefilling the whole system prompt (a few
     thousand tokens) from scratch, while later ones reuse the server's
     prompt-prefix cache from the previous turn. Sending that same prefix here
-    ahead of time, right after the model finishes loading, moves that one-time
-    cost off the user's first real message. Purely a latency optimization:
-    errors are swallowed, this must never block startup or a model switch,
-    and a cache miss here just means the first real message pays the normal
-    cost, exactly like today.
+    ahead of time moves that one-time cost off the user's first real message.
+    Goes through the same /api/v1/chat + MCP path as a real turn: the tool
+    definitions LM Studio renders from the MCP server belong to the cached
+    prefix too. `on_load_progress` gets LM Studio's model-load progress
+    (0..1) while the model is being loaded. Never raises — this must never
+    block startup or a model switch.
     """
     try:
-        requests.post(
-            f"{base_url}/chat/completions",
-            json={
-                "model": model,
-                "messages": [
-                    {"role": "system", "content": _system_prompt(False)},
-                    {"role": "user", "content": "hi"},
-                ],
-                # The chat template renders the tool schemas right after the
-                # system prompt, so they belong to the cached prefix too —
-                # without them the first real message still prefilled ~3k
-                # tokens of tool definitions from scratch.
-                "tools": tools.TOOL_SCHEMAS,
-                "tool_choice": "auto",
-                "max_tokens": 1,
-                "reasoning_effort": "none",
-            },
-            timeout=_CHAT_TIMEOUT,
-        )
-    except requests.RequestException as exc:
+        with mcp_server.request_scope(lambda: False) as integration:
+            body = {**_native_body(model, _system_prompt(False), "hi", integration), "max_output_tokens": 1}
+            for data in _native_events(body):
+                if data.get("type") == "model_load.progress" and on_load_progress:
+                    on_load_progress(data.get("progress", 0.0))
+                elif data.get("type") == "error":
+                    raise _native_error(data.get("error") or {})
+        return True
+    except (requests.RequestException, ModelError, RuntimeError) as exc:
         print(f"[model] Vorwärmen des System-Prompts für {model} fehlgeschlagen: {exc}")
+        return False
 
 
 def _platform_note() -> str:
@@ -454,6 +454,9 @@ Rückmeldung hast, und widersprich dir nie: Was du einmal gesagt hast (z.B.
 "fertig"), bleibt gesagt und gilt weiter."""
 
 MAX_TOOL_ROUNDS = 4
+# LM Studio runs the tool loop itself on the native path, so rounds alone
+# don't bound it there (see _stream_reply_impl).
+MAX_NATIVE_TOOL_CALLS = 8
 
 
 # Chat|Code-Modus: bei mode=="code" wird dieser Zusatz in den System-Prompt
@@ -583,35 +586,6 @@ def _request_targets() -> list[tuple[str, str, dict, dict]]:
     if not targets:
         raise ModelTooLargeError(too_large or "Kein Modell verfügbar.")
     return targets
-
-
-def _post_chat(messages: list) -> dict:
-    last_exc: Exception = ModelError("Kein Modell-Ziel konfiguriert.")
-    for base_url, model, headers, extra in _request_targets():
-        try:
-            resp = requests.post(
-                f"{base_url}/chat/completions",
-                json={
-                    "model": model,
-                    "messages": messages,
-                    "tools": tools.TOOL_SCHEMAS,
-                    "tool_choice": "auto",
-                    "temperature": 0.2,
-                    **extra,
-                },
-                headers=headers,
-                timeout=_CHAT_TIMEOUT,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            if not data.get("choices"):
-                raise ModelError(data.get("error", {}).get("message", "Das Modell lieferte keine Antwort."))
-            _note_active_target(base_url, model)
-            return data
-        except (requests.RequestException, ModelError) as exc:
-            print(f"[model] {base_url} nicht verfügbar, versuche nächstes Ziel: {exc}")
-            last_exc = exc
-    raise last_exc
 
 
 _SUMMARIZE_PROMPT = (
@@ -913,14 +887,6 @@ def model_health() -> tuple[bool, str]:
     return True, f"Modell bereit: {config.LM_STUDIO_MODEL}{suffix}"
 
 
-def _clean_assistant_message(choice: dict) -> dict:
-    """Strip reasoning_content before it re-enters the context window."""
-    cleaned = {"role": "assistant", "content": choice.get("content", "")}
-    if choice.get("tool_calls"):
-        cleaned["tool_calls"] = choice["tool_calls"]
-    return cleaned
-
-
 def _open_stream(messages: list, base_url: str, model: str, headers: dict, extra: dict):
     """Opens (and validates) a streaming chat/completions request. Raised
     eagerly — before any generator laziness — so a caller can catch a failed
@@ -944,53 +910,248 @@ def _open_stream(messages: list, base_url: str, model: str, headers: dict, extra
     return resp
 
 
-def _stream_chat(messages: list):
-    """Yields raw SSE JSON chunks from a streaming chat/completions call.
-    Tries each target from `_request_targets` in order, falling back (e.g.
-    from a dead DeepSeek key to LM Studio) as long as no chunk has been
-    yielded yet — once streaming has started, a mid-stream error surfaces
-    instead of silently restarting with a different model."""
-    resp = None
-    last_exc: Exception = ModelError("Kein Modell-Ziel konfiguriert.")
-    for base_url, model, headers, extra in _request_targets():
-        try:
-            resp = _open_stream(messages, base_url, model, headers, extra)
-            _note_active_target(base_url, model)
-            break
-        except requests.RequestException as exc:
-            print(f"[model] {base_url} nicht verfügbar, versuche nächstes Ziel: {exc}")
-            last_exc = exc
-    if resp is None:
-        raise last_exc
+# One model round, from either backend, as the same small set of events —
+# so the whole reply pipeline in _stream_reply_impl (think filtering, leak
+# and corruption detection, claim vetting, sentence streaming) runs
+# unchanged on top of both:
+#   {"kind": "text", "text": str}           reply text as it arrives
+#   {"kind": "reasoning"}                   the model is thinking
+#   {"kind": "progress", "phase": "loading"|"prompt", "progress": 0..1}
+#   {"kind": "tool_call_delta", "delta": …} OpenAI-style call fragment, run
+#                                           by Jarvis after the round
+#   {"kind": "tool_started", "tool": str}   LM Studio is calling a tool
+#   {"kind": "tool_ran", "tool": str, "output": str}
+#                                           …and it ran (via mcp_server)
+# Each round generator first yields None once its connection is accepted
+# (see _open_round), and closing it closes the HTTP connection — which is
+# what actually makes the server stop generating (Stop button).
 
-    # Closing `resp` (not just returning/breaking) is what actually severs the
-    # TCP connection to LM Studio — without it, a caller stopping this
-    # generator early (the Stop button, see _turn_cancelled below) leaves the
-    # socket open and LM Studio never notices the client is gone, so it keeps
-    # generating regardless of what the UI shows. `finally` covers every exit
-    # path: the normal [DONE]/break below, an early `return`/`break` in the
-    # caller's `for chunk in stream:` loop, and an explicit `stream.close()`
-    # (raises GeneratorExit here).
+
+def _openai_round(messages: list, base_url: str, model: str, headers: dict, extra: dict):
+    """A round against an OpenAI-compatible endpoint (DeepSeek)."""
+    resp = _open_stream(messages, base_url, model, headers, extra)
     try:
+        yield None
         for line in resp.iter_lines():
-            if not line:
+            if not line.startswith(b"data: "):
                 continue
-            line = line.decode("utf-8")
-            if not line.startswith("data: "):
-                continue
-            payload = line[len("data: "):].strip()
-            if payload == "[DONE]":
-                break
+            payload = line[len(b"data: "):].strip()
+            if payload == b"[DONE]":
+                return
             try:
                 data = json.loads(payload)
             except json.JSONDecodeError:
                 continue
             if "error" in data or not data.get("choices"):
-                message = (data.get("error") or {}).get("message", "LM Studio-Stream ist ungültig.")
-                raise ModelError(message)
-            yield data
+                raise ModelError((data.get("error") or {}).get("message", "Der Modell-Stream ist ungültig."))
+            delta = data["choices"][0].get("delta", {})
+            if delta.get("reasoning_content"):
+                yield {"kind": "reasoning"}
+            if delta.get("content"):
+                yield {"kind": "text", "text": delta["content"]}
+            for tc in delta.get("tool_calls") or []:
+                yield {"kind": "tool_call_delta", "delta": tc}
     finally:
         resp.close()
+
+
+# Per model: which `reasoning` values LM Studio accepts ("off", "on", …).
+# Sending one the model doesn't support fails the whole request.
+_reasoning_options_cache: dict[str, list[str]] = {}
+
+
+def _reasoning_options(model: str) -> list[str]:
+    if model not in _reasoning_options_cache:
+        resp = requests.get(f"{hardware.lm_studio_root()}/api/v1/models", timeout=5)
+        if resp.status_code >= 400:
+            raise _native_rejection(resp)
+        for entry in resp.json().get("models", []):
+            ids = {entry.get("key")} | {inst.get("id") for inst in entry.get("loaded_instances") or []}
+            if model in ids:
+                reasoning = (entry.get("capabilities") or {}).get("reasoning") or {}
+                _reasoning_options_cache[model] = list(reasoning.get("allowed_options") or [])
+                break
+        else:
+            return []
+    return _reasoning_options_cache[model]
+
+
+def _native_body(model: str, system_prompt: str, user_input, integration: dict) -> dict:
+    body = {
+        "model": model,
+        "system_prompt": system_prompt,
+        "input": user_input,
+        "integrations": [integration],
+        "temperature": 0.2,
+        # Jarvis sends the whole context every turn (see _native_input);
+        # nothing to keep on LM Studio's side.
+        "store": False,
+    }
+    # Same intent as `reasoning_effort: none` on the OpenAI path: answer
+    # directly instead of thinking first — only where the model allows it.
+    if "off" in _reasoning_options(model):
+        body["reasoning"] = "off"
+    return body
+
+
+def _native_rejection(resp: requests.Response) -> LmStudioError:
+    try:
+        err = resp.json().get("error")
+        detail = err.get("message", "") if isinstance(err, dict) else str(err or "")
+    except ValueError:
+        detail = ""
+    detail = detail or resp.text.strip() or f"HTTP {resp.status_code}"
+    hint = ""
+    if "mcp" in detail.lower():
+        hint = " In LM Studio unter Developer → Server Settings „Allow per-request MCPs“ einschalten."
+    elif resp.status_code == 404:
+        hint = " Jarvis braucht LM Studio 0.4.0 oder neuer."
+    return LmStudioError(f"LM Studio hat die Anfrage abgelehnt: {detail}.{hint}")
+
+
+def _native_error(err: dict) -> LmStudioError:
+    message = err.get("message") or "unbekannter Fehler"
+    if err.get("type") == "mcp_connection_error":
+        return LmStudioError(
+            f"LM Studio erreicht Jarvis' Werkzeuge nicht ({message}). Ist „Allow per-request MCPs“ "
+            f"in LM Studio eingeschaltet, und lässt die Firewall Port {config.JARVIS_MCP_PORT} zu?"
+        )
+    return LmStudioError(f"LM Studio meldet einen Fehler: {message}")
+
+
+def _native_events(body: dict):
+    """Opens a streaming POST /api/v1/chat — raising right away if LM Studio
+    refuses it — and returns an iterator over its SSE event payloads."""
+    resp = requests.post(
+        f"{hardware.lm_studio_root()}/api/v1/chat",
+        json={**body, "stream": True},
+        timeout=_CHAT_TIMEOUT,
+        stream=True,
+    )
+    if resp.status_code >= 400:
+        raise _native_rejection(resp)
+    return _sse_payloads(resp)
+
+
+def _sse_payloads(resp: requests.Response):
+    try:
+        for line in resp.iter_lines():
+            if not line.startswith(b"data:"):
+                continue
+            try:
+                yield json.loads(line[len(b"data:"):])
+            except json.JSONDecodeError:
+                continue
+    finally:
+        resp.close()
+
+
+def _content_text(content) -> str:
+    if isinstance(content, list):
+        return " ".join(part.get("text", "") for part in content if part.get("type") == "text")
+    return content or ""
+
+
+def _native_input(messages: list):
+    """(system_prompt, input) for /api/v1/chat, built from the same message
+    list the OpenAI path sends.
+
+    That endpoint takes one system prompt and ONE user message — no
+    role-based history. Earlier turns therefore go into that message as a
+    labeled transcript ahead of the new one, not into the system prompt:
+    chat templates render the tool definitions right after the system
+    prompt, so a growing history there would push them out of LM Studio's
+    prompt cache every turn. This way each turn's transcript extends the
+    previous one's."""
+    system_prompt = messages[0]["content"]
+    *earlier, current = messages[1:]
+    text = _content_text(current["content"])
+    lines = [
+        f"{'Nutzer' if m['role'] == 'user' else 'Jarvis'}: {_content_text(m.get('content')).strip()}"
+        for m in earlier
+        if _content_text(m.get("content")).strip()
+    ]
+    if lines:
+        text = "Bisheriger Chatverlauf:\n" + "\n".join(lines) + "\n\nNeue Nachricht des Nutzers:\n" + text
+    images = [
+        part["image_url"]["url"]
+        for part in current["content"] if part.get("type") == "image_url"
+    ] if isinstance(current["content"], list) else []
+    if not images:
+        return system_prompt, text
+    return system_prompt, [{"type": "text", "content": text}, *({"type": "image", "data_url": url} for url in images)]
+
+
+def _native_round(messages: list, model: str, turn_id: str | None):
+    """A round against LM Studio's native /api/v1/chat. LM Studio runs the
+    tool loop itself through mcp_server, so one round can already contain
+    several tool calls and the text before and after them."""
+    system_prompt, user_input = _native_input(messages)
+    with mcp_server.request_scope(lambda: not _turn_cancelled(turn_id)) as integration:
+        events = _native_events(_native_body(model, system_prompt, user_input, integration))
+        try:
+            yield None
+            for data in events:
+                kind = data.get("type")
+                if kind in ("model_load.start", "model_load.progress"):
+                    yield {"kind": "progress", "phase": "loading", "progress": data.get("progress", 0.0)}
+                elif kind in ("prompt_processing.start", "prompt_processing.progress"):
+                    yield {"kind": "progress", "phase": "prompt", "progress": data.get("progress", 0.0)}
+                elif kind == "reasoning.delta":
+                    yield {"kind": "reasoning"}
+                elif kind == "message.start":
+                    # A message after a tool call continues the reply —
+                    # without a break, "Ich schaue nach." + "Es ist 12 Uhr."
+                    # would glue into one unsplittable "nach.Es" sentence.
+                    yield {"kind": "text", "text": "\n\n"}
+                elif kind == "message.delta":
+                    yield {"kind": "text", "text": data.get("content", "")}
+                elif kind == "tool_call.start":
+                    yield {"kind": "tool_started", "tool": data.get("tool", "")}
+                elif kind == "tool_call.success":
+                    yield {"kind": "tool_ran", "tool": data.get("tool", ""), "output": mcp_server.output_text(data.get("output", ""))}
+                elif kind == "tool_call.failure":
+                    # LM Studio hands the failure back to the model itself,
+                    # which then retries or answers — nothing ran.
+                    print(f"[mcp] Tool-Aufruf fehlgeschlagen: {data.get('reason')}")
+                elif kind == "error":
+                    raise _native_error(data.get("error") or {})
+                elif kind == "chat.end":
+                    return
+        finally:
+            events.close()
+
+
+def _open_round(messages: list, turn_id: str | None):
+    """The event stream (see above) for one model round, from the first
+    target in `_request_targets` that accepts the connection — falling back
+    (e.g. from a dead DeepSeek key to LM Studio) only as long as nothing has
+    streamed yet; once it has, a mid-stream error surfaces instead of
+    silently restarting with a different model. LM Studio goes through its
+    native /api/v1/chat, DeepSeek through its OpenAI-compatible endpoint."""
+    last_exc: Exception = ModelError("Kein Modell-Ziel konfiguriert.")
+    for base_url, model, headers, extra in _request_targets():
+        if base_url == config.DEEPSEEK_BASE_URL:
+            stream = _openai_round(messages, base_url, model, headers, extra)
+        else:
+            stream = _native_round(messages, model, turn_id)
+        try:
+            next(stream)
+        except requests.RequestException as exc:
+            print(f"[model] {base_url} nicht verfügbar, versuche nächstes Ziel: {exc}")
+            last_exc = exc
+            continue
+        _note_active_target(base_url, model)
+        return stream
+    raise last_exc
+
+
+def _round_transcript(content: str, round_tools: list[tuple[str, str]]) -> str:
+    """What a finished round said and did, for the context of the next
+    round — on the native path LM Studio's own tool calls and results are
+    otherwise gone once its request ends."""
+    ran = "".join(f"[{name} ausgeführt, Ergebnis: {output}]\n" for name, output in round_tools)
+    return ran + content
 
 
 # This model intermittently writes a function call into its reply as plain
@@ -1724,6 +1885,13 @@ def _stream_reply_impl(user_message: str, history: list | None = None, turn_id: 
     # (mit wechselndem Werkzeugnamen) auftreten kann, "thinking"/"answering"
     # aber jeweils nur einmal.
     status_sent: set[str] = set()
+    # Last whole percent sent per progress phase ("loading"/"prompt") — LM
+    # Studio reports far finer steps than a status line can show.
+    progress_sent: dict[str, int] = {}
+    # Tool calls LM Studio started this turn (native path). It runs the tool
+    # loop itself, so this is the only bound on a model stuck calling tools.
+    native_tool_calls = 0
+    tool_budget_exhausted = False
 
     def _vet(text: str) -> str:
         """Swap a sentence for an honest one if it fails the same checks
@@ -1792,33 +1960,79 @@ def _stream_reply_impl(user_message: str, history: list | None = None, turn_id: 
             # for recovery once the round ends, instead of being spoken.
             trailing_suspect = None
             trailing_suspect_text = ""
-            stream = _stream_chat(messages)
+            # Tools LM Studio already ran within this round (native path) —
+            # (name, output) in order, for the next round's context.
+            round_tools: list[tuple[str, str]] = []
+            stream = _open_round(messages, turn_id)
 
-            for chunk in stream:
+            for event in stream:
                 # The Stop button (chat/cancel) used to only be checked
                 # between tool-call rounds — while the model was still
                 # generating plain text, nothing here ever looked at the
                 # flag, so Stop neither ended the reply nor (since the
                 # connection to LM Studio stayed open) actually interrupted
-                # LM Studio's own generation. Checked on every chunk now, and
-                # stream.close() (see _stream_chat's finally) really closes
-                # that connection instead of just abandoning the generator.
+                # LM Studio's own generation. Checked on every event now, and
+                # stream.close() really closes that connection instead of
+                # just abandoning the generator.
                 if _turn_cancelled(turn_id):
                     stream.close()
                     yield {"type": "done", "full_text": "".join(full_text_parts)}
                     return
-                if not chunk.get("choices"):
-                    message = (chunk.get("error") or {}).get("message", "LM Studio-Stream ist ungültig.")
-                    raise ModelError(message)
-                choice = chunk["choices"][0]
-                delta = choice.get("delta", {})
+                kind = event["kind"]
 
-                # Modelle, die Reasoning im eigenen "reasoning_content"-Feld
-                # senden (statt es als <think>-Text in "content" zu leaken —
-                # siehe _filter_think), sagen uns hierüber trotzdem, dass
-                # gerade nachgedacht wird — reicht für den Status, auch wenn
-                # der Inhalt selbst nirgends angezeigt wird.
-                if delta.get("reasoning_content") and "thinking" not in status_sent:
+                if kind == "progress":
+                    percent = int(event["progress"] * 100)
+                    if progress_sent.get(event["phase"]) != percent:
+                        progress_sent[event["phase"]] = percent
+                        yield {"type": "status", "phase": event["phase"], "progress": percent}
+                    continue
+
+                if kind == "tool_call_delta":
+                    tc = event["delta"]
+                    idx = tc.get("index", 0)
+                    entry = tool_calls_acc.setdefault(idx, {"id": None, "name": "", "arguments": ""})
+                    if tc.get("id"):
+                        entry["id"] = tc["id"]
+                    fn = tc.get("function") or {}
+                    if fn.get("name"):
+                        entry["name"] += fn["name"]
+                    if fn.get("arguments"):
+                        entry["arguments"] += fn["arguments"]
+                    continue
+
+                if kind == "tool_started":
+                    native_tool_calls += 1
+                    if native_tool_calls > MAX_NATIVE_TOOL_CALLS:
+                        print(f"[llm] Mehr als {MAX_NATIVE_TOOL_CALLS} Tool-Aufrufe in einem Turn, breche ab.")
+                        stream.close()
+                        tool_budget_exhausted = True
+                        break
+                    yield {"type": "status", "phase": "tool", "tool": event["tool"]}
+                    continue
+
+                if kind == "tool_ran":
+                    tools_used.append(event["tool"])
+                    last_tool_result = event["output"]
+                    round_tools.append((event["tool"], event["output"]))
+                    # Same as after an OpenAI-path tool call below: a pending
+                    # confirmation's question is spoken verbatim, and the
+                    # model must not get to paraphrase it.
+                    if confirm.is_pending():
+                        stream.close()
+                        yield {"type": "sentence", "text": event["output"]}
+                        yield {"type": "done", "full_text": event["output"]}
+                        return
+                    # Claims held earlier this round are backed now.
+                    yield from _flush_pending_claims()
+                    continue
+
+                # Modelle, die Reasoning getrennt vom Antworttext senden
+                # (reasoning_content bzw. reasoning.delta, statt es als
+                # <think>-Text in den Inhalt zu leaken — siehe
+                # _filter_think), sagen uns hierüber trotzdem, dass gerade
+                # nachgedacht wird — reicht für den Status, auch wenn der
+                # Inhalt selbst nirgends angezeigt wird.
+                if kind == "reasoning" and "thinking" not in status_sent:
                     status_sent.add("thinking")
                     yield {"type": "status", "phase": "thinking"}
                 if think_state["in_think"] and "thinking" not in status_sent:
@@ -1829,7 +2043,7 @@ def _stream_reply_impl(user_message: str, history: list | None = None, turn_id: 
                 # here, before anything downstream ever sees it — see
                 # _filter_think for why that has to happen at this exact
                 # point rather than later on individual sentences.
-                visible = _filter_think(think_state, delta["content"]) if delta.get("content") else ""
+                visible = _filter_think(think_state, event["text"]) if kind == "text" else ""
                 if visible:
                     if "answering" not in status_sent:
                         status_sent.add("answering")
@@ -1897,17 +2111,6 @@ def _stream_reply_impl(user_message: str, history: list | None = None, turn_id: 
                             partial = _strip_think_tags(buffer)
                             yield {"type": "partial", "text": partial}
 
-                for tc in delta.get("tool_calls") or []:
-                    idx = tc.get("index", 0)
-                    entry = tool_calls_acc.setdefault(idx, {"id": None, "name": "", "arguments": ""})
-                    if tc.get("id"):
-                        entry["id"] = tc["id"]
-                    fn = tc.get("function") or {}
-                    if fn.get("name"):
-                        entry["name"] += fn["name"]
-                    if fn.get("arguments"):
-                        entry["arguments"] += fn["arguments"]
-
             # _filter_think always withholds a short tail (long enough to
             # catch a </think> split across two chunks) — once the stream is
             # actually done, that tail can never turn out to be a tag after
@@ -1930,8 +2133,15 @@ def _stream_reply_impl(user_message: str, history: list | None = None, turn_id: 
                     trailing_suspect_text = buffer
                     buffer = ""
 
-            if suspect != "corrupt":
+            # A retry repeats the whole request — never once LM Studio already
+            # ran a tool in it, or that tool's side effect happens twice.
+            # The garbage is dropped below instead, like after the last retry.
+            if suspect != "corrupt" or round_tools:
                 break
+
+        if tool_budget_exhausted:
+            yield from _flush_pending_claims()
+            break
 
         if tool_calls_acc:
             leftover = _strip_think_tags(buffer)
@@ -1997,7 +2207,7 @@ def _stream_reply_impl(user_message: str, history: list | None = None, turn_id: 
                 result = tools.call_tool(name, args)
                 tools_used.append(name)
                 last_tool_result = result
-                messages.append({"role": "assistant", "content": content_acc})
+                messages.append({"role": "assistant", "content": _round_transcript(content_acc, round_tools)})
                 messages.append({"role": "user", "content": f"[Ergebnis von {name}: {result}]"})
                 buffer = ""
                 yield from _flush_pending_claims()
@@ -2012,7 +2222,7 @@ def _stream_reply_impl(user_message: str, history: list | None = None, turn_id: 
             invented = _leaked_unknown_tool(content_acc)
             if invented:
                 available = ", ".join(sorted(tools.DISPATCH))
-                messages.append({"role": "assistant", "content": content_acc})
+                messages.append({"role": "assistant", "content": _round_transcript(content_acc, round_tools)})
                 messages.append(
                     {
                         "role": "user",
@@ -2044,7 +2254,7 @@ def _stream_reply_impl(user_message: str, history: list | None = None, turn_id: 
             result = tools.call_tool(name, args)
             tools_used.append(name)
             last_tool_result = result
-            messages.append({"role": "assistant", "content": content_acc})
+            messages.append({"role": "assistant", "content": _round_transcript(content_acc, round_tools)})
             messages.append({"role": "user", "content": f"[Ergebnis von {name}: {result}]"})
             buffer = ""
             yield from _flush_pending_claims()
@@ -2060,7 +2270,7 @@ def _stream_reply_impl(user_message: str, history: list | None = None, turn_id: 
             # All retries came back corrupted too — silently drop it rather
             # than read garbage aloud. Falls through to the empty-reply
             # fallback below, or to last_tool_result if a tool did run.
-            print("[llm] Streaming blieb nach 10 Versuchen korrupt, verwerfe den Rest.")
+            print("[llm] Streaming blieb korrupt, verwerfe den Rest.")
             buffer = ""
         elif suspect:
             # Suspected leaked call but not recoverable — flush it rather
@@ -2115,68 +2325,6 @@ def _stream_reply_impl(user_message: str, history: list | None = None, turn_id: 
 
 
 def get_reply(user_message: str, history: list | None = None, mode: str | None = None) -> str:
-    resolved = confirm.resolve(user_message)
-    if resolved is not None:
-        return resolved
-
-    messages = _build_messages(user_message, history, mode)
-
-    last_tool_result = None
-    tools_used: list[str] = []
-    recent_action_confirmed = _history_has_recent_action_claim(user_message, history)
-
-    for _ in range(MAX_TOOL_ROUNDS):
-        data = _post_chat(messages)
-        choice = data["choices"][0]["message"]
-        tool_calls = choice.get("tool_calls")
-
-        if not tool_calls:
-            # "content": null (not just missing) is valid OpenAI output and
-            # crashed _strip_think_tags with a TypeError -> HTTP 500.
-            content = _strip_think_tags(choice.get("content") or "")
-            # Keep the legacy non-streaming endpoint as safe as the normal
-            # streaming path: LM Studio may put a call in a JSON code block
-            # here as well, rather than using `tool_calls`.
-            recovered = _recover_leaked_call(content)
-            if recovered:
-                name, args = recovered
-                result = tools.call_tool(name, args)
-                last_tool_result = result
-                tools_used.append(name)
-                messages.append({"role": "assistant", "content": content})
-                messages.append({"role": "user", "content": f"[Ergebnis von {name}: {result}]"})
-                continue
-            if content:
-                # A claim is only false when nothing backs it up: no tool
-                # ran earlier this same turn, and no earlier turn already
-                # reported doing it either (see
-                # _history_has_recent_action_claim — same reasoning as the
-                # streaming path in stream_reply).
-                if _looks_like_tool_text(content) or _unbacked_claim(content, tools_used, recent_action_confirmed):
-                    return "Das habe ich nicht ausgeführt."
-                return content
-            # Model sometimes returns empty text right after a tool call —
-            # fall back to the tool's own result instead of reading nothing.
-            return last_tool_result or "Da ist bei mir gerade keine Antwort zustande gekommen, frag bitte nochmal."
-
-        messages.append(_clean_assistant_message(choice))
-        for call in tool_calls:
-            fn = call["function"]
-            try:
-                args = json.loads(fn.get("arguments") or "{}")
-            except json.JSONDecodeError:
-                args = {}
-            result = tools.call_tool(fn["name"], args)
-            last_tool_result = result
-            tools_used.append(fn["name"])
-            messages.append(
-                {
-                    "role": "tool",
-                    "tool_call_id": call["id"],
-                    "content": result,
-                }
-            )
-            if confirm.is_pending():
-                return result
-
-    return "Das dauert mir gerade zu lange, frag mich das nochmal."
+    """The whole reply at once, for the non-streaming /chat endpoint — the
+    same pipeline as stream_reply, just collected."""
+    return next(e["full_text"] for e in stream_reply(user_message, history, mode=mode) if e["type"] == "done")

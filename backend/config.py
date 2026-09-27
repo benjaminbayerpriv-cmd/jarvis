@@ -80,6 +80,9 @@ TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY", "")
 
 JARVIS_HOST = os.environ.get("JARVIS_HOST", "127.0.0.1")
 JARVIS_PORT = int(os.environ.get("JARVIS_PORT", "8000"))
+# Port of the MCP server LM Studio calls Jarvis's tools through (see
+# backend/mcp_server.py). Listens on all interfaces, token-protected.
+JARVIS_MCP_PORT = int(os.environ.get("JARVIS_MCP_PORT", "8765"))
 
 NOTES_FILE = ROOT_DIR / "jarvis_notes.md"
 CONFIG_FILE = ROOT_DIR / "config.json"
