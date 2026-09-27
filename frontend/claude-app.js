@@ -3642,18 +3642,23 @@
   }
 
   function setAssistantText(el, text) {
+    // Nur beim ALLERERSTEN Auftauchen von Text einblenden, nicht bei jedem
+    // weiteren Stream-Update: partial/sentence-Events kommen mehrmals pro
+    // Sekunde und ersetzen jedes Mal das komplette innerHTML (u.a. weil ein
+    // wachsender ```-Codeblock bei jedem Update komplett neu aufgebaut
+    // wird) — lief die Fade-Animation dabei jedes Mal von vorne los, wurde
+    // die ganze Antwort kurz unsichtbar und wieder sichtbar, was wie
+    // Flackern aussah (bei Codeblöcken besonders auffällig). Ab dem zweiten
+    // Aufruf für dasselbe Element nur noch den Inhalt austauschen, ohne die
+    // Animation erneut zu triggern.
+    const isFirstContent = !el.dataset.raw;
     el.dataset.raw = text;
     el.innerHTML = renderMarkdown(text);
-    // Sanftes Einblenden statt abruptem Aufploppen bei jedem Stream-Update
-    // (partial/sentence-Events kommen alle paar hundert Millisekunden, jedes
-    // ersetzt bisher einfach kommentarlos das ganze innerHTML). Klasse erst
-    // entfernen und einen Reflow erzwingen, sonst spielt eine CSS-Animation
-    // beim erneuten Hinzufügen derselben Klasse nicht noch einmal ab — bei
-    // schnell aufeinanderfolgenden Updates ergibt das einen fließenden
-    // Überblend-Effekt statt einzelner Ruckler.
-    el.classList.remove('js-text-fade');
-    void el.offsetWidth;
-    el.classList.add('js-text-fade');
+    if (isFirstContent) {
+      el.classList.remove('js-text-fade');
+      void el.offsetWidth;
+      el.classList.add('js-text-fade');
+    }
   }
 
   function openPanelSocket() {
