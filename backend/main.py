@@ -442,6 +442,16 @@ async def summarize(req: SummarizeRequest):
         summary = await loop.run_in_executor(None, llm_client.summarize_history, req.history)
     except (requests.RequestException, llm_client.ModelError):
         summary = ""
+    # Wie beim Titel-Job: diese Zusammenfassung lief mit einem eigenen,
+    # kürzeren System-Prompt und hat damit den gecachten Präfix des
+    # normalen Jarvis-System-Prompts verdrängt — im Hintergrund neu
+    # aufwärmen, statt die nächste echte Chat-Nachricht dafür zahlen zu
+    # lassen. Fire-and-forget, damit es die Antwort hier nicht verzögert.
+    threading.Thread(
+        target=llm_client.warm_system_prompt,
+        args=(config.LM_STUDIO_BASE_URL, config.LM_STUDIO_MODEL),
+        daemon=True,
+    ).start()
     return SummarizeResponse(summary=summary)
 
 
@@ -545,6 +555,13 @@ def chat_stream(req: ChatRequest):
                 title = ""
             if title:
                 conversations.set_title(conv_id, title, chats_base_dir)
+            # generate_title() just ran a completion with its own, much
+            # shorter system prompt — on LM Studio's single-slot server that
+            # evicts the long system-prompt prefix llm_client.warm_system_prompt
+            # cached at startup/model-switch, so the NEXT chat turn (of THIS
+            # conversation, or a brand new one) would silently pay the full
+            # prefill cost again. Re-warm right away instead of only once.
+            llm_client.warm_system_prompt(config.LM_STUDIO_BASE_URL, config.LM_STUDIO_MODEL)
 
         threading.Thread(target=_job, daemon=True).start()
 
@@ -590,6 +607,11 @@ def chat_stream(req: ChatRequest):
                     # Zwischentext des noch unfertigen Satzes — sofort weiter,
                     # damit der Nutzer live mitlesen kann. Kein Audio, nur Text.
                     yield json.dumps({"type": "partial", "text": _strip_emojis(event["text"])}) + "\n"
+                elif event["type"] == "status":
+                    # Ersetzt im Frontend das starre "Denkt nach…" durch einen
+                    # Live-Status (denkt nach / schreibt / nutzt Werkzeug X) —
+                    # siehe llm_client._stream_reply_impl für die Sendestellen.
+                    yield json.dumps({"type": "status", "phase": event["phase"], "tool": event.get("tool")}) + "\n"
                 elif event["type"] == "done":
                     full_text = _strip_emojis(event["full_text"])
                     yield json.dumps(

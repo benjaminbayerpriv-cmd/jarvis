@@ -368,6 +368,26 @@
   //    eingefügt (PDFs/Audio landen ehrlich als "kann ich nicht lesen"
   //    statt stillschweigend Datenmüll in den Prompt zu kippen).
   const MODEL_UNREACHABLE_TEXT = 'Ich erreiche mein Sprachmodell gerade nicht. Läuft LM Studio und ist das Modell dort geladen?';
+  // Ersetzt die starre "Denkt nach…"-Anzeige durch einen Live-Status, sobald
+  // das Backend meldet, was gerade wirklich passiert (siehe backend/
+  // llm_client._stream_reply_impl's "status"-Events: thinking/answering/tool).
+  const TOOL_STATUS_LABELS = {
+    opencode: 'Programmiert gerade …', opencode_model: 'Wechselt das Coding-Modell …',
+    opencode_status: 'Schaut nach dem Stand …', set_code_agent: 'Wechselt den Coding-Agenten …',
+    run_shell: 'Führt einen Befehl aus …', build_project: 'Baut das Projekt …',
+    web_search: 'Sucht im Web …', youtube_search: 'Sucht auf YouTube …', browser_tabs: 'Schaut in den Browser …',
+    open_url: 'Öffnet eine Webseite …', open_app: 'Öffnet ein Programm …',
+    open_folder: 'Öffnet einen Ordner …', list_folder: 'Schaut in einen Ordner …',
+    open_file: 'Öffnet eine Datei …', write_file: 'Schreibt eine Datei …',
+    move_file: 'Verschiebt eine Datei …', delete_path: 'Löscht etwas …',
+    get_time: 'Schaut auf die Uhr …', get_weather: 'Prüft das Wetter …',
+    calculate: 'Rechnet …', add_note: 'Schreibt eine Notiz …', visualize: 'Erstellt eine Grafik …',
+  };
+  function statusPhaseText(phase, tool) {
+    if (phase === 'tool') return TOOL_STATUS_LABELS[tool] || `Nutzt „${tool}“ …`;
+    if (phase === 'answering') return 'Schreibt …';
+    return 'Denkt nach …';
+  }
   const ATTACH_MAX_CHARS = 20000;
   let pendingImages = [];  // {name, image: Data-URL} der aktuell angehängten Bilder, siehe sendMessage
   // Ungesendeter Entwurf pro Chat: ohne das wanderte getippter (aber nicht
@@ -1422,11 +1442,20 @@
       }
       body.js-app-active > :not(#jsApp):not(#jarvisOrb):not(#jarvisOrbHit):not(#jsSpeechTerm):not(#jsCamWindow):not(#jsSpeechbar):not(#jsSpeechCaption):not(#jsSettingsSheet):not(#jsNewProjectSheet):not(#jsRenameChatSheet):not(#jsBtwWindow):not(#jsNotice):not(script):not(style) { display:none !important; }
       body.js-app-active { overflow:hidden; }
-      /* Sanftes Einblenden bei jedem Stream-Update (siehe setAssistantText)
-         statt abruptem Aufploppen des neuen Texts. */
-      .js-text-fade { animation: jsTextFadeIn .32s ease-out; }
-      @keyframes jsTextFadeIn { from { opacity: .35; } to { opacity: 1; } }
-      @media (prefers-reduced-motion: reduce) { .js-text-fade { animation: none; } }
+      /* Jeder neu gestreamte Buchstabe (siehe setAssistantText/wrapCharsForReveal)
+         erscheint erst unscharf und schärft sich dann ein, statt abrupt
+         aufzuploppen. Nur .js-char-new bekommt die Animation — bereits
+         gezeigte Zeichen werden bei jedem Stream-Update zwar neu aufgebaut
+         (kompletter innerHTML-Ersatz), aber ohne diese Klasse, damit sie
+         nicht bei jedem Tick erneut unscharf aufblitzen. */
+      /* Kurz gehalten (statt z.B. .4s): partial-Events (siehe sendMessage)
+         feuern oft alle paar hundert Millisekunden und lösen jeweils einen
+         kompletten innerHTML-Neuaufbau aus, der jede noch laufende
+         Animation sofort beendet — eine lange Dauer wurde dadurch
+         praktisch nie sichtbar zu Ende gespielt. */
+      .js-char-new { display:inline; animation: jsCharBlurIn .18s ease-out both; }
+      @keyframes jsCharBlurIn { from { filter: blur(6px); opacity: 0; } to { filter: blur(0); opacity: 1; } }
+      @media (prefers-reduced-motion: reduce) { .js-char-new { animation: none; } }
       /* Echter claude.ai "Squish"-Press-Effekt (aus --cds-btn-spring extrahiert): schnelles
          Einschrumpfen beim Klicken, dann sanftes Zurueckfedern. NUR auf echten Action-Icon-
          Buttons (data-cds="Button" im Original: Suchen, Sortieren, Mehr-Optionen, Senden,
@@ -3172,6 +3201,13 @@
             fullText = evt.full_text || '';
           } else if (evt.type === 'hardware_block') {
             renderHardwareBlockActions(said.parentElement, evt.model, outgoingText);
+          } else if (evt.type === 'status') {
+            // Live-Status statt starrem "Denkt nach…" (siehe backend/
+            // llm_client._stream_reply_impl für die Sendestellen). Nur
+            // solange noch kein echter Text da ist — sobald ein Tool-Aufruf
+            // NACH schon sichtbarem Text passiert, bliebe sonst der bereits
+            // gezeigte Text durch die Status-Zeile überschrieben.
+            if (said.classList.contains('thinking')) said.textContent = statusPhaseText(evt.phase, evt.tool);
           }
         }
       }
@@ -3663,19 +3699,59 @@
     return html.replace(/ (\d+) /g, (m, idx) => blocks[Number(idx)]);
   }
 
+  // Baut jeden Text-Knoten von el in Ein-Zeichen-<span>s um und markiert nur
+  // die NEU hinzugekommenen (Index >= prevLen) mit .js-char-new, die die
+  // Unschärfe-Einblend-Animation abspielt (siehe CSS oben) — bereits gezeigte
+  // Zeichen werden zwar bei jedem Stream-Update komplett neu aufgebaut (kompletter
+  // innerHTML-Ersatz in setAssistantText), bekommen die Klasse aber nicht, damit
+  // sie nicht bei jedem Tick erneut unscharf aufblitzen (das Flacker-Problem von
+  // vorher, nur jetzt pro Zeichen statt pro ganzer Nachricht). Codeblöcke
+  // (<pre>) bleiben unangetastet — bei Quellcode wirkt ein Buchstaben-für-
+  // Buchstabe-Weichzeichner nur wie ein Rendering-Fehler, nicht wie ein Effekt.
+  function wrapCharsForReveal(el, prevLen) {
+    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, {
+      acceptNode(node) {
+        return node.parentElement && node.parentElement.closest('pre')
+          ? NodeFilter.FILTER_REJECT
+          : NodeFilter.FILTER_ACCEPT;
+      },
+    });
+    const textNodes = [];
+    let n;
+    while ((n = walker.nextNode())) textNodes.push(n);
+    let idx = 0;
+    for (const node of textNodes) {
+      const frag = document.createDocumentFragment();
+      for (const ch of node.nodeValue) {
+        if (idx >= prevLen) {
+          const span = document.createElement('span');
+          span.className = 'js-char-new';
+          // KEINE Staffelung mehr — alle neu hinzugekommenen Zeichen eines
+          // Updates blenden gleichzeitig ein, nicht nacheinander (Nutzer-
+          // Feedback: "soll auf mehrere Buchstaben gleichzeitig sein
+          // können"). Nebeneffekt, der auch den eigentlichen Bug behebt:
+          // jedes Stream-Update baut das komplette innerHTML neu auf (siehe
+          // setAssistantText), was jede noch laufende Animation sofort
+          // abwürgt — eine Verzögerung ließ spätere Zeichen eines Batches
+          // regelmäßig gar nicht erst zum Start kommen, bevor der nächste
+          // Rebuild sie schon wieder ersetzt hatte.
+          span.textContent = ch;
+          frag.appendChild(span);
+        } else {
+          frag.appendChild(document.createTextNode(ch));
+        }
+        idx++;
+      }
+      node.parentNode.replaceChild(frag, node);
+    }
+    return idx;
+  }
+
   function setAssistantText(el, text) {
     el.dataset.raw = text;
     el.innerHTML = renderMarkdown(text);
-    // Sanftes Einblenden statt abruptem Aufploppen bei jedem Stream-Update
-    // (partial/sentence-Events kommen alle paar hundert Millisekunden, jedes
-    // ersetzt bisher einfach kommentarlos das ganze innerHTML). Klasse erst
-    // entfernen und einen Reflow erzwingen, sonst spielt eine CSS-Animation
-    // beim erneuten Hinzufügen derselben Klasse nicht noch einmal ab — bei
-    // schnell aufeinanderfolgenden Updates ergibt das einen fließenden
-    // Überblend-Effekt statt einzelner Ruckler.
-    el.classList.remove('js-text-fade');
-    void el.offsetWidth;
-    el.classList.add('js-text-fade');
+    const prevLen = Number(el.dataset.revealedLen || 0);
+    el.dataset.revealedLen = String(wrapCharsForReveal(el, prevLen));
   }
 
   function openPanelSocket() {
