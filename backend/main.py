@@ -354,10 +354,19 @@ def _render_app_shell(frontend_dir: Path, static_prefix: str) -> str:
     # alten, kollabierten Version hängen und der User sähe weiter die tote UI.
     # Der Code-Tab rendert die echte opencode-TUI in einem xterm.js-Terminal,
     # also lokal die xterm-Bundles (als static/*) direkt vor claude-app.js laden.
+    # Das Kamera-Modul (Hand-/Körpertracking) muss vor claude-app.js laufen,
+    # weil buildUi() es beim Aufbau in die Seitenleiste einhängt. Nur wenn die
+    # Datei in diesem Frontend-Stand existiert — /backup hat sie nicht.
+    camera_script = (
+        '    <script src="{p}/camera-tracking.js?v={v}"></script>\n'.format(p=static_prefix, v=_BUILD)
+        if (frontend_dir / "camera-tracking.js").exists()
+        else ""
+    )
     assets = (
         '    <link rel="stylesheet" href="{p}/xterm.css?v={v}\">\n'.format(p=static_prefix, v=_BUILD)
         + '    <script src="{p}/xterm.js?v={v}"></script>\n'.format(p=static_prefix, v=_BUILD)
         + '    <script src="{p}/xterm-addon-fit.js?v={v}"></script>\n'.format(p=static_prefix, v=_BUILD)
+        + camera_script
         + '    <script src="{p}/claude-app.js?v={v}"></script>\n'.format(p=static_prefix, v=_BUILD)
     )
     return html.replace("</body>", f"{assets}  </body>")

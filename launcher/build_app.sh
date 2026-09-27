@@ -24,6 +24,9 @@ fi
 PLIST="launcher/dist/Jarvis.app/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Add :NSMicrophoneUsageDescription string 'Jarvis braucht Mikrofonzugriff, um dir zuzuhoeren.'" "$PLIST" 2>/dev/null \
   || /usr/libexec/PlistBuddy -c "Set :NSMicrophoneUsageDescription 'Jarvis braucht Mikrofonzugriff, um dir zuzuhoeren.'" "$PLIST"
+# Dasselbe für die Kamera-Seitenleiste (Hand-/Körpertracking).
+/usr/libexec/PlistBuddy -c "Add :NSCameraUsageDescription string 'Jarvis braucht Kamerazugriff fuer das Hand- und Koerpertracking.'" "$PLIST" 2>/dev/null \
+  || /usr/libexec/PlistBuddy -c "Set :NSCameraUsageDescription 'Jarvis braucht Kamerazugriff fuer das Hand- und Koerpertracking.'" "$PLIST"
 
 # PyInstaller signiert das Bundle beim BUNDLE-Schritt bereits ad-hoc; das
 # nachtraegliche Patchen der Info.plist hier macht diese Signatur ungueltig
