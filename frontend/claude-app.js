@@ -56,6 +56,34 @@
     serif: 'var(--font-anthropic-serif, Georgia, serif)',
   };
 
+  // Sparkle-Streifen fürs Gemini-Theme: kleine funkelnde Vierstern-Zeichen
+  // ("✦", genau wie Googles Gemini-Icon) in mehreren Farben, über einen
+  // farbigen Verlauf gestreut, als per repeat-x gekachelte SVG-Textur. Feste
+  // statt zufälliger Positionen, damit das Theme bei jedem Laden gleich
+  // aussieht statt bei jedem Reload neu zu würfeln.
+  function _geminiSparkleLayer() {
+    const colors = ['#4285F4', '#8b5cf6', '#ec4899', '#f9ab00', '#34d399', '#60a5fa'];
+    // y über die ganze Bandhöhe (0-480) verteilt statt nur in einem
+    // schmalen Streifen — das Band selbst ist prozentual zur App-Höhe
+    // groß (siehe jsHeroBg unten), weil der Composer (js-composer) einen
+    // eigenen, fast deckenden Verlauf über den unteren Bildschirmbereich
+    // legt: ein schmales Band läge komplett darunter versteckt, nur ein
+    // hoch genug reichendes schimmert oben aus dessen Transparenz-Zone.
+    const sparkles = [
+      { x: 18, y: 340, s: 15, c: 0, r: -12 }, { x: 52, y: 150, s: 9, c: 1, r: 10 },
+      { x: 88, y: 400, s: 12, c: 2, r: 20 }, { x: 122, y: 220, s: 17, c: 3, r: -6 },
+      { x: 158, y: 420, s: 8, c: 4, r: 16 }, { x: 190, y: 120, s: 13, c: 5, r: 0 },
+      { x: 224, y: 310, s: 10, c: 2, r: -18 }, { x: 258, y: 175, s: 16, c: 0, r: 8 },
+      { x: 292, y: 390, s: 9, c: 3, r: -10 }, { x: 326, y: 95, s: 14, c: 1, r: 22 },
+      { x: 358, y: 270, s: 11, c: 4, r: -4 }, { x: 392, y: 370, s: 15, c: 5, r: 14 },
+      { x: 40, y: 440, s: 10, c: 3, r: 6 }, { x: 140, y: 60, s: 8, c: 2, r: -14 },
+      { x: 240, y: 440, s: 12, c: 1, r: 18 }, { x: 340, y: 60, s: 9, c: 5, r: -8 },
+    ];
+    const glyphs = sparkles.map((p) => `<text x="${p.x}" y="${p.y}" font-size="${p.s}" fill="${colors[p.c]}" opacity=".9" transform="rotate(${p.r} ${p.x} ${p.y})">✦</text>`).join('');
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="410" height="480">${glyphs}</svg>`;
+    return `url("data:image/svg+xml,${encodeURIComponent(svg)}") repeat-x bottom / 410px 55%`;
+  }
+
   // Vier Theme-Paletten — "dark" ist die ursprüngliche claude.ai-Dark-Palette
   // (aus dem live-DOM extrahiert: --cds-surface-1 #151515 für Seite/Sidebar,
   // --cds-surface-3 #1f1f1e fürs Composer-Karten, --cds-gray-200/-350 für
@@ -93,17 +121,18 @@
       jsBorder: 'rgba(57,255,20,.22)', jsBorderStrong: 'rgba(57,255,20,.36)',
       jsAccent: '#39ff14', jsAccentTint: 'rgba(57,255,20,.18)', jsHeroBg: '#000000',
     } },
-    // Angelehnt an die Google-Gemini-App: tiefes Violett-Schwarz mit einem
-    // warmen Magenta/Violett-Glanz am unteren Bildrand (jsHeroBg, nur für
-    // die große App-Hülle — siehe C.heroBg), sonst flaches dunkles Violett.
+    // Angelehnt an die Google-Gemini-App: fast komplett schwarz, nur ganz
+    // unten ein bunter Verlauf mit funkelnden Sparkle-Zeichen (jsHeroBg,
+    // nur für die große App-Hülle — siehe C.heroBg), sonst reines Schwarz
+    // mit einem violetten Akzent.
     { id: 'gemini', label: 'Gemini', vars: {
-      jsBg: '#100b1b', jsBgSoft: '#0b0814', jsBgSurface3: '#1d1430', jsBgHover: 'rgba(196,168,255,.11)',
+      jsBg: '#000000', jsBgSoft: '#000000', jsBgSurface3: '#111111', jsBgHover: 'rgba(140,110,255,.12)',
       jsText: '#f3eefc', jsTextSoft: '#c9bfe3', jsTextDim: '#8f80ab',
       jsBorder: 'rgba(200,170,255,.14)', jsBorderStrong: 'rgba(200,170,255,.26)',
       jsAccent: '#7c6ff5', jsAccentTint: 'rgba(124,111,245,.18)',
-      jsHeroBg: 'radial-gradient(ellipse 140% 90% at 50% 130%, rgba(236,72,153,.32), transparent 60%), '
-        + 'radial-gradient(ellipse 120% 70% at 50% 105%, rgba(124,111,245,.30), transparent 55%), '
-        + 'linear-gradient(180deg, #0a0712 0%, #120b20 55%, #1c1030 100%)',
+      jsHeroBg: _geminiSparkleLayer() + ', '
+        + 'linear-gradient(0deg, rgba(66,133,244,.55) 0%, rgba(139,92,246,.5) 30%, rgba(236,72,153,.4) 60%, transparent 100%) no-repeat bottom / 100% 55%, '
+        + '#000000',
     } },
   ];
   const JARVIS_THEME_DEFAULT = 'dark';
