@@ -86,6 +86,13 @@
       jsBorder: 'rgba(57,255,20,.22)', jsBorderStrong: 'rgba(57,255,20,.36)',
       jsAccent: '#39ff14', jsAccentTint: 'rgba(57,255,20,.18)',
     } },
+    // Reines #000000 überall, ohne jeden Farbstich — Akzent: Gold/Amber.
+    { id: 'noir', label: 'Pechschwarz', vars: {
+      jsBg: '#000000', jsBgSoft: '#000000', jsBgSurface3: '#141414', jsBgHover: 'rgba(245,177,50,.12)',
+      jsText: '#f2f2f0', jsTextSoft: '#b8b6b0', jsTextDim: '#7a7873',
+      jsBorder: 'rgba(245,177,50,.16)', jsBorderStrong: 'rgba(245,177,50,.28)',
+      jsAccent: '#f5b132', jsAccentTint: 'rgba(245,177,50,.16)', jsHeroBg: '#000000',
+    } },
   ];
   const JARVIS_THEME_DEFAULT = 'dark';
 
