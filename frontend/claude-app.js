@@ -45,6 +45,13 @@
     borderStrong: 'var(--jsBorderStrong)',
     accent: 'var(--jsAccent)',
     accentTint: 'var(--jsAccentTint)', // dezenter Akzent-Ton für Hervorhebungen (z.B. aktives Modell)
+    // Eigene Variable statt einfach ${C.bg} für die App-Hülle (buildUi()):
+    // bei den meisten Themes ist das derselbe flache Ton wie jsBg, aber ein
+    // Theme wie "gemini" braucht dort einen mehrschichtigen Gradient fürs
+    // große Bühnenbild — ${C.bg} wird an dutzenden anderen, viel kleineren
+    // Stellen (Inputs, Buttons) wiederverwendet, wo ein Gradient nur
+    // hässlich aneinandergereiht abgeschnitten würde.
+    heroBg: 'var(--jsHeroBg)',
     font: 'var(--font-anthropic-sans, system-ui, sans-serif)',
     serif: 'var(--font-anthropic-serif, Georgia, serif)',
   };
@@ -59,32 +66,44 @@
       jsBg: '#151515', jsBgSoft: '#151515', jsBgSurface3: '#1f1f1e', jsBgHover: 'rgba(255,255,255,.11)',
       jsText: '#f0efe8', jsTextSoft: '#c3c0b4', jsTextDim: '#8a8680',
       jsBorder: 'rgba(240,236,225,.14)', jsBorderStrong: 'rgba(240,236,225,.24)',
-      jsAccent: '#d97757', jsAccentTint: 'rgba(217,119,87,.14)',
+      jsAccent: '#d97757', jsAccentTint: 'rgba(217,119,87,.14)', jsHeroBg: '#151515',
     } },
     { id: 'light', label: 'Hell', vars: {
       jsBg: '#faf9f5', jsBgSoft: '#f3f1ea', jsBgSurface3: '#ffffff', jsBgHover: 'rgba(31,29,26,.06)',
       jsText: '#211f1b', jsTextSoft: '#57534a', jsTextDim: '#8c8779',
       jsBorder: 'rgba(31,29,26,.12)', jsBorderStrong: 'rgba(31,29,26,.22)',
-      jsAccent: '#bd5b3c', jsAccentTint: 'rgba(189,91,60,.12)',
+      jsAccent: '#bd5b3c', jsAccentTint: 'rgba(189,91,60,.12)', jsHeroBg: '#faf9f5',
     } },
     { id: 'ocean', label: 'Ozean', vars: {
       jsBg: '#0d1420', jsBgSoft: '#0a0f18', jsBgSurface3: '#16202e', jsBgHover: 'rgba(255,255,255,.08)',
       jsText: '#e8eef5', jsTextSoft: '#aebdcf', jsTextDim: '#71889f',
       jsBorder: 'rgba(180,205,230,.14)', jsBorderStrong: 'rgba(180,205,230,.24)',
-      jsAccent: '#4d9de0', jsAccentTint: 'rgba(77,157,224,.16)',
+      jsAccent: '#4d9de0', jsAccentTint: 'rgba(77,157,224,.16)', jsHeroBg: '#0d1420',
     } },
     { id: 'sunset', label: 'Sonnenuntergang', vars: {
       jsBg: '#1a1015', jsBgSoft: '#170e13', jsBgSurface3: '#251720', jsBgHover: 'rgba(255,255,255,.09)',
       jsText: '#f5e9ec', jsTextSoft: '#d1b3bc', jsTextDim: '#977581',
       jsBorder: 'rgba(245,180,200,.14)', jsBorderStrong: 'rgba(245,180,200,.24)',
-      jsAccent: '#e0607a', jsAccentTint: 'rgba(224,96,122,.16)',
+      jsAccent: '#e0607a', jsAccentTint: 'rgba(224,96,122,.16)', jsHeroBg: '#1a1015',
     } },
     // Reines Schwarz mit hellgrünem Akzent — Terminal-/Matrix-Anmutung.
     { id: 'matrix', label: 'Matrix', vars: {
       jsBg: '#000000', jsBgSoft: '#000000', jsBgSurface3: '#0d1a0d', jsBgHover: 'rgba(57,255,20,.14)',
       jsText: '#39ff14', jsTextSoft: '#2de00f', jsTextDim: '#1f9c0b',
       jsBorder: 'rgba(57,255,20,.22)', jsBorderStrong: 'rgba(57,255,20,.36)',
-      jsAccent: '#39ff14', jsAccentTint: 'rgba(57,255,20,.18)',
+      jsAccent: '#39ff14', jsAccentTint: 'rgba(57,255,20,.18)', jsHeroBg: '#000000',
+    } },
+    // Angelehnt an die Google-Gemini-App: tiefes Violett-Schwarz mit einem
+    // warmen Magenta/Violett-Glanz am unteren Bildrand (jsHeroBg, nur für
+    // die große App-Hülle — siehe C.heroBg), sonst flaches dunkles Violett.
+    { id: 'gemini', label: 'Gemini', vars: {
+      jsBg: '#100b1b', jsBgSoft: '#0b0814', jsBgSurface3: '#1d1430', jsBgHover: 'rgba(196,168,255,.11)',
+      jsText: '#f3eefc', jsTextSoft: '#c9bfe3', jsTextDim: '#8f80ab',
+      jsBorder: 'rgba(200,170,255,.14)', jsBorderStrong: 'rgba(200,170,255,.26)',
+      jsAccent: '#7c6ff5', jsAccentTint: 'rgba(124,111,245,.18)',
+      jsHeroBg: 'radial-gradient(ellipse 140% 90% at 50% 130%, rgba(236,72,153,.32), transparent 60%), '
+        + 'radial-gradient(ellipse 120% 70% at 50% 105%, rgba(124,111,245,.30), transparent 55%), '
+        + 'linear-gradient(180deg, #0a0712 0%, #120b20 55%, #1c1030 100%)',
     } },
   ];
   const JARVIS_THEME_DEFAULT = 'dark';
@@ -262,7 +281,7 @@
   function jarvisThemeSwatchHtml(t) {
     return `
           <button class="js-theme-swatch" data-theme-id="${t.id}" title="${t.label}" style="display:flex;flex-direction:column;align-items:center;gap:6px;background:none;border:none;cursor:pointer;padding:0;font-family:${C.font};">
-            <span class="js-theme-swatch-box" data-theme-id="${t.id}" style="width:64px;height:44px;border-radius:10px;border:2px solid transparent;overflow:hidden;position:relative;background:${t.vars.jsBg};box-shadow:inset 0 0 0 1px ${t.vars.jsBorder};">
+            <span class="js-theme-swatch-box" data-theme-id="${t.id}" style="width:64px;height:44px;border-radius:10px;border:2px solid transparent;overflow:hidden;position:relative;background:${t.vars.jsHeroBg || t.vars.jsBg};box-shadow:inset 0 0 0 1px ${t.vars.jsBorder};">
               <span style="position:absolute;left:6px;top:6px;right:6px;height:8px;border-radius:3px;background:${t.vars.jsBgSurface3};"></span>
               <span style="position:absolute;left:6px;bottom:6px;width:16px;height:16px;border-radius:50%;background:${t.vars.jsAccent};"></span>
             </span>
@@ -981,7 +1000,7 @@
   function buildUi() {
     uiEl = document.createElement('div');
     uiEl.id = 'jsApp';
-    uiEl.style.cssText = `position:fixed;inset:0;z-index:30;display:flex;background:${C.bg};color:${C.text};font-family:${C.font};`;
+    uiEl.style.cssText = `position:fixed;inset:0;z-index:30;display:flex;background:${C.heroBg};color:${C.text};font-family:${C.font};`;
     uiEl.innerHTML = `
       <aside class="js-sidebar" style="width:308px;flex:0 0 308px;height:100%;display:flex;flex-direction:column;background:${C.bgSoft};border-right:1px solid ${C.border};position:relative;">
         <div class="js-sidebar-top" style="padding:16px 8px 6px;display:flex;flex-direction:column;gap:12px;">
