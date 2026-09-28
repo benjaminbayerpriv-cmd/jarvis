@@ -123,6 +123,7 @@ Im Projektordner (nach dem Entpacken/Zweig auschecken):
 python jarvis.py            # interaktives Menü; ohne venv startet es den Einrichtungs-Assistenten
 jarvis setup                # Assistent: Python, .venv, Pakete, .env, LM Studio, Token, MCP
 jarvis deps                 # fehlende Pakete nachinstallieren (behebt Import-Fehler)
+jarvis update               # neueste Version von GitHub holen (git pull) + Server neu starten
 jarvis doctor               # prüft alles und zeigt, was fehlt
 jarvis start --no-browser   # Server im Hintergrund starten (Log: .jarvis/server.log)
 jarvis stop / restart       # beenden / neu starten

@@ -374,6 +374,7 @@ def entries(running: bool) -> list[tuple[str, str, str]]:
         ("autostart", "Autostart", "aktiv" if server.autostart_installed() else "aus"),
         ("doctor", "Doctor", "alles prüfen und fehlende Schritte anbieten"),
         ("deps", "Pakete nachinstallieren", "behebt Import-Fehler, legt .venv ggf. neu an"),
+        ("update", "Update (git pull)", "neueste Version von GitHub holen, Server neu starten"),
         ("setup", "Einrichtung (Assistent)", "Installation, Token, Modell, MCP"),
         ("tests", "Tests ausführen", "test_jarvis.py, test_features.py"),
         ("build", "App bauen", "Jarvis.exe bzw. Jarvis.app"),
@@ -386,7 +387,8 @@ HANDLERS = {
     "ask": act_ask, "logs": act_logs, "lmstudio": act_lmstudio, "token": act_token,
     "scan": lambda: scan.run(), "mcp": act_mcp, "settings": act_settings,
     "config": act_config_json, "hotkey": act_hotkey, "autostart": act_autostart,
-    "doctor": act_doctor, "deps": lambda: install.ensure_deps(), "setup": act_setup,
+    "doctor": act_doctor, "deps": lambda: install.ensure_deps(), "update": lambda: install.update(),
+    "setup": act_setup,
     "tests": act_tests, "build": act_build,
     "folder": act_folder,
 }

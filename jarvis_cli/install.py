@@ -14,8 +14,10 @@ so the terminal shows one line at a time instead of pip's 200 progress lines.
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 import sys
+from pathlib import Path
 from typing import Callable
 
 from . import context as ctx
@@ -56,6 +58,93 @@ def _run(args: list[str], timeout: int = 600) -> tuple[int, str]:
 
 def _tail(output: str, lines: int = 18) -> list[str]:
     return [line for line in output.splitlines() if line.strip()][-lines:]
+
+
+def _git_exe() -> str | None:
+    """Git binary — on PATH, or known fallback homes (hermes/Git for Windows)."""
+    found = shutil.which("git")
+    if found:
+        return found
+    for cand in (
+        Path.home() / "AppData" / "Local" / "hermes" / "git" / "cmd" / "git.exe",
+        Path(r"C:\Program Files\Git\cmd\git.exe"),
+    ):
+        if cand.exists():
+            return str(cand)
+    return None
+
+
+def update() -> bool:
+    """Pull the newest version from GitHub, install any new requirements and
+    restart a running server so the new code takes effect."""
+    ui.heading("Update")
+    git = _git_exe()
+    if not git:
+        ui.fail("Kein Git gefunden — Git für Windows installieren und  jarvis update  erneut.")
+        return False
+    if not (ctx.ROOT / ".git").exists():
+        ui.fail(f"{ctx.ROOT} ist kein Git-Klons — Update geht nur in einer "
+                "Kopie, die mit  git clone https://github.com/benjaminbayerpriv-cmd/jarvis  "
+                "angelegt wurde.")
+        return False
+
+    def git_run(*args: str, timeout: int = 180) -> tuple[int, str]:
+        return _run([git, *args], timeout=timeout)
+
+    old = git_run("rev-parse", "HEAD")[1].strip()
+    if not old:
+        ui.fail("Konnte die aktuelle Revision nicht bestimmen.")
+        return False
+    was_running = server.is_running()
+
+    dirty = git_run("status", "--porcelain")[1].strip()
+    if dirty:
+        lines = dirty.splitlines()
+        ui.warn(f"{len(lines)} lokal geänderte Datei(en) — das Update holt nur die "
+                "neueste Version, deine Änderungen bleiben erhalten (Fast-Forward).")
+        if sys.stdin.isatty() and not ui.confirm("Weiter mit dem Update?", default=True):
+            ui.info("Abgebrochen.")
+            return False
+
+    code, output = git_run("fetch", "--tags", "--prune", "origin", timeout=240)
+    if code != 0:
+        ui.fail("Zugriff auf GitHub fehlgeschlagen — Internet/GitHub-Login prüfen.")
+        ui.lines("\n".join(_tail(output)))
+        return False
+    remote = git_run("rev-parse", "@{u}")[1].strip()
+    if remote == old:
+        ui.status("ok", "Version", "schon aktuell", old[:12])
+        return True
+
+    ui.info(f"von {old[:12]} auf die neueste Version wird geholt …")
+    with ui.spinner("git pull --ff-only"):
+        code, output = git_run("pull", "--ff-only")
+    if code != 0:
+        ui.fail("Schneller Vorlauf war nicht möglich (lokale Commits?). "
+                "Kurz die Ausgabe:")
+        ui.lines("\n".join(_tail(output)))
+        return False
+    new = git_run("rev-parse", "HEAD")[1].strip()
+    log = git_run("log", "--reverse", "--oneline", "--no-decorate",
+                  f"{old}..HEAD")[1].splitlines()
+    ui.status("ok", "Version", f"jetzt {new[:12]}", f"vorher {old[:12]}")
+    if log:
+        ui.info("Neue Commits:")
+        for line in log[:10]:
+            ui.lines("  " + line)
+        if len(log) > 10:
+            ui.lines(f"  … und {len(log) - 10} weitere")
+
+    if not ensure_deps():
+        ui.note("Version ist da, aber die Paket-Prüfung war nicht grün —  jarvis deps")
+        return False
+    if was_running and not server.is_running():
+        with ui.spinner("Server wird neu gestartet"):
+            restart_ok = server.start(open_browser=False, quiet=True)
+        if not restart_ok:
+            ui.fail("Server konnte nicht neu starten —  jarvis start")
+            return False
+    return True
 
 
 # ------------------------------------------------------------------- stages

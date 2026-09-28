@@ -21,6 +21,7 @@ EPILOG = """Beispiele:
   jarvis setup               Einrichtungs-Assistent für eine frische Installation
   jarvis install             Installation ohne Rückfragen
   jarvis deps                Fehlende Pakete nachinstallieren (bei Import-Fehlern)
+  jarvis update              Neueste Version von GitHub holen (git pull)
   jarvis token               LM-Studio-Token aus der Zwischenablage einfügen
   jarvis scan --extended     Netzwerksuche über alle üblichen LLM-Ports
   jarvis start --no-browser  Server im Hintergrund starten
@@ -48,6 +49,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     deps = sub.add_parser("deps", help="Fehlende Pakete installieren (behebt Import-Fehler)")
     deps.add_argument("--force", action="store_true", help="alles neu installieren, nicht nur Fehlendes")
+
+    sub.add_parser("update", help="Neueste Version von GitHub holen (git pull + Pakete)")
 
     sub.add_parser("doctor", help="Alles prüfen und Probleme anzeigen")
 
@@ -335,6 +338,7 @@ COMMANDS = {
     "setup": lambda args: install.wizard(interactive=True, extras=args.extras),
     "install": lambda args: install.quick_install(force=args.force),
     "deps": lambda args: install.ensure_deps(force=args.force),
+    "update": lambda args: install.update(),
     "doctor": cmd_doctor,
     "status": cmd_status,
     "start": lambda args: (server.start(not args.no_browser, not args.no_wait)
