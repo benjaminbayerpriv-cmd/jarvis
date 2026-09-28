@@ -327,7 +327,7 @@ def list_models() -> list[dict]:
     try:
         import requests
 
-        resp = requests.get(f"{_lmstudio_host()}/api/v0/models", timeout=5)
+        resp = requests.get(f"{_lmstudio_host()}/api/v0/models", headers=config.lm_studio_headers(), timeout=5)
         resp.raise_for_status()
         data = resp.json().get("data", [])
     except Exception as exc:  # noqa: BLE001 - report as empty, UI shows a hint
@@ -671,7 +671,13 @@ def ensure_provider_config(models: list[dict], model_id: str) -> dict:
     cfg["provider"][PROVIDER_ID] = {
         "npm": "@ai-sdk/openai-compatible",
         "name": "LM Studio (local)",
-        "options": {"baseURL": config.LM_STUDIO_BASE_URL, "apiKey": "lm-studio"},
+        # "lm-studio" is the conventional placeholder OpenAI-compatible
+        # local servers accept when no real auth is configured — the
+        # ai-sdk client needs a non-empty apiKey either way. Swapped for
+        # the real token once LM Studio's "Require Authentication" is on
+        # (see config.LM_STUDIO_API_TOKEN), or opencode's own LM Studio
+        # calls would start failing with 401 the moment that's enabled.
+        "options": {"baseURL": config.LM_STUDIO_BASE_URL, "apiKey": config.LM_STUDIO_API_TOKEN or "lm-studio"},
         "models": {m["id"]: {"name": m["id"]} for m in models},
     }
     # model_id ist eine vollständige ID inklusive Provider — auch ein Modell

@@ -15,6 +15,36 @@ unten unterschiedlich sind, ist es gekennzeichnet.
   `LM_STUDIO_BASE_URL` verwenden — unter Windows verzögert die
   "localhost"-Namensauflösung sonst jede einzelne Anfrage an LM Studio um
   rund 2 Sekunden.
+- **LM Studio 0.4.0 oder neuer.** Jarvis chattet über LM Studios nativen
+  Endpunkt `/api/v1/chat` und gibt dem Modell seine Werkzeuge über einen
+  eigenen MCP-Server (`backend/mcp_server.py`, Port `JARVIS_MCP_PORT`,
+  Standard 8765). Dafür einmalig, in dieser Reihenfolge:
+  1. Jarvis einmal starten. Es gibt in der Konsole einen fertigen
+     JSON-Block aus (`[mcp] Einmalig in LM Studios mcp.json eintragen:`).
+  2. In LM Studio: rechte Seitenleiste -> Tab "Program" -> "Install" ->
+     "Edit mcp.json" — den ausgegebenen Block dort einfügen (nur den
+     Inhalt zwischen den äußeren `{ }`, falls schon andere Server drinstehen).
+  3. In LM Studio unter "Developer" -> "Server Settings" **"Allow calling
+     servers from mcp.json"** einschalten. Das setzt außerdem
+     **"Require Authentication"** voraus — schaltet LM Studio das mit ein,
+     dann braucht auch Jarvis selbst ein Token für seine Anfragen an LM
+     Studio: in LM Studio unter "Manage Tokens" eines erzeugen und in
+     Jarvis unter Einstellungen -> LM Studio -> "LM-Studio-API-Token"
+     eintragen (oder `LM_STUDIO_API_TOKEN` in `.env`).
+
+  (Der alte Weg — LM Studio den MCP-Server dynamisch pro Chat-Anfrage
+  mitzuteilen, `"ephemeral_mcp"` — geht seit LM Studio 0.4.15 nicht mehr:
+  LM Studio lehnt das für jede nicht-öffentliche Adresse ab, auch
+  `127.0.0.1` auf demselben Rechner — ein SSRF-Schutz. Der mcp.json-Weg
+  oben ist davon nicht betroffen, weil die Adresse dort einmalig von Hand
+  eingetragen wird, nicht aus einer Chat-Anfrage kommt.)
+
+  Läuft LM Studio auf einem anderen Rechner im Netzwerk, muss dieser
+  Rechner Jarvis unter Port 8765 erreichen können (Firewall-Abfrage beim
+  ersten Start von Jarvis zulassen) — und der `url`-Wert im mcp.json-Eintrag
+  muss Jarvis' LAN-Adresse statt `127.0.0.1` tragen (steht so in der
+  ausgegebenen Konsolen-Meldung, sobald LM Studio nicht auf demselben
+  Rechner läuft).
 - ElevenLabs API-Key in `.env` ist optional — ohne Key (oder wenn das
   Kontingent aufgebraucht ist) spricht Jarvis automatisch mit der lokalen
   Supertonic-Stimme weiter, siehe unten.

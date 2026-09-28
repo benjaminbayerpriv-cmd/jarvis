@@ -31,6 +31,20 @@ WHISPER_MODEL = os.environ.get("WHISPER_MODEL", "medium")
 LM_STUDIO_BASE_URL = os.environ.get("LM_STUDIO_BASE_URL", "http://127.0.0.1:1234/v1")
 LM_STUDIO_MODEL = os.environ.get("LM_STUDIO_MODEL", "google/gemma-4-e4b")
 
+# API token LM Studio itself requires once its "Require Authentication"
+# server setting is on — a prerequisite for "Allow calling servers from
+# mcp.json" (see backend/mcp_server.py, which Jarvis's tool-calling depends
+# on). Without a token here, every Jarvis request to LM Studio would start
+# failing with 401 the moment that setting is enabled. Empty by default —
+# only needed once Require Authentication is switched on in LM Studio.
+LM_STUDIO_API_TOKEN = os.environ.get("LM_STUDIO_API_TOKEN", "")
+
+
+def lm_studio_headers() -> dict:
+    """Authorization header for a request to LM Studio, or {} when no token
+    is configured (LM Studio's Require Authentication is off, the default)."""
+    return {"Authorization": f"Bearer {LM_STUDIO_API_TOKEN}"} if LM_STUDIO_API_TOKEN else {}
+
 # Embedding model for semantic memory search (backend/vector_memory.py) —
 # served by the same LM Studio instance as the chat model, over its
 # OpenAI-compatible /embeddings endpoint. Load it in LM Studio like any
@@ -80,6 +94,25 @@ TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY", "")
 
 JARVIS_HOST = os.environ.get("JARVIS_HOST", "127.0.0.1")
 JARVIS_PORT = int(os.environ.get("JARVIS_PORT", "8000"))
+# Port of the MCP server LM Studio calls Jarvis's tools through (see
+# backend/mcp_server.py). Listens on all interfaces, token-protected.
+JARVIS_MCP_PORT = int(os.environ.get("JARVIS_MCP_PORT", "8765"))
+# Bearer token for that MCP server. Persisted (not regenerated per start):
+# LM Studio's SSRF guard blocks the old per-request "ephemeral_mcp" style
+# (any non-public server_url, even 127.0.0.1, confirmed live — see
+# lmstudio-ai/lms#574), so this server is now registered ONCE in LM
+# Studio's own mcp.json instead. A token that changed on every restart
+# would make that one-time entry go stale the moment Jarvis restarts.
+JARVIS_MCP_TOKEN = os.environ.get("JARVIS_MCP_TOKEN", "")
+
+
+def ensure_mcp_token() -> str:
+    global JARVIS_MCP_TOKEN
+    if not JARVIS_MCP_TOKEN:
+        import secrets
+        JARVIS_MCP_TOKEN = secrets.token_urlsafe(32)
+        _persist_env("JARVIS_MCP_TOKEN", JARVIS_MCP_TOKEN)
+    return JARVIS_MCP_TOKEN
 
 NOTES_FILE = ROOT_DIR / "jarvis_notes.md"
 CONFIG_FILE = ROOT_DIR / "config.json"
@@ -128,6 +161,7 @@ _SIMPLE_SETTINGS = {
     "deepseek_base_url": "DEEPSEEK_BASE_URL",
     "deepseek_model": "DEEPSEEK_MODEL",
     "tavily_api_key": "TAVILY_API_KEY",
+    "lm_studio_api_token": "LM_STUDIO_API_TOKEN",
 }
 
 

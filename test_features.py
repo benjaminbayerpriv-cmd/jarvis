@@ -32,16 +32,17 @@ def test_memory_vault():
 
 
 def test_invalid_model_stream_is_safe():
-    real_stream = llm_client._stream_chat
+    real_events, real_options = llm_client._native_events, llm_client._reasoning_options
     try:
-        llm_client._stream_chat = lambda messages: iter([{"error": {"message": "model unloaded"}}])
+        llm_client._reasoning_options = lambda model: []
+        llm_client._native_events = lambda body: (e for e in [{"type": "error", "error": {"message": "model unloaded"}}])
         try:
             list(llm_client.stream_reply("Was ist los?"))
             raise AssertionError("ModelError expected")
         except llm_client.ModelError as exc:
             assert "model unloaded" in str(exc)
     finally:
-        llm_client._stream_chat = real_stream
+        llm_client._native_events, llm_client._reasoning_options = real_events, real_options
 
 
 def test_youtube_routing():

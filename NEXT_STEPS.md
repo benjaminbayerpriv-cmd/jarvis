@@ -1,177 +1,236 @@
 # Übergabe: natives LM-Studio-Tool-Calling + Live-Fortschritt (MCP)
 
-## ERGEBNIS (2026-09-28, zweimal überprüft): Ansatz sieht jetzt tragfähig aus
+Stand: 2026-09-28, von Claude Code.
 
-Eine andere Session (Branch `claude/nice-archimedes-jxyh6q`) hat den
-kompletten Umbau bereits gebaut (MCP-Server, `llm_client.py` auf
-normalisierte Runden-Events umgestellt) — **bevor** der unten
-beschriebene Testschritt 0 durchlief. Claude Code hat das in einem
-isolierten Worktree gegen echtes LM Studio getestet, BEVOR es auf einem
-echten Rechner ausprobiert wurde. Verlauf über zwei Runden:
+## Kurzfassung für die nächste Session
 
-**Runde 1 (Commit `9d502de`):** zwei vermeintliche Blocker gefunden —
-(a) `mcp==2.2.0` zieht angeblich ein inkompatibles `starlette`, die App
-stürze beim Start ab; (b) LM Studio lehnt `ephemeral_mcp` mit
-privaten/LAN-Adressen grundsätzlich ab (Fehlermeldung: "We only allow
-public addresses for dynamic remote MCP connections").
+Der Umbau steht, mit einem wichtigen Kurswechsel gegenüber der ersten
+Fassung: **nicht mehr `ephemeral_mcp`, sondern LM Studios `mcp.json`.**
+Grund und Belege unten unter "Warum `ephemeral_mcp` verworfen wurde".
 
-**Runde 2 (Commit `dd21ab0`):** die andere Session hat (a) selbst
-gegengeprüft und **widerlegt**, und für (b) den MCP-Weg auf LM Studios
-statische `mcp.json`-Registrierung umgestellt (statt `ephemeral_mcp` pro
-Anfrage). Claude Code hat BEIDES unabhängig nachgeprüft, mit korrigierter
-Methode:
+**Live gegen echtes LM Studio bestätigt** (2026-09-28, separat von
+Christoph getestet, siehe `main`-Commit `349b287`): eine echte
+Chat-Anfrage mit `{"type": "plugin", "id": "mcp/jarvis"}` erreicht LM
+Studio korrekt und bekommt eine präzise, LM-Studio-eigene Antwort zurück
+— *"Permission denied to use plugin 'mcp/jarvis' … 'Allow calling servers
+from mcp.json' einschalten"* — statt eines Absturzes oder einer
+kryptischen Meldung. Das bestätigt: das Request-Format wird richtig
+geparst, der Plugin-Id `mcp/jarvis` korrekt erkannt. Getestet wurde
+bewusst OHNE den `mcp.json`-Eintrag wirklich zu registrieren — der letzte
+Schritt (Eintrag wirklich eintragen, "Allow calling servers from
+mcp.json" + "Require Authentication" einschalten, dann ein Tool
+tatsächlich aufrufen lassen) ist der eine verbleibende Punkt vor
+"fertig", siehe Offene Punkte unten.
 
-1. **Abhängigkeitskonflikt — zurückgezogen, war ein eigener Testfehler.**
-   Der erste Test hatte `mcp` nachträglich in ein bereits gefülltes venv
-   installiert statt alles zusammen neu aufzulösen — dabei wählte pip ein
-   zu neues `starlette`. Mit einem echten frischen venv (Python 3.12,
-   `pip install -r requirements.txt` in einem Rutsch) löst pip automatisch
-   kompatible Versionen auf (`starlette==0.41.3`, `sse-starlette==3.0.3`,
-   beide mit `fastapi==0.115.6` verträglich) — App startet sauber, kein
-   Absturz. **Diese Sorge ist vom Tisch.**
+## Was jetzt so läuft
 
-2. **Private Adressen — bestätigt, UND korrekt gelöst.** Live gegen
-   echtes LM Studio (Modell `qwen/qwen3.6-35b-a3b`) getestet: Jarvis
-   druckt beim ersten Kontakt den fertigen `mcp.json`-Eintrag
-   (LAN-Adresse + generiertes Bearer-Token) in die Konsole. Eine echte
-   Chat-Anfrage, die ein Tool braucht, erreicht LM Studio korrekt und
-   bekommt (weil der Eintrag bei diesem Test absichtlich nicht in einem
-   echten LM Studio registriert war) eine klare, verständliche
-   Fehlermeldung zurück ("Permission denied to use plugin 'mcp/jarvis'
-   … 'Allow calling servers from mcp.json' einschalten") statt eines
-   Absturzes oder einer kryptischen Meldung.
+- **LM Studio → `/api/v1/chat`** (nativer Endpunkt, Streaming). Die
+  Werkzeuge bekommt das Modell über `backend/mcp_server.py`, das Jarvis
+  einmalig in LM Studios `mcp.json` einträgt (Konsolen-Ausgabe beim
+  Start, siehe SETUP.md) — nicht mehr dynamisch pro Chat-Anfrage.
+- **DeepSeek** unverändert über den alten OpenAI-kompatiblen Pfad.
+- Eine gemeinsame Antwort-Pipeline für beide (normalisierte
+  Runden-Events, siehe Kommentar über `_openai_round` in
+  `backend/llm_client.py`).
+- Live-Status mit echten Prozenten beim Modell-Laden/Prompt-Verarbeiten;
+  Ladeanzeige beim Modellwechsel.
+- **Neu seit dem Kurswechsel:** LM Studios `mcp.json`-Weg braucht
+  „Require Authentication“ an — dafür kann jetzt in Jarvis unter
+  Einstellungen -> LM Studio ein `LM_STUDIO_API_TOKEN` hinterlegt werden,
+  das bei jeder Anfrage an LM Studio mitgeschickt wird (überall: Chat,
+  Modell-Liste, Laden/Entladen, auch OpenCodes eigene LM-Studio-Anbindung).
 
-**Offen, NICHT mehr von hier aus testbar:** ob der volle Kreislauf
-(Eintrag wirklich in LM Studios `mcp.json` einfügen, "Allow calling
-servers from mcp.json" + "Require Authentication" aktivieren, Jarvis'
-Token dort hinterlegen) tatsächlich zu einem erfolgreichen Tool-Aufruf
-führt. Das braucht manuelles Handeln auf dem Windows-Rechner selbst
-(Datei bearbeiten, Einstellungen umschalten) — Anleitung dafür steht in
-`SETUP.md`. Das ist der nächste, tatsächlich noch offene Schritt.
+## Warum `ephemeral_mcp` verworfen wurde
 
-**Einschätzung:** kein Grund mehr, den Branch zu verwerfen. Empfehlung:
-Christoph/Benjamin lassen den `mcp.json`-Eintrag einmal echt eintragen
-und testen den zweiten curl-Befehl aus `SETUP.md` — klappt der, ist der
-Branch mergebereit (nach normalem Code-Review, ~740 Zeilen Diff).
+Die erste Fassung dieses Umbaus (Commit `9d502de`) nutzte LM Studios
+`ephemeral_mcp`-Integration: der MCP-Server wurde bei JEDER Chat-Anfrage
+neu mit seiner Adresse mitgeschickt. Eine andere Session hat das ungetestet
+gebaut UND danach gegen echtes LM Studio getestet und zwei Blocker
+gemeldet — mit der Schlussfolgerung, den ganzen Ansatz zu verwerfen.
+Beide Behauptungen wurden nachgeprüft, bevor irgendwas verworfen wurde
+(siehe Nutzerpräferenz: erst Beweise sammeln, dann handeln):
 
----
+1. **"Abhängigkeitskonflikt, App stürzt beim Start ab"** — **widerlegt.**
+   Frisches Venv, `pip install -r requirements.txt` wortwörtlich, danach
+   `from backend import main`: läuft sauber durch (nur eine normale
+   `on_event`-Deprecation-Warnung), zweimal unabhängig reproduziert. Die
+   andere Session hat das vermutlich in einer nicht sauberen Umgebung
+   getestet.
+2. **"LM Studio lehnt private/LAN-Adressen für `ephemeral_mcp` ab"** —
+   **bestätigt, über LM Studios eigenen Bug-Tracker, mit identischem
+   Fehlertext:**
+   - [lmstudio-ai/lms#574](https://github.com/lmstudio-ai/lms/issues/574):
+     *"URL resolves to a non-public address. We only allow public
+     addresses for dynamic remote MCP connections."* — betraf sogar
+     `127.0.0.1` auf demselben Rechner.
+   - [lmstudio-ai/lmstudio-bug-tracker#2027](https://github.com/lmstudio-ai/lmstudio-bug-tracker/issues/2027):
+     dieselbe Sperre für `192.168.x.x`, seit LM Studio 0.4.15/0.4.16.
+   - Das ist ein bewusster SSRF-Schutz: eine dynamisch aus einer
+     Chat-Anfrage stammende Adresse darf LM Studio nicht mehr anfragen.
 
-Stand: 2026-09-27, von Claude Code. Grund für diese Datei: Benjamins
-Wochenlimit war fast aufgebraucht, Untersuchung wurde bewusst NICHT
-begonnen, nur recherchiert. Der oben stehende Test wurde am 2026-09-28
-trotzdem nachgeholt, weil ein anderer Branch den Umbau schon ungetestet
-gebaut hatte.
+   `ephemeral_mcp` ist damit für jedes lokale Setup tot, nicht nur für
+   LAN — Punkt 2 alleine hätte gereicht, den Ansatz zu kippen, aber eben
+   nur `ephemeral_mcp`, nicht MCP als Ganzes.
 
-## Ziel
+**Der Ausweg:** LM Studio kennt einen zweiten, unabhängigen Weg,
+MCP-Server bekanntzumachen — vorkonfiguriert in `mcp.json`
+(rechte Seitenleiste -> "Program" -> "Install" -> "Edit mcp.json"), statt
+dynamisch pro Anfrage. Diese SSRF-Sperre betrifft laut LM Studios eigener
+Doku nur den dynamischen Weg; ein einmalig von Hand eingetragener
+`http://127.0.0.1:...`-Server ist eine andere Vertrauensstufe (die
+Adresse kommt vom Nutzer selbst, nicht aus einer möglicherweise fremden
+Chat-Anfrage). **Live bestätigt** (siehe Kurzfassung oben): eine
+Chat-Anfrage mit dem `mcp.json`-Integrationstyp wird von echtem LM Studio
+angenommen und korrekt verarbeitet, nicht von derselben SSRF-Sperre
+abgewiesen.
 
-Zwei Dinge, die Benjamin sich wünscht, hängen technisch zusammen:
+## Was inzwischen umgebaut wurde
 
-1. **Granularer Live-Status** statt "Denkt nach…" — z.B. echte
-   Ladefortschritts-Prozente beim Modell-Swap, "verarbeitet Prompt X%".
-   (Ein einfacherer Ersatz dafür ist bereits gebaut und gemerged — siehe
-   "Was schon erledigt ist" unten. Das hier ist die "richtige", native
-   Variante.)
-2. **Echtes Tool-Calling über LM Studios nativen `/api/v1/chat`-Endpunkt**,
-   der diese granularen Events (`model_load.progress`,
-   `prompt_processing.progress`, `tool_call.start/arguments/success/failure`,
-   `reasoning.delta`, `message.delta`, …) überhaupt erst liefert.
+- `backend/mcp_server.py`: `request_scope()` liefert jetzt
+  `{"type": "plugin", "id": "mcp/jarvis"}` statt `ephemeral_mcp` mit
+  `server_url`/`headers`. Token ist jetzt **persistiert**
+  (`config.JARVIS_MCP_TOKEN`, einmalig erzeugt, nicht mehr pro Start neu)
+  — ein `mcp.json`-Eintrag ist ja einmalig von Hand gemacht, ein bei
+  jedem Neustart wechselndes Token hätte ihn sofort ungültig gemacht.
+  Der Abbruch-Guard ist vereinfacht auf einen einzelnen "aktive Runde
+  erlaubt das gerade?"-Slot statt einer Registry pro Anfrage-Schlüssel —
+  geht, weil LM Studio ohnehin nur eine Chat-Anfrage gleichzeitig
+  verarbeitet (an mehreren Stellen im Code schon vorausgesetzt) UND weil
+  `mcp.json`-Header statisch sind, also gar keinen Platz für einen
+  Anfrage-Schlüssel mehr bieten. `mcp_json_snippet()` gibt den fertigen
+  Block für die Datei aus, `ensure_started()` loggt ihn beim ersten Start.
+- `backend/config.py`: `JARVIS_MCP_TOKEN` (persistiert) und
+  `LM_STUDIO_API_TOKEN` (für LM Studios eigenes „Require Authentication“,
+  Setting-UI unter `_SIMPLE_SETTINGS`) neu; `lm_studio_headers()` als
+  gemeinsamer Helfer.
+- `backend/llm_client.py`, `hardware.py`, `opencode_agent.py`,
+  `vector_memory.py`, `main.py`: jede Anfrage an LM Studio schickt jetzt
+  `config.lm_studio_headers()` mit. Fehlertexte (`_native_rejection`,
+  `_native_error`) auf den neuen Weg umgeschrieben, inkl. eines eigenen
+  Hinweises für 401/403 ("Require Authentication" vs. mcp.json-Berechtigung
+  — Reihenfolge der Prüfung ist bewusst: Nachrichteninhalt vor Statuscode,
+  siehe Kommentar in `_native_rejection`).
+- Frontend: neues Einstellungsfeld "LM-Studio-API-Token".
+- Alle E2E-Tests (`fake_lmstudio.py` + `e2e_native.py`/`e2e_main.py`) auf
+  den neuen Integrationstyp umgestellt, plus neue Fälle: Token wird
+  mitgeschickt, falsches Token löst den richtigen Hinweis aus,
+  mcp.json-Fehler vs. Auth-Fehler werden nicht verwechselt (das war ein
+  echter Bug, den der Test gefunden hat — Status 403 alleine reichte
+  nicht, um zwischen beidem zu unterscheiden, jetzt zählt zuerst der
+  Nachrichtentext).
 
-Das Problem: dieser native Endpunkt hat **kein** `tools`-Feld wie OpenAIs
-API, über das man eigene Funktionsdefinitionen mitgibt (bestätigt live
-gegen die LM-Studio-Doku geprüft). Er akzeptiert Tools nur über
-`integrations` — entweder LM-Studio-eigene **Plugins** oder einen
-**`ephemeral_mcp`**-Server (Model Context Protocol). Jarvis' ~20 Tools
-(opencode, run_shell, get_time, calculate, …) sind aktuell simple
-Python-Funktionen mit OpenAI-Style-JSON-Schema (`backend/tools.py`,
-`TOOL_SCHEMAS`/`DISPATCH`), kein MCP-Server.
+## Chatforken (`previous_response_id`) — neu, noch NICHT live getestet
 
-## Der Plan (mit Benjamin abgestimmt: NIEDRIGES RISIKO, kein großer Umbau
-sofort)
+Auf Benjamins Wunsch zusätzlich gebaut: `/api/v1/chat` ist laut LM Studios
+Doku standardmäßig zustandsbehaftet (`store: true`, jede Antwort bekommt
+eine `response_id`) — ein Folge-Turn kann per `previous_response_id` daran
+anknüpfen, statt den ganzen bisherigen Verlauf als Text erneut zu
+schicken. Vorher schickte Jarvis bei jedem Turn `store: false` und den
+kompletten Verlauf als beschriftetes Transkript im `input`-Feld
+(`_native_input`) — das ist jetzt der Fallback-Weg, nicht mehr der einzige.
 
-**Schritt 0 — ZUERST das hier, bevor irgendwas anderes:** rein empirisch
-testen, ob `ephemeral_mcp` überhaupt mit einer lokalen/LAN-Adresse
-funktioniert. Die Doku zeigt nur ein Beispiel mit einer öffentlichen
-HTTPS-URL (`https://huggingface.co/mcp`), keine Bestätigung für
-`http://<lan-ip>:<port>/...`. Wenn das nicht geht, ist das ganze Vorhaben
-tot, bevor Zeit in einen Umbau fließt.
+**Wichtige Erkenntnis vor dem Bauen recherchiert** (nicht angenommen):
+`system_prompt`/`integrations` werden von LM Studio NICHT automatisch über
+`previous_response_id` mitgeführt — genau wie bei OpenAIs Responses API,
+die dieser Endpunkt nachbildet (belegt u.a. durch
+[vllm-project/vllm#37697](https://github.com/vllm-project/vllm/issues/37697),
+ein als Bug gemeldetes Leck genau dieses Verhaltens). Jarvis schickt beide
+deshalb bei JEDER Anfrage weiterhin frisch mit, verkettet wird nur der
+`input`-Teil (die neue Nachricht statt des ganzen Verlaufs).
 
-Konkret:
-1. Winzigen MCP-Server bauen (Python-Paket `mcp`, Transport
-   "streamable-http" oder SSE — beides remote-fähig, nicht stdio) mit
-   GENAU EINEM Test-Tool (z.B. "sag einen festen String zurück").
-2. Benjamin aktiviert einmalig **"Allow per-request MCPs"** in LM Studios
-   Server Settings (braucht LM Studio ≥ 0.4.0 — Version vorher prüfen).
-3. Testanfrage an `POST /api/v1/chat` mit
-   ```json
-   {
-     "model": "<aktuelles modell>",
-     "input": "Nutze das test_tool.",
-     "integrations": [{
-       "type": "ephemeral_mcp",
-       "server_label": "jarvis_test",
-       "server_url": "http://<lan-ip-dieses-macs>:<port>/mcp",
-       "allowed_tools": ["test_tool"]
-     }]
-   }
-   ```
-   und schauen, ob im Response/Stream ein `tool_call.*`-Event für
-   `test_tool` auftaucht.
+**Design** (`backend/llm_client.py`):
+- Ein `conversation_id -> {response_id, expect_history_len}`-Speicher
+  (`_response_chains`, nur im Speicher — ein Neustart von Jarvis oder LM
+  Studio macht eine Kette ohnehin ungültig, der Fallback ist immer
+  korrekt, nur nicht maximal günstig).
+- Verkettet wird NUR die erste Runde eines Turns (`is_first_round`) — eine
+  Recovery-Runde (geleakter Aufruf, erfundenes Tool) fällt für den Rest
+  des Turns auf vollen Transkript-Aufbau zurück, statt eine zweite,
+  schwerer nachvollziehbare Verkettungs-Ebene einzuziehen.
+- `expect_history_len` verhindert eine falsch passende Kette: weicht die
+  vom Frontend geschickte `history`-Länge beim nächsten Turn ab (Verlauf
+  kompaktiert/bearbeitet/verzweigt), wird automatisch neu aufgebaut statt
+  eine möglicherweise falsche Kette zu verwenden.
+- Lehnt LM Studio eine verkettete Anfrage ab (z.B. nach einem eigenen
+  Neustart, `response_id` vergessen), fängt Jarvis das ab, löscht die
+  Kette für diese Konversation und wiederholt DENSELBEN Versuch einmal
+  ohne Verkettung — der Nutzer merkt vom Ausfall nichts, und am Ende des
+  Turns steht wieder eine frische, gültige Kette.
+- `warm_system_prompt()` bleibt bei `store: false` (Wegwerf-Ping, soll
+  nicht im gespeicherten Antwort-Graphen von LM Studio landen).
 
-**Erst wenn Schritt 0 klappt**, den großen Teil angehen:
+**Getestet:** ausführlich gegen `fake_lmstudio.py` (frischer Turn ohne
+Kette, Folge-Turn verkettet mit kurzem `input` + weiterhin vollem
+`system_prompt`/`integrations`, Verlaufs-Mismatch fällt zurück,
+Mehrrunden-Turn verkettet nur Runde 1, abgelehnte Kette heilt sich selbst
+und baut am Ende wieder eine gültige Kette auf) — **noch nicht gegen
+echtes LM Studio**. Insbesondere unbestätigt: ob LM Studio bei einer
+abgelehnten `previous_response_id` wirklich mit einem sofortigen
+HTTP-Fehler antwortet (das fängt Jarvis' Selbstheilung ab) oder anders
+(z.B. als gestreamtes Fehler-Event mitten im Stream — dafür gibt es aktuell
+KEINE Selbstheilung, nur den bestehenden generischen Fehlerpfad).
 
-4. Echten MCP-Server bauen, der ALLE bestehenden Tools aus
-   `backend/tools.py` spiegelt (Schema-Übersetzung OpenAI→MCP ist
-   mechanisch, beide nutzen JSON-Schema — die eigentliche Ausführung bleibt
-   `tools.call_tool()`, nur der Transport/die Anmeldung ändert sich).
-5. **NICHT den bestehenden Pfad ersetzen.** Als komplett separater,
-   opt-in/experimenteller Pfad bauen (z.B. Settings-Schalter "Erweiterten
-   Live-Status verwenden (experimentell)"). Der jetzige, gut getestete
-   `_stream_reply_impl`-Pfad (OpenAI-kompatibel, `/v1/chat/completions`)
-   bleibt Standard und unangetastet — der neue Pfad ist eigener Code, der
-   bei Problemen einfach wieder ausgeschaltet werden kann.
-6. DeepSeek (Cloud-Fallback) kann kein MCP über LM Studio — muss weiterhin
-   über den alten Pfad laufen. Beide Pfade müssen sauber nebeneinander
-   existieren können (Provider-Auswahl entscheidet, welcher greift).
+## Offene Punkte für die nächste Session
 
-## Warum das kein kleiner Tweak ist
+1. **Zuerst das hier, bevor irgendwas anderes:** den vollen Kreislauf auf
+   dem echten Windows-Rechner einmal komplett durchspielen — die SSRF-
+   Kernfrage ist geklärt (siehe oben), es fehlt nur noch der manuelle
+   Teil: Jarvis einmal starten (gibt den `mcp.json`-Block mit der
+   aktuellen Adresse + Token in der Konsole aus), den Block wirklich in
+   LM Studios `mcp.json` einfügen, "Allow calling servers from mcp.json"
+   + "Require Authentication" einschalten, das Token in Jarvis unter
+   Einstellungen -> LM Studio eintragen, dann eine normale
+   Chat-Nachricht schicken, die ein Werkzeug braucht (z.B. "wie spät ist
+   es"). Klappt der Tool-Aufruf, ist der Branch aus fachlicher Sicht
+   mergebereit (nach normalem Code-Review).
+2. **Direkt im selben Durchlauf: Chatforken live prüfen.** Nach dem
+   ersten erfolgreichen Tool-Aufruf aus Punkt 1 eine ZWEITE Nachricht im
+   selben Gespräch schicken (z.B. „und jetzt?" oder eine Rückfrage). In
+   Jarvis' eigener Konsolen-/Log-Ausgabe (oder per Mitschnitt der Anfrage
+   an LM Studio) prüfen, ob die zweite Anfrage `previous_response_id`
+   enthält und `input` dabei kurz bleibt (nur die neue Nachricht, kein
+   komplettes Transkript mehr — siehe `_native_input`/`_chain_lookup` in
+   `backend/llm_client.py`). Zusätzlich beobachten, WIE LM Studio auf eine
+   ungültige/vergessene `response_id` reagiert (sofortiger HTTP-Fehler vs.
+   gestreamtes Fehler-Event), siehe die offene Frage im Abschnitt
+   „Chatforken" oben. Kein Blocker, falls das nicht wie erwartet greift —
+   der Fallback (voller Verlauf) bleibt korrekt — aber unbedingt
+   vermerken.
+3. Welche LM-Studio-Version aktuell läuft, unklar (muss ≥ 0.4.0 für den
+   `/api/v1/chat`-Endpunkt sein, und die `mcp.json`-Rechte brauchen
+   vermutlich auch eine halbwegs aktuelle Version — noch nicht geprüft,
+   ab welcher genau "Allow calling servers from mcp.json" existiert).
+4. Format von `tool_call.success.output`: angenommen ist die MCP-Content-
+   Liste als JSON-String (wie im Doku-Beispiel); `mcp_server.output_text`
+   nimmt sonst den Rohtext. Noch nicht live beobachtet.
+5. Verlauf: `/api/v1/chat` kennt nur EINE User-Nachricht. Der Verlauf geht
+   deshalb als beschriftetes Transkript in diese Nachricht
+   (`_native_input`), nicht in den System-Prompt (sonst fiele der
+   Tool-Teil jedes Mal aus LM Studios Prompt-Cache). Live beobachten, ob
+   kleine Modelle damit genauso gut umgehen wie mit echten Rollen.
+6. Nebenbefund, nicht angefasst: die „Trotzdem laden"-Box
+   (`#jsModelFitNotice`) fehlt auf der Sichtbarkeits-Whitelist in
+   `frontend/claude-app.js` (Regel `body.js-app-active > :not(...)`) und
+   ist dadurch vermutlich nie sichtbar (`#jsModelLoad`, die neue
+   Ladeanzeige, hatte exakt dasselbe Problem — schon behoben, dort als
+   Referenz für den Fix).
 
-`_stream_reply_impl` (backend/llm_client.py) ist eine ausgereifte,
-mehrfach gehärtete Pipeline: Korruptions-Erkennung
-(`_call_prefix_verdict`, siehe Kommentare zu einem bekannten
-LM-Studio/llama.cpp-Grammar-Bug), Behauptungs-Prüfung (`_vet`,
-`_unbacked_claim`), `<think>`-Filterung (`_filter_think`,
-`_new_think_filter_state`), Wiederholungs-Schleifen-Erkennung
-(`_is_repetition_loop`), Satz-für-Satz-Streaming (`_pop_complete_sentences`).
-All das hängt an inkrementellen Content-STRINGS (OpenAI-Delta-Format).
-Ein Event-basierter Stream (`message.delta`/`reasoning.delta`/`tool_call.*`)
-bedeutet nicht "ein paar Zeilen ändern", sondern diese ganze Logik auf ein
-anderes Eingabeformat zu übertragen — mit echtem Risiko, etwas davon
-kaputt zu machen, das aktuell zuverlässig läuft.
+## Was schon vorher erledigt war (NICHT nochmal bauen)
 
-## Was schon erledigt ist (NICHT nochmal bauen)
+- **Live-Status statt starrem "Denkt nach…"** (PR #92, `main`):
+  `status`-Events über den OpenAI-kompatiblen Stream — der pragmatische
+  Ersatz, falls der native Weg am Ende doch nicht tragfähig ist.
+- **Buchstaben-Unschärfe-Einblendung** beim Streamen (auch PR #92).
+- **`warm_system_prompt()`-Fix**: wärmt den Prompt-Cache auch nach
+  Titel-Generierung/History-Zusammenfassung neu vor.
 
-- **Live-Status statt starrem "Denkt nach…"** ist bereits gemerged (PR #92,
-  jetzt in `main`): `status`-Events (`thinking`/`answering`/`tool` mit
-  Werkzeugname) über den BESTEHENDEN OpenAI-kompatiblen Stream, ohne den
-  großen Umbau. Zeigt z.B. "Rechnet …", "Programmiert gerade …". Das ist
-  der pragmatische Ersatz, bis (falls) der native Weg steht.
-- **Buchstaben-Unschärfe-Einblendung** beim Streamen (auch PR #92,
-  gemerged): jeder neu gestreamte Buchstabe blendet unscharf→scharf ein,
-  ohne Staffelung (mehrere Zeichen gleichzeitig), kurze Animationsdauer
-  (0.18s), damit sie den häufigen kompletten DOM-Neuaufbau pro
-  Stream-Update übersteht.
-- **`warm_system_prompt()`-Fix**: wärmt den LM-Studio-Prompt-Cache jetzt
-  auch nach Titel-Generierung/History-Zusammenfassung neu vor (vorher nur
-  einmal beim Start/Modellwechsel — der Cache wurde durch diese
-  Zwischen-Aufrufe mit eigenem, kürzerem System-Prompt ständig verdrängt).
+## Warum das kein kleiner Tweak war
 
-## Offene Fragen für die nächste Session
-
-- Welche LM-Studio-Version läuft aktuell auf Christophs/Benjamins
-  Windows-Rechner (Bild vom Server-Log zeigte `192.168.56.1`/
-  `10.111.148.251:1234` als wechselnde LAN-Adressen — Rechner wechselt
-  offenbar zwischen Netzwerken)? Muss ≥ 0.4.0 für MCP-Support sein.
-- Funktioniert `ephemeral_mcp` mit `server_url` = lokale LAN-IP, oder nur
-  mit öffentlich erreichbaren HTTPS-URLs? (Kern-Unsicherheit, siehe oben.)
-- Falls Schritt 0 scheitert: einfach bei der jetzigen Lösung (status-Events
-  über den normalen Pfad) bleiben, kein weiterer Aufwand nötig.
+`_stream_reply_impl` (`backend/llm_client.py`) ist eine ausgereifte,
+mehrfach gehärtete Pipeline: Korruptions-Erkennung, Behauptungs-Prüfung,
+`<think>`-Filterung, Wiederholungs-Schleifen-Erkennung, Satz-für-Satz-
+Streaming — all das hing an inkrementellen Content-STRINGS
+(OpenAI-Delta-Format). Umgesetzt als ein gemeinsamer Satz normalisierter
+Events, auf dem dieselbe Pipeline unverändert für beide Backends läuft
+(siehe Kommentar über `_openai_round`) — nicht ersetzt, nur der Eingang
+umgebaut.
