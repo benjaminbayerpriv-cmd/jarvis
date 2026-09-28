@@ -130,7 +130,7 @@ def install_dependencies(force: bool = False) -> bool:
     count = len(done.split()) - 2 if done else 0
     ui.ok(f"Installation erfolgreich{f' — {count} Pakete' if count else ''}.")
     if not ctx.deps_ok():
-        ui.warn("Einige Pakete scheinen zu fehlen — jarvis doctor zeigt, was fehlt.")
+        ui.warn("Einige Pakete scheinen zu fehlen —  jarvis deps  installiert nach.")
         return False
     return True
 
@@ -265,6 +265,69 @@ def wizard(interactive: bool = True, extras: bool = False) -> bool:
         return True
     ui.warn("Einige Schritte sind offen — jarvis setup wiederholt sie, jarvis doctor zeigt Details.")
     return False
+
+
+def ensure_deps(force: bool = False) -> bool:
+    """Install whatever requirements are missing — the one-command fix for
+    ModuleNotFoundError and friends. Creates the .venv on the fly, stops a
+    running server briefly (Windows keeps loaded .pyd files locked), pip-installs
+    the full requirements.txt, and verifies with the same probe the doctor uses."""
+    ui.heading("Pakete nachinstallieren")
+    if not create_venv():
+        return False
+    python = ctx.venv_python()
+    missing = ctx.missing_modules(python)
+    if not missing and not force:
+        ui.status("ok", "Pakete", "vollständig",
+                  "alle benötigten Module sind importierbar")
+        return True
+    if missing:
+        ui.warn(f"{len(missing)} Modul(e) fehlen: {', '.join(missing)}")
+
+    was_running = server.is_running()
+    if was_running and not ui.confirm(
+            "Ein Jarvis-Server läuft und sperrt evtl. Paket-Dateien — "
+            "stoppen, installieren und danach wieder starten?", default=True):
+        ui.info("Abgebrochen — Pakete bleiben unverändert.")
+        return False
+    if was_running:
+        server.stop()
+
+    ui.info(f"Installiere in {python} …")
+    try:
+        with ui.spinner("pip wird aktualisiert"):
+            _run([str(python), "-m", "pip", "install", "--upgrade", "pip",
+                  "--disable-pip-version-check", "-q"], timeout=600)
+        with ui.spinner("Pakete werden installiert (fastapi, Whisper, TTS …)"):
+            code, output = _run(
+                [str(python), "-m", "pip", "install", "-r", str(ctx.ROOT / "requirements.txt"),
+                 "--disable-pip-version-check"],
+                timeout=PIP_TIMEOUT,
+            )
+    except subprocess.TimeoutExpired:
+        ui.fail("Die Installation brauchte über 60 Minuten und lief noch — "
+                "Internetverbindung prüfen, dann  jarvis deps  erneut.")
+        return False
+    if code != 0:
+        ui.fail("Installation fehlgeschlagen — die letzten Zeilen:")
+        ui.lines("\n".join(_tail(output)))
+        return False
+    done = next((line for line in output.splitlines() if line.startswith("Successfully installed")), "")
+    count = len(done.split()) - 2 if done else 0
+    ui.ok(f"Installation erfolgreich{f' — {count} Pakete' if count else ''}.")
+
+    still_missing = ctx.missing_modules(python)
+    if still_missing:
+        ui.fail(f"Immer noch nicht importierbar: {', '.join(still_missing)}")
+        ui.note("Nach  jarvis logs  schauen — manche Fehler betreffen nicht fehlende Pakete, "
+                "sondern native Bibliotheken (z. B. fehlende Microsoft Visual C++ Redistributable).")
+        return False
+    if was_running:
+        if server.start(open_browser=False, quiet=True):
+            ui.ok("Server wieder gestartet.")
+        else:
+            ui.fail("Server konnte nicht neu starten —  jarvis start")
+    return True
 
 
 def quick_install(force: bool = False) -> bool:

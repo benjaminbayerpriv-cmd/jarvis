@@ -122,6 +122,7 @@ Im Projektordner (nach dem Entpacken/Zweig auschecken):
 ```bash
 python jarvis.py            # interaktives Menü; ohne venv startet es den Einrichtungs-Assistenten
 jarvis setup                # Assistent: Python, .venv, Pakete, .env, LM Studio, Token, MCP
+jarvis deps                 # fehlende Pakete nachinstallieren (behebt Import-Fehler)
 jarvis doctor               # prüft alles und zeigt, was fehlt
 jarvis start --no-browser   # Server im Hintergrund starten (Log: .jarvis/server.log)
 jarvis stop / restart       # beenden / neu starten
