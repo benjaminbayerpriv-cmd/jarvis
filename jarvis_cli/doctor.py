@@ -35,10 +35,10 @@ def check_venv() -> Check:
 
 def check_deps() -> Check:
     if not ctx.venv_python():
-        return ("fail", "Pakete", "kein .venv", "jarvis setup")
+        return ("fail", "Pakete", "kein .venv", "jarvis deps")
     missing = ctx.missing_modules()
     if missing:
-        return ("fail", "Pakete", f"{len(missing)} fehlen", ", ".join(missing[:6]))
+        return ("fail", "Pakete", f"{len(missing)} fehlen", "jarvis deps installiert sie")
     return ("ok", "Pakete", "alle importierbar", "")
 
 

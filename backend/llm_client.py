@@ -1165,19 +1165,18 @@ def _native_round(messages: list, model: str, turn_id: str | None, previous_resp
 
 
 # conversation_id -> {"response_id", "expect_history_len"}, for LM Studio's
-# native response-chaining (see _native_round's previous_response_id). Lets
-# a turn send only its new message instead of the whole growing transcript,
-# while still resending system_prompt/integrations every time (LM Studio
-# does not carry those over via previous_response_id, see _native_round).
-# `expect_history_len` guards against a stale chain: it's the `history`
-# length the NEXT turn must arrive with for this response_id to still be
-# valid (this turn's history length + 2, the user/assistant pair the
-# frontend appends) — anything else (history compacted/edited/branched, a
-# different conversation reusing an id) falls back to a fresh, full-
-# transcript round instead of risking a mismatched chain.
-# In-memory only: a Jarvis restart or an LM Studio restart both legitimately
-# invalidate any chain, and the fallback (full transcript) is always
-# correct, just not maximally cheap — nothing here is worth persisting.
+# native response-chaining (see _native_round's previous_response_id).
+# AKTUELL DEAKTIVIERT — kein Aufrufer setzt previous_response_id mehr (siehe
+# Kommentar in stream_reply): Bei diesem LM-Studio-Build kippt ein chained
+# Request auf zwei Arten (live per Probe verifiziert) — die erneut
+# mitgeschickte system_prompt landet beim Ketten an falscher Position
+# (leere Antwort / 500 "System message must be at the beginning"), und
+# MCP-Tool-Aufrufe werden storniert ("Werkzeug wurde nicht ausgeführt"),
+# weil das Plugin im chained Kontext nicht mehr live verbunden ist. Die
+# Helfer bleiben nur als Anknüpfpunkt stehen, falls LM Studio den
+# Chained-Pfad repariert; bis dahin schickt jede Runde den vollen
+# Transcript. In-memory only, Neustarts von Jarvis oder LM Studio
+# invalidieren eine Kette ohnehin.
 _response_chains: dict[str, dict] = {}
 
 
@@ -1951,19 +1950,25 @@ def _stream_reply_impl(user_message: str, history: list | None = None, turn_id: 
         return
 
     messages = _build_messages(user_message, history, mode, images, is_speech)
-    # LM Studio response_id this turn should chain off of (see _open_round's
-    # previous_response_id) if the stored chain still matches this
-    # conversation's history — None sends the full transcript instead, same
-    # as before chaining existed. Only ever offered to the FIRST round of
-    # the turn (is_first_round below); every round after that (leaked-call
-    # recovery, an OpenAI-style follow-up round) falls back to a full
-    # transcript rather than tracking a second, harder-to-reason-about delta
-    # within the same turn. next_chain_id is what actually gets persisted
-    # for the NEXT turn once this one settles — see the two _chain_store
-    # call sites below.
-    chain_id = _chain_lookup(conversation_id, history)
-    next_chain_id: str | None = None
-    is_first_round = True
+    # Chaining per LM Studios previous_response_id ist deaktiviert: ein
+    # chained /api/v1/chat-Request (nur neue Nachricht + previous_response_id)
+    # bricht bei diesem LM-Studio-Build doppelt (live per Probe verifiziert):
+    #  - Wird system_prompt trotzdem frisch mitgeschickt, kommt eine leere
+    #    Antwort bzw. 500 "Jinja Exception: System message must be at the
+    #    beginning" — LM Studio schiebt die erneute System-Message beim
+    #    Ketten an falscher Position ein (qwen-Template verlangt sie an
+    #    Position 0).
+    #  - Wird system_prompt weggelassen, läuft die Antwort zwar (die
+    #    gespeicherte Conversation trägt die System-Message weiter), aber
+    #    MCP-Tool-Aufrufe werden von LM Studio storniert ("Werkzeug wurde
+    #    nicht ausgeführt") — das Plugin ist im chained Kontext nicht mehr
+    #    live verbunden, get_time/open_url/… funktionieren gar nicht.
+    # Deshalb schickt JEDE Runde wieder den vollen Transcript (system_prompt +
+    # "Bisheriger Chatverlauf…" im input), status quo ante Chaining. Die
+    # _chain_*-Helfer und der previous_response_id-Parameter in
+    # _native_round/_open_round bleiben nur als Anknüpfpunkt stehen, falls
+    # LM Studio den Chained-Pfad irgendwann repariert — verwenden darf sie
+    # hier aber nichts mehr.
 
     last_tool_result = None
     full_text_parts = []
@@ -2028,12 +2033,8 @@ def _stream_reply_impl(user_message: str, history: list | None = None, turn_id: 
         pending_claims = []
 
     for _ in range(MAX_TOOL_ROUNDS):
-        # See the chain_id comment above: only this outer loop's first pass
-        # ever offers previous_response_id, every corrupt-retry within it
-        # included (a retry re-forks from the same parent response rather
-        # than chaining off the discarded attempt).
-        round_previous_response_id = chain_id if is_first_round else None
-        is_first_round = False
+        # Chaining deaktiviert (siehe Kommentar oben) — jede Runde schickt
+        # den vollen Transcript, previous_response_id wird nie gesetzt.
         # A round is retried on its own (outside the tool-round budget above)
         # when the stream comes back corrupted — see _CORRUPT_PREFIX_RE.
         # Measured up to ~85% corruption for its worst-case trigger (a
@@ -2066,26 +2067,7 @@ def _stream_reply_impl(user_message: str, history: list | None = None, turn_id: 
             # Tools LM Studio already ran within this round (native path) —
             # (name, output) in order, for the next round's context.
             round_tools: list[tuple[str, str]] = []
-            # This round's own response_id (see _native_round), once its
-            # chat.end arrives — the candidate for next_chain_id below.
-            round_response_id: str | None = None
-            try:
-                stream = _open_round(messages, turn_id, round_previous_response_id)
-            except LmStudioError:
-                # A chained request LM Studio itself rejects (e.g. it forgot
-                # this response_id across a restart) must not wedge this
-                # conversation into failing forever — the next turn would
-                # otherwise keep offering the same now-invalid id (the
-                # history-length check alone can't tell a stale id from a
-                # valid one). Clear it and let the normal retry loop above
-                # just try again without it, this same attempt.
-                if round_previous_response_id:
-                    _chain_clear(conversation_id)
-                    round_previous_response_id = None
-                    chain_id = None
-                    stream = _open_round(messages, turn_id, None)
-                else:
-                    raise
+            stream = _open_round(messages, turn_id)
 
             for event in stream:
                 # The Stop button (chat/cancel) used to only be checked
@@ -2103,7 +2085,8 @@ def _stream_reply_impl(user_message: str, history: list | None = None, turn_id: 
                 kind = event["kind"]
 
                 if kind == "response_id":
-                    round_response_id = event["id"]
+                    # _native_round meldet die chat.end-response_id noch,
+                    # aber Chaining ist deaktiviert — schlicht überspringen.
                     continue
 
                 if kind == "progress":
@@ -2263,14 +2246,6 @@ def _stream_reply_impl(user_message: str, history: list | None = None, turn_id: 
             # ran a tool in it, or that tool's side effect happens twice.
             # The garbage is dropped below instead, like after the last retry.
             if suspect != "corrupt" or round_tools:
-                # This round's output is what's being kept (not discarded
-                # for a retry) — its response_id becomes the candidate the
-                # NEXT turn chains off of. A corrupt round that still ran a
-                # tool (round_tools) keeps its response_id too: the
-                # corruption is in how the text rendered on this end, not
-                # in what LM Studio actually holds server-side.
-                if round_response_id:
-                    next_chain_id = round_response_id
                 break
 
         if tool_budget_exhausted:
@@ -2436,7 +2411,6 @@ def _stream_reply_impl(user_message: str, history: list | None = None, turn_id: 
             yield {"type": "sentence", "text": empty}
             full_text_parts.append(empty)
 
-        _chain_store(conversation_id, history, next_chain_id)
         yield {"type": "done", "full_text": " ".join(full_text_parts)}
         return
 
@@ -2455,7 +2429,6 @@ def _stream_reply_impl(user_message: str, history: list | None = None, turn_id: 
         )
     else:
         spoken = "Das dauert mir gerade zu lange, frag mich das nochmal."
-    _chain_store(conversation_id, history, next_chain_id)
     yield {"type": "sentence", "text": spoken}
     yield {"type": "done", "full_text": spoken}
 
