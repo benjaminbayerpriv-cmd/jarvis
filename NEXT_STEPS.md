@@ -1,48 +1,58 @@
 # Übergabe: natives LM-Studio-Tool-Calling + Live-Fortschritt (MCP)
 
-## ERGEBNIS (2026-09-28): Ansatz verworfen — zwei harte Blocker
+## ERGEBNIS (2026-09-28, zweimal überprüft): Ansatz sieht jetzt tragfähig aus
 
-Eine andere Session (Branch `claude/nice-archimedes-jxyh6q`, Commit
-`9d502de`) hat den kompletten Umbau bereits gebaut (MCP-Server,
-`llm_client.py` auf normalisierte Runden-Events umgestellt, ~740 Zeilen
-Diff) — **bevor** der in diesem Dokument unten beschriebene Testschritt 0
-durchlief. Claude Code hat das nachträglich in einem isolierten Worktree
-gegen echtes LM Studio getestet, BEVOR es auf einem echten Rechner
-ausprobiert wurde. Ergebnis: zwei voneinander unabhängige, harte Blocker.
+Eine andere Session (Branch `claude/nice-archimedes-jxyh6q`) hat den
+kompletten Umbau bereits gebaut (MCP-Server, `llm_client.py` auf
+normalisierte Runden-Events umgestellt) — **bevor** der unten
+beschriebene Testschritt 0 durchlief. Claude Code hat das in einem
+isolierten Worktree gegen echtes LM Studio getestet, BEVOR es auf einem
+echten Rechner ausprobiert wurde. Verlauf über zwei Runden:
 
-1. **Abhängigkeitskonflikt:** `mcp==2.2.0` (aus requirements.txt in diesem
-   Branch) zieht eine `starlette`-Version, die mit dem im Projekt
-   gepinnten `fastapi==0.115.6` inkompatibel ist. Ergebnis: die App
-   **stürzt beim Start komplett ab** (`TypeError: Router.__init__() got an
-   unexpected keyword argument 'on_startup'`), nicht nur das neue Feature.
-   Ein Downgrade von `starlette` auf eine mit fastapi kompatible Version
-   bringt die App zwar wieder zum Laufen, kollidiert dann aber mit `mcp`s
-   eigener Abhängigkeit `sse-starlette` (die eine neuere `starlette`
-   braucht) — ungelöst, vermutlich nur durch ein größeres fastapi-Upgrade
-   im ganzen Projekt behebbar (eigenes Risiko, nicht klein).
+**Runde 1 (Commit `9d502de`):** zwei vermeintliche Blocker gefunden —
+(a) `mcp==2.2.0` zieht angeblich ein inkompatibles `starlette`, die App
+stürze beim Start ab; (b) LM Studio lehnt `ephemeral_mcp` mit
+privaten/LAN-Adressen grundsätzlich ab (Fehlermeldung: "We only allow
+public addresses for dynamic remote MCP connections").
 
-2. **LM Studio lehnt private/LAN-Adressen für MCP grundsätzlich ab.** Live
-   getestet: eine echte Chat-Anfrage mit `ephemeral_mcp` gegen
-   `http://192.168.5.29:8766/mcp` (Jarvis' eigener MCP-Server, LAN-Adresse
-   dieses Macs) wurde von LM Studio mit dieser Fehlermeldung abgelehnt:
-   > "Unable to connect to remote MCP server 'jarvis' … URL resolves to a
-   > non-public address. We only allow public addresses for dynamic
-   > remote MCP connections."
+**Runde 2 (Commit `dd21ab0`):** die andere Session hat (a) selbst
+gegengeprüft und **widerlegt**, und für (b) den MCP-Weg auf LM Studios
+statische `mcp.json`-Registrierung umgestellt (statt `ephemeral_mcp` pro
+Anfrage). Claude Code hat BEIDES unabhängig nachgeprüft, mit korrigierter
+Methode:
 
-   Das ist keine Einstellung ("Allow per-request MCPs" war aktiv, Version
-   war neu genug), sondern eine feste Sicherheitsregel von LM Studio.
-   Benjamins/Christophs Setup (Jarvis und LM Studio beide im privaten
-   Heimnetz, keine öffentliche Adresse) kann `ephemeral_mcp` damit
-   grundsätzlich nicht nutzen — außer man hängt Jarvis' MCP-Server über
-   einen öffentlichen Tunnel (ngrok, Cloudflare Tunnel o.ä.) ins Internet,
-   was NICHT empfohlen wird: `run_shell` und die anderen Tools wären dann
-   (auch wenn token-geschützt) einem öffentlich erreichbaren Endpunkt
-   ausgesetzt.
+1. **Abhängigkeitskonflikt — zurückgezogen, war ein eigener Testfehler.**
+   Der erste Test hatte `mcp` nachträglich in ein bereits gefülltes venv
+   installiert statt alles zusammen neu aufzulösen — dabei wählte pip ein
+   zu neues `starlette`. Mit einem echten frischen venv (Python 3.12,
+   `pip install -r requirements.txt` in einem Rutsch) löst pip automatisch
+   kompatible Versionen auf (`starlette==0.41.3`, `sse-starlette==3.0.3`,
+   beide mit `fastapi==0.115.6` verträglich) — App startet sauber, kein
+   Absturz. **Diese Sorge ist vom Tisch.**
 
-**Empfehlung: diesen Ansatz nicht weiterverfolgen.** Bei der bereits
-gemergten, pragmatischen Lösung bleiben (Live-Status über den normalen
-OpenAI-kompatiblen Pfad, siehe "Was schon erledigt ist" unten). Der Branch
-`claude/nice-archimedes-jxyh6q` sollte NICHT gemerged werden.
+2. **Private Adressen — bestätigt, UND korrekt gelöst.** Live gegen
+   echtes LM Studio (Modell `qwen/qwen3.6-35b-a3b`) getestet: Jarvis
+   druckt beim ersten Kontakt den fertigen `mcp.json`-Eintrag
+   (LAN-Adresse + generiertes Bearer-Token) in die Konsole. Eine echte
+   Chat-Anfrage, die ein Tool braucht, erreicht LM Studio korrekt und
+   bekommt (weil der Eintrag bei diesem Test absichtlich nicht in einem
+   echten LM Studio registriert war) eine klare, verständliche
+   Fehlermeldung zurück ("Permission denied to use plugin 'mcp/jarvis'
+   … 'Allow calling servers from mcp.json' einschalten") statt eines
+   Absturzes oder einer kryptischen Meldung.
+
+**Offen, NICHT mehr von hier aus testbar:** ob der volle Kreislauf
+(Eintrag wirklich in LM Studios `mcp.json` einfügen, "Allow calling
+servers from mcp.json" + "Require Authentication" aktivieren, Jarvis'
+Token dort hinterlegen) tatsächlich zu einem erfolgreichen Tool-Aufruf
+führt. Das braucht manuelles Handeln auf dem Windows-Rechner selbst
+(Datei bearbeiten, Einstellungen umschalten) — Anleitung dafür steht in
+`SETUP.md`. Das ist der nächste, tatsächlich noch offene Schritt.
+
+**Einschätzung:** kein Grund mehr, den Branch zu verwerfen. Empfehlung:
+Christoph/Benjamin lassen den `mcp.json`-Eintrag einmal echt eintragen
+und testen den zweiten curl-Befehl aus `SETUP.md` — klappt der, ist der
+Branch mergebereit (nach normalem Code-Review, ~740 Zeilen Diff).
 
 ---
 
