@@ -17,3 +17,4 @@ backend/vector_index/
 launcher/build/
 launcher/dist/
 launcher/*.spec
+.jarvis/

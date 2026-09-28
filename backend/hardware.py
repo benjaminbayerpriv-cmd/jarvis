@@ -17,18 +17,6 @@ import requests
 
 from . import config
 
-GIB = 1024 ** 3
-
-# A GGUF file's size is only the weights — loading also allocates the KV
-# cache for the context window plus runtime buffers. A rough rule of thumb,
-# deliberately on the generous side: a false "doesn't fit" is an annoyance,
-# a false "fits" is the crash this whole check exists to prevent.
-_OVERHEAD_FACTOR = 1.2
-_OVERHEAD_FIXED = 1 * GIB
-# Kept free for Windows, Jarvis itself and Whisper, so the PC stays usable
-# while the model is loaded.
-_SYSTEM_RESERVE = 2 * GIB
-
 _NO_WINDOW = 0x08000000 if sys.platform.startswith("win") else 0
 
 _sizes_cache: tuple[float, dict[str, int]] = (0.0, {})
@@ -46,69 +34,6 @@ def find_lms_cli() -> str | None:
     exe = "lms.exe" if sys.platform.startswith("win") else "lms"
     default = Path.home() / ".lmstudio" / "bin" / exe
     return str(default) if default.exists() else None
-
-
-def _system_ram() -> tuple[int, int]:
-    """(total, available) bytes of physical RAM, or (0, 0) if unknown."""
-    try:
-        if sys.platform.startswith("win"):
-            class MEMORYSTATUSEX(ctypes.Structure):
-                _fields_ = [
-                    ("dwLength", ctypes.c_ulong),
-                    ("dwMemoryLoad", ctypes.c_ulong),
-                    ("ullTotalPhys", ctypes.c_ulonglong),
-                    ("ullAvailPhys", ctypes.c_ulonglong),
-                    ("ullTotalPageFile", ctypes.c_ulonglong),
-                    ("ullAvailPageFile", ctypes.c_ulonglong),
-                    ("ullTotalVirtual", ctypes.c_ulonglong),
-                    ("ullAvailVirtual", ctypes.c_ulonglong),
-                    ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
-                ]
-
-            stat = MEMORYSTATUSEX()
-            stat.dwLength = ctypes.sizeof(MEMORYSTATUSEX)
-            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(stat)):
-                return int(stat.ullTotalPhys), int(stat.ullAvailPhys)
-            return 0, 0
-        if sys.platform == "darwin":
-            total = int(subprocess.run(["sysctl", "-n", "hw.memsize"], capture_output=True, text=True, timeout=5).stdout)
-            vm = subprocess.run(["vm_stat"], capture_output=True, text=True, timeout=5).stdout
-            page = int(re.search(r"page size of (\d+)", vm).group(1))
-            pages = sum(
-                int(m.group(1))
-                for key in ("Pages free", "Pages inactive", "Pages speculative")
-                if (m := re.search(rf"{key}:\s+(\d+)", vm))
-            )
-            return total, pages * page
-        meminfo = Path("/proc/meminfo").read_text()
-        total = int(re.search(r"MemTotal:\s+(\d+)", meminfo).group(1)) * 1024
-        avail = int(re.search(r"MemAvailable:\s+(\d+)", meminfo).group(1)) * 1024
-        return total, avail
-    except (OSError, ValueError, AttributeError, subprocess.SubprocessError):
-        return 0, 0
-
-
-def _gpu_vram() -> tuple[int, int]:
-    """(total, free) bytes of dedicated NVIDIA VRAM, summed across GPUs.
-    (0, 0) without an NVIDIA card — on Apple Silicon the GPU shares system
-    RAM, which _system_ram already covers."""
-    smi = shutil.which("nvidia-smi")
-    if not smi:
-        return 0, 0
-    try:
-        out = subprocess.run(
-            [smi, "--query-gpu=memory.total,memory.free", "--format=csv,noheader,nounits"],
-            capture_output=True, text=True, timeout=5, creationflags=_NO_WINDOW,
-        ).stdout
-    except (OSError, subprocess.SubprocessError):
-        return 0, 0
-    total = free = 0
-    for line in out.splitlines():
-        parts = [p.strip() for p in line.split(",")]
-        if len(parts) == 2 and all(p.isdigit() for p in parts):
-            total += int(parts[0]) * 1024 * 1024
-            free += int(parts[1]) * 1024 * 1024
-    return total, free
 
 
 def _model_key(model_id: str) -> str:
@@ -130,14 +55,9 @@ _LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1", "0.0.0.0"}
 
 def is_remote_lm_studio() -> bool:
     """Whether LM Studio's configured endpoint points at a different machine
-    than the one Jarvis's own backend runs on. Matters because _system_ram()/
-    _gpu_vram() below read THIS machine's memory via local OS calls
-    (ctypes/vm_stat/nvidia-smi) — there is no way to ask LM Studio's REST API
-    for the remote machine's RAM/VRAM (checked: no such endpoint exists), so
-    when LM Studio is remote, comparing a model's size against Jarvis's own
-    machine's memory is comparing against the wrong computer entirely. Live
-    observed: this produced a confidently wrong "nicht genug Speicher frei"
-    for a model that fit fine on the actual (remote) machine."""
+    than the one Jarvis's own backend runs on. The model-size API works
+    remotely; RAM-/VRAM-based checking was removed entirely, so this flag is
+    informational only nowadays."""
     try:
         from urllib.parse import urlparse
         host = urlparse(lm_studio_root()).hostname or ""
@@ -240,10 +160,6 @@ def _loaded_models_raw() -> list[dict]:
         return []
 
 
-def _loaded_models() -> set[str]:
-    return {_model_key(e["id"]) for e in _loaded_models_raw()}
-
-
 def loaded_models_info() -> list[dict]:
     """Loaded models for the "andere Modelle entladen" UI: id + size (from
     the v1 REST API when available, else `lms ls`) + whether it's the one
@@ -262,93 +178,33 @@ def loaded_models_info() -> list[dict]:
     ]
 
 
-def _gb(n: float) -> str:
-    return f"{n / GIB:.1f}".replace(".", ",")
-
-
 def check_models(model_ids: list[str], freeable_ids: list[str] | tuple = ()) -> dict[str, dict]:
     """Per model: does it fit into memory right now?
 
     `freeable_ids` are models that would be unloaded to make room (the one
     being switched away from) — their memory counts as available.
 
-    Each verdict: fits (loadable at all), fits_now (without unloading
-    anything first), needed_bytes, and a German message when it doesn't fit.
-    A model whose size or this PC's memory can't be determined is always
-    allowed — the check must never block a model just because it's blind.
-    Also always allowed when LM Studio runs on a different machine (see
-    is_remote_lm_studio): THIS machine's memory says nothing about whether
-    it fits on the machine that actually loads it.
+    Each verdict carries fits, fits_now, needed_bytes and a message — but
+    since RAM-/VRAM-based blocking was removed by request, fits and
+    fits_now are always True: LM Studio pages excess model memory into
+    system RAM instead of failing, and it manages unloading the previous
+    model itself. needed_bytes is the raw file size, purely informational
+    (machines could be remote, so it's never compared against anything).
     """
     sizes = _model_sizes()
-    loaded = _loaded_models()
-    if is_remote_lm_studio():
-        return {
-            model_id: {"fits": True, "fits_now": True, "needed_bytes": sizes.get(_model_key(model_id), 0)}
-            for model_id in model_ids
+    _ = freeable_ids
+    return {
+        model_id: {
+            "fits": True,
+            "fits_now": True,
+            "needed_bytes": sizes.get(_model_key(model_id), 0),
         }
-    ram_total, ram_free = _system_ram()
-    vram_total, vram_free = _gpu_vram()
-    capacity = ram_total + vram_total - _SYSTEM_RESERVE
-    free_now = ram_free + vram_free - _SYSTEM_RESERVE
-    freeable = sum(
-        sizes.get(_model_key(m), 0) for m in freeable_ids
-        if m and _model_key(m) in loaded
-    )
-
-    verdicts = {}
-    for model_id in model_ids:
-        key = _model_key(model_id)
-        size = sizes.get(key)
-        if key in loaded or not size or not ram_total:
-            verdicts[model_id] = {"fits": True, "fits_now": True, "needed_bytes": size or 0}
-            continue
-        needed = size * _OVERHEAD_FACTOR + _OVERHEAD_FIXED
-        fits_now = needed <= free_now
-        fits = needed <= min(free_now + freeable, capacity)
-        verdict = {"fits": fits, "fits_now": fits_now, "needed_bytes": int(needed)}
-        if not fits:
-            if needed > capacity:
-                verdict["message"] = (
-                    f"Die PC-Spezifikationen reichen nicht aus, um {model_id} zu laden: "
-                    f"Das Modell braucht etwa {_gb(needed)} GB, dein PC hat insgesamt "
-                    f"{_gb(ram_total + vram_total)} GB (Arbeitsspeicher und Grafikspeicher). "
-                    "Wähl bitte ein kleineres Modell."
-                )
-            else:
-                verdict["message"] = (
-                    f"Gerade ist nicht genug Speicher frei, um {model_id} zu laden: "
-                    f"Das Modell braucht etwa {_gb(needed)} GB, frei sind nur "
-                    f"{_gb(max(free_now + freeable, 0))} GB. Schließ andere Programme "
-                    "und versuch es nochmal, oder wähl ein kleineres Modell."
-                )
-        verdicts[model_id] = verdict
-    return verdicts
+        for model_id in model_ids
+    }
 
 
 def check_model(model_id: str, freeable_ids: list[str] | tuple = ()) -> dict:
     return check_models([model_id], freeable_ids)[model_id]
-
-
-def vram_warning(model_id: str) -> str | None:
-    """check_models() only guards against crashes (RAM + VRAM combined). A
-    model that fits there but not into the GPU alone still loads — and then
-    runs from system memory, orders of magnitude slower (measured: a 22 GB
-    model on a 16 GB card needed minutes per reply, past every timeout)."""
-    if is_remote_lm_studio():
-        return None
-    size = _model_sizes().get(_model_key(model_id))
-    vram_total, _ = _gpu_vram()
-    if not size or not vram_total:
-        return None
-    needed = size * _OVERHEAD_FACTOR + _OVERHEAD_FIXED
-    if needed <= vram_total:
-        return None
-    return (
-        f"{model_id} braucht etwa {_gb(needed)} GB, deine Grafikkarte hat nur {_gb(vram_total)} GB. "
-        "Es läuft dann größtenteils aus dem Arbeitsspeicher und antwortet sehr langsam. "
-        "Ein kleineres Modell oder ein geringerer GPU-Anteil in LM Studio ist deutlich schneller."
-    )
 
 
 def block(model_id: str, message: str) -> None:

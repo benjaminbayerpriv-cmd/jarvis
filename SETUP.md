@@ -53,6 +53,27 @@ unten unterschiedlich sind, ist es gekennzeichnet.
 
 ## 2. Installation
 
+**Variante A — die beiliegende CLI macht alles** (einfachste, für
+Windows und macOS gleich):
+
+```bash
+python jarvis.py          # → "Jetzt einrichten?" — Assistent führt durch
+jarvis doctor             # anschließend alles auf einen Blick prüfen
+jarvis start --no-browser # Server im Hintergrund, Log unter .jarvis/server.log
+```
+
+`jarvis.py` legt selbstständig `.venv` an, installiert
+`requirements.txt`, erzeugt `.env` aus der Vorlage, verbindet LM Studio
+(ggf. per Netzwerksuche), übernimmt den Token, wählt das Modell und
+trägt den MCP-Eintrag in LM Studios `mcp.json` ein. Ohne Argumente
+öffnet es ein interaktives Menü (Start/Stopp, Logs, Token, Scan, …);
+alle Aktionen gibt es auch als Subkommandos (`python jarvis.py --help`).
+Die CLI kommt ohne fremde Pakete aus und funktioniert daher schon auf
+einer frisch entpackten ZIP. Auf Windows kann sie als `jarvis.cmd`
+aufgerufen werden, auf macOS/Linux als `./jarvis.sh`.
+
+**Variante B — von Hand:**
+
 **macOS:**
 
 ```bash

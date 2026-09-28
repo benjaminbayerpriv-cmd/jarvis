@@ -115,6 +115,29 @@ DeepSeek, Tavily, experimentelles Gemini) verlassen die Maschine.
 
    macOS fragt beim ersten Start nach **Input Monitoring**-Berechtigung.
 
+### Schnellstart per CLI
+
+Im Projektordner (nach dem Entpacken/Zweig auschecken):
+
+```bash
+python jarvis.py            # interaktives Menü; ohne venv startet es den Einrichtungs-Assistenten
+jarvis setup                # Assistent: Python, .venv, Pakete, .env, LM Studio, Token, MCP
+jarvis doctor               # prüft alles und zeigt, was fehlt
+jarvis start --no-browser   # Server im Hintergrund starten (Log: .jarvis/server.log)
+jarvis stop / restart       # beenden / neu starten
+jarvis token                # LM-Studio-Token aus der Zwischenablage einfügen
+jarvis scan                 # LM Studio im Netzwerk finden
+jarvis model / models       # Modell wählen / Modelle anzeigen
+jarvis mcp                  # mcp.json-Eintrag für LM Studio anzeigen
+jarvis ask "…"              # eine Frage direkt an den laufenden Server
+jarvis test                 # test_jarvis.py + test_features.py (stoppt den Server währenddessen)
+```
+
+Windows: `jarvis.cmd` statt `python jarvis.py` (auf System-Python ohne `.venv`
+startbar). Die CLI braucht ausschließlich die Standardbibliothek — sie läuft
+also schon auf einer frisch ausgepackten ZIP, bevor irgendetwas installiert
+ist. Jeder Menüpunkt existiert auch als Subkommando (siehe `jarvis --help`).
+
 Ausführlicher (inkl. Windows-.exe, Autostart bei Login, Browser-Agent,
 Obsidian-Vault): [SETUP.md](SETUP.md).
 
@@ -167,7 +190,8 @@ sichern kritische Aktionen ab.
 ## Tests
 
 ```bash
-python test_jarvis.py
+jarvis test                # beide Suiten (stoppt einen laufenden Server, startet ihn danach wieder)
+python test_jarvis.py      # einzeln (Server vorher stoppen — die Tests brauchen Port 8765 frei)
 python test_features.py
 ```
 
