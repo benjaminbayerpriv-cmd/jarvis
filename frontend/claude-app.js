@@ -849,6 +849,8 @@
   // Code-Tab (echte opencode-TUI in einem eingebetteten xterm.js-Terminal)
   let codeViewEl = null, codeTermEl = null, codeDirEl = null;
   let codeStatusLabelEl = null, codeDotEl = null, codeRestartBtn = null, codeContextWarningEl = null;
+  // Modell-/System-Hinweise in der Statuszeile über der Unterhaltung statt Popup
+  let noticeStripEl = null, noticeStripTextEl = null;
   let codeTerm = null, codeFit = null;
   let codeWs = null, codeWsOpen = false, codeReconnectTimer = null, codeExited = false;
   // Welche echte opencode-Session (aus opencode.db, siehe /code/sessions) beim naechsten
@@ -1070,6 +1072,10 @@
           <h1 class="js-welcome-title" style="font-family:${C.serif};font-size:30px;font-weight:400;letter-spacing:-.01em;color:${C.text};margin:0;">
             <span>${timeGreeting()}</span>
           </h1>
+        </div>
+        <div class="js-notice" style="flex:0 0 auto;display:none;align-items:flex-start;gap:8px;padding:9px 18px;border-bottom:1px solid ${C.border};background:${C.bgSoft};color:${C.textSoft};font-size:12.5px;line-height:1.45;">
+          <span class="js-notice-dot" style="flex:0 0 auto;color:${C.accent};">●</span>
+          <span class="js-notice-text" style="flex:1;"></span>
         </div>
         <div class="js-thread" style="flex:1;overflow-y:auto;scrollbar-width:thin;position:relative;"></div>
         <div class="js-codeview" style="position:absolute;inset:0;display:none;flex-direction:column;min-width:0;min-height:0;">
@@ -3916,7 +3922,16 @@
       return;
     }
 
-    if (kind === 'notify') {
+    if (kind === 'notify' || kind === 'notice') {
+      // Statushinweise (z. B. Modell-Detail beim Start: "Modell bereit /
+      // nicht geladen") gehören in die Statuszeile über der Unterhaltung —
+      // "da wo denke nach steht" — und nicht in ein Popup oder eine Karte
+      // im Verlauf.
+      if (noticeStripEl && noticeStripTextEl) {
+        noticeStripTextEl.textContent = String(item.text || '');
+        if (item.text) noticeStripEl.style.display = 'flex';
+        return;
+      }
       const b = document.createElement('div');
       b.style.cssText = `padding:10px 12px;border:1px solid ${C.border};border-left:3px solid ${C.accent};border-radius:10px;background:${C.bgSurface3};font-size:13px;color:${C.text};`;
       b.textContent = item.text || '';
@@ -4002,6 +4017,14 @@
     modelCapsMap = j.model_caps || {};
     modelFitMap = j.model_fit || {};
     currentModelSupportsVision = (j.current_caps || []).includes('vision');
+    if (j.notice) {
+      // Backend-Statusmeldung (z. B. "Modell bereit") in die Statuszeile
+      // über der Unterhaltung — statt Popup.
+      if (noticeStripEl && noticeStripTextEl) {
+        noticeStripTextEl.textContent = String(j.notice);
+        noticeStripEl.style.display = 'flex';
+      }
+    }
     if (!startupFitWarningShown && j.current_fit && j.current_fit.fits === false && j.current_fit.message) {
       startupFitWarningShown = true;
       showNotice(j.current_fit.message);
@@ -4316,6 +4339,12 @@
     codeDotEl = $('.js-code-dot', uiEl);
     codeRestartBtn = $('.js-code-restart', uiEl);
     codeContextWarningEl = $('.js-code-context-warning', uiEl);
+    noticeStripEl = $('.js-notice', uiEl);
+    noticeStripTextEl = $('.js-notice-text', uiEl);
+    if (noticeStripEl) {
+      noticeStripEl.addEventListener('click', () => { noticeStripEl.style.display = 'none'; });
+      noticeStripEl.title = 'Klicken zum Schließen';
+    }
 
     if (typeof Terminal === 'undefined' || !codeTermEl) {
       if (codeTermEl) {

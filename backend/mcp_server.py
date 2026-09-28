@@ -22,10 +22,13 @@ one-time entry the user adds, and SETUP.md for the full instructions.
 
 The server listens on all interfaces because LM Studio may run on another
 machine in the LAN; a bearer token keeps everyone else out — run_shell
-must never be reachable for arbitrary devices on the network. The token is
-persisted (config.JARVIS_MCP_TOKEN), not regenerated per start: mcp.json
-is a one-time, human-edited entry, so a token that changed on every
-restart would make it go stale immediately.
+must never be reachable for arbitrary devices on the network. Loopback
+(127.0.0.1) is exempt because LM Studio (as observed in 0.4.25+1) does
+not forward mcp.json's Authorization header to this server, and a local
+connection is the user's own machine anyway. The token is persisted
+(config.JARVIS_MCP_TOKEN), not regenerated per start: mcp.json is a
+one-time, human-edited entry, so a token that changed on every restart
+would make it go stale immediately.
 """
 
 from __future__ import annotations
@@ -99,18 +102,44 @@ def _build_app():
         stateless_http=True,
         host="0.0.0.0",
         # The SDK's Host-header check only knows localhost; LM Studio in the
-        # LAN connects via this machine's LAN IP. The bearer token below is
-        # the actual protection.
+        # LAN connects via this machine's LAN IP. Loopback is the trust
+        # boundary, the bearer token below protects everything beyond it.
         transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
     )
     expected = f"Bearer {config.ensure_mcp_token()}".encode()
 
+    # LM Studio >= 0.4.25 (observed 0.4.25+1) does NOT forward a static
+    # `Authorization` header from mcp.json to this server — its chat started
+    # sending the connect without it, and this server's 401 then crashed
+    # LM Studio's MCP bridge (libuv assertion, exit 0xC0000409). Loopback
+    # connections are the user's own machine (and the very child of a local
+    # process), so they may connect without a token; every other host — any
+    # device on the LAN, which is the threat the token exists for — must
+    # still present it.
+    _LOOPBACK_HOSTS = {"127.0.0.1", "::1", "::ffff:127.0.0.1"}
+
     async def app(scope, receive, send):
         if scope["type"] == "http":
+            client_host = (scope.get("client") or ("", 0))[0]
             auth = dict(scope["headers"]).get(b"authorization", b"")
-            if not hmac.compare_digest(auth, expected):
-                await send({"type": "http.response.start", "status": 401, "headers": [(b"content-type", b"text/plain")]})
-                await send({"type": "http.response.body", "body": b"Unauthorized"})
+            authorized = client_host in _LOOPBACK_HOSTS or hmac.compare_digest(auth, expected)
+            if not authorized:
+                # LM Studio's MCP bridge expects the 401 body to be a JSON
+                # OAuth-style error (it parses it before deciding how to
+                # proceed). A plain-text body crashed its libuv bridge with
+                # an assertion (exit code 3221226505 = 0xC0000409). Send a
+                # JSON error instead so a token-less connect degrades to a
+                # readable error rather than a crash.
+                body = json.dumps({
+                    "error": "unauthorized",
+                    "error_description": "Ungültiges Jarvis-MCP-Token (JARVIS_MCP_TOKEN). "
+                    "Prüfe den Wert in mcp.json gegen die .env.",
+                }).encode()
+                await send({"type": "http.response.start", "status": 401, "headers": [
+                    (b"content-type", b"application/json; charset=utf-8"),
+                    (b"content-length", str(len(body)).encode()),
+                ]})
+                await send({"type": "http.response.body", "body": body})
                 return
         await mcp_app(scope, receive, send)
 

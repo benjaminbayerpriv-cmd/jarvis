@@ -174,22 +174,11 @@ async def on_startup():
     cached on disk) and start the panel pump."""
     global filler_urls, thinking_filler_url
     memory.initialize()
-    fit = hardware.check_model(config.LM_STUDIO_MODEL)
-    if not fit["fits"]:
-        hardware.block(config.LM_STUDIO_MODEL, fit["message"])
-        print(f"[model] {fit['message']}")
-        panel.push("notify", text=fit["message"])
     healthy, detail = llm_client.model_health()
-    # model_health only checks that LM Studio lists the model, so its
-    # "Modell bereit" would contradict the too-large warning just given.
-    if fit["fits"]:
-        print(f"[model] {detail}")
-        if not healthy:
-            panel.push("notify", text=detail)
-        slow = hardware.vram_warning(config.LM_STUDIO_MODEL)
-        if slow:
-            print(f"[model] {slow}")
-            panel.push("notify", text=slow)
+    print(f"[model] {detail}")
+    # Modell-Detailinfos gehören in die Statuszeile ("da wo denke nach
+    # steht"), nicht in ein Popup — das Rendering macht das Frontend.
+    panel.push("notice", text=detail)
 
     def _generate():
         global filler_urls, thinking_filler_url
@@ -197,7 +186,7 @@ async def on_startup():
         thinking_filler_url = fillers.ensure_thinking_filler()
 
     loop = asyncio.get_event_loop()
-    if fit["fits"] and healthy:
+    if healthy:
         # Siehe llm_client.warm_system_prompt: sonst zahlt die erste echte
         # Nachricht nach jedem Programmstart das Prefill des ganzen
         # System-Prompts, nicht nur nach einem Modellwechsel im laufenden
@@ -253,9 +242,9 @@ class CancelRequest(BaseModel):
 
 class SelectModelRequest(BaseModel):
     model: str
-    # "Trotzdem laden" im Modell-Auswahlmenü — überspringt hardware.py's
-    # Speicher-Check, statt den Nutzer auf Chat-Nachrichten zu verweisen, wo
-    # dieselbe Umgehung schon existiert (siehe /model/force-load).
+    # "Trotzdem laden" im Modell-Auswahlmenü — bleibt im Request-Modell,
+    # damit das alte Frontend (schickt force bei jedem Wechsel) weiterhin
+    # valide bleibt, nachdem der Größen-/Speicher-Check entfernt wurde.
     force: bool = False
 
 
@@ -1116,6 +1105,11 @@ def list_models():
                     "message": hardware.blocked_reason(config.LM_STUDIO_MODEL),
                 }
             ),
+            # Letzte Status-Meldung ("Modell bereit …") für die Statuszeile
+            # im Frontend — der Startup-Hinweis wird über den WebSocket
+            # gebroadcastet, bevor der Browser lädt; nachgeliefert wird er
+            # über dieses Feld beim nächsten /models-Abruf.
+            "notice": panel.last_notice(),
         }
     except requests.RequestException as exc:
         return {"models": [], "current": current, "error": str(exc)}
@@ -1143,22 +1137,12 @@ def select_model(req: SelectModelRequest):
     previous_model = config.LM_STUDIO_MODEL
     if llm_client.is_embedding_model_id(req.model):
         return {"ok": False, "error": "Das ist ein Embedding-Modell, damit kann Jarvis nicht chatten.", "current": previous_model, "model": req.model}
-    fit = hardware.check_model(req.model, freeable_ids=[previous_model])
-    if not fit["fits"] and not req.force:
-        print(f"[model] {fit['message']}")
-        return {"ok": False, "error": fit["message"], "current": previous_model, "model": req.model}
     config.set_provider("lmstudio")
-    # Fits only once the previous model is out of memory: unload it BEFORE
-    # loading the new one. The usual load-then-unload order (below) would
-    # briefly hold both, which is exactly the overload this check prevents.
-    eject_first = not fit["fits_now"] and previous_model and previous_model != req.model
     hardware.unblock_all()
     config.set_model(req.model)
     llm_client._note_active_target(config.LM_STUDIO_BASE_URL, req.model)
 
     def _switch():
-        if eject_first:
-            llm_client.eject_model(previous_model)
         # The warm-up request is what actually makes LM Studio's
         # just-in-time loading load the new model (with live progress) and
         # prefill the system prompt — otherwise both would only happen on,
@@ -1173,11 +1157,11 @@ def select_model(req: SelectModelRequest):
         # blocking on however long the model takes to load.
         if not _warm_with_load_progress(req.model):
             return
-        if not eject_first and previous_model and previous_model != req.model:
+        if previous_model and previous_model != req.model:
             llm_client.eject_model(previous_model)
 
     threading.Thread(target=_switch, daemon=True).start()
-    return {"ok": True, "warning": hardware.vram_warning(req.model)}
+    return {"ok": True}
 
 
 @app.get("/browser/status")
