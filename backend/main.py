@@ -590,7 +590,12 @@ def chat_stream(req: ChatRequest):
     def generate():
         full_text = ""
         try:
-            for event in llm_client.stream_reply(req.message, req.history, turn_id=req.turn_id, mode=req.mode, images=req.images, is_speech=req.is_speech):
+            # Ephemeral turns (the /btw window) mint a throwaway conv_id
+            # every time (see conv_id above) that's never reused — chaining
+            # against it would just leak one dead entry into
+            # llm_client's response-chain store per question, forever.
+            chain_conv_id = None if req.ephemeral else conv_id
+            for event in llm_client.stream_reply(req.message, req.history, turn_id=req.turn_id, mode=req.mode, images=req.images, is_speech=req.is_speech, conversation_id=chain_conv_id):
                 if event["type"] == "sentence":
                     text = _strip_emojis(event["text"])
                     # Leere Sätze (löst ein Reasoning-Modell manchmal am Ende aus)

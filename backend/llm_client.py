@@ -225,7 +225,10 @@ def warm_system_prompt(model: str, on_load_progress: Callable[[float], None] | N
     """
     try:
         with mcp_server.request_scope(lambda: False) as integration:
-            body = {**_native_body(model, _system_prompt(False), "hi", integration), "max_output_tokens": 1}
+            body = {
+                **_native_body(model, _system_prompt(False), "hi", integration, store=False),
+                "max_output_tokens": 1,
+            }
             for data in _native_events(body):
                 if data.get("type") == "model_load.progress" and on_load_progress:
                     on_load_progress(data.get("progress", 0.0))
@@ -976,16 +979,17 @@ def _reasoning_options(model: str) -> list[str]:
     return _reasoning_options_cache[model]
 
 
-def _native_body(model: str, system_prompt: str, user_input, integration: dict) -> dict:
+def _native_body(model: str, system_prompt: str, user_input, integration: dict, *, store: bool = True) -> dict:
     body = {
         "model": model,
         "system_prompt": system_prompt,
         "input": user_input,
         "integrations": [integration],
         "temperature": 0.2,
-        # Jarvis sends the whole context every turn (see _native_input);
-        # nothing to keep on LM Studio's side.
-        "store": False,
+        # Stored by default so a later round/turn can chain off this one's
+        # response_id (see _native_round, _chain_lookup/_chain_store) —
+        # only the one-off warm-up ping opts out, see warm_system_prompt.
+        "store": store,
     }
     # Same intent as `reasoning_effort: none` on the OpenAI path: answer
     # directly instead of thinking first — only where the model allows it.
@@ -1075,7 +1079,14 @@ def _native_input(messages: list):
     chat templates render the tool definitions right after the system
     prompt, so a growing history there would push them out of LM Studio's
     prompt cache every turn. This way each turn's transcript extends the
-    previous one's."""
+    previous one's.
+
+    Called with the FULL `messages` list when there's no response_id to
+    chain off of (see _native_round); called with just `[messages[0],
+    messages[-1]]` for a chained round, where `earlier` then comes out
+    empty and this naturally returns just the newest message with no
+    transcript prefix — LM Studio already has everything before that
+    stored server-side (see _chain_lookup/_chain_store)."""
     system_prompt = messages[0]["content"]
     *earlier, current = messages[1:]
     text = _content_text(current["content"])
@@ -1095,13 +1106,28 @@ def _native_input(messages: list):
     return system_prompt, [{"type": "text", "content": text}, *({"type": "image", "data_url": url} for url in images)]
 
 
-def _native_round(messages: list, model: str, turn_id: str | None):
+def _native_round(messages: list, model: str, turn_id: str | None, previous_response_id: str | None = None):
     """A round against LM Studio's native /api/v1/chat. LM Studio runs the
     tool loop itself through mcp_server, so one round can already contain
-    several tool calls and the text before and after them."""
-    system_prompt, user_input = _native_input(messages)
+    several tool calls and the text before and after them.
+
+    `previous_response_id`, when given, chains off an earlier round/turn's
+    stored response instead of resending the whole transcript (see
+    _native_input). `system_prompt`/`integrations` are sent fresh either
+    way — like the OpenAI Responses API LM Studio mirrors here, those do
+    NOT automatically carry over via previous_response_id (confirmed:
+    https://github.com/vllm-project/vllm/issues/37697, an instructions-
+    leak reported as a bug precisely because that's not the intended
+    behaviour), only the conversation-so-far does."""
+    if previous_response_id:
+        system_prompt, user_input = _native_input([messages[0], messages[-1]])
+    else:
+        system_prompt, user_input = _native_input(messages)
     with mcp_server.request_scope(lambda: not _turn_cancelled(turn_id)) as integration:
-        events = _native_events(_native_body(model, system_prompt, user_input, integration))
+        body = _native_body(model, system_prompt, user_input, integration)
+        if previous_response_id:
+            body["previous_response_id"] = previous_response_id
+        events = _native_events(body)
         try:
             yield None
             for data in events:
@@ -1130,24 +1156,69 @@ def _native_round(messages: list, model: str, turn_id: str | None):
                 elif kind == "error":
                     raise _native_error(data.get("error") or {})
                 elif kind == "chat.end":
+                    rid = (data.get("result") or {}).get("response_id")
+                    if rid:
+                        yield {"kind": "response_id", "id": rid}
                     return
         finally:
             events.close()
 
 
-def _open_round(messages: list, turn_id: str | None):
+# conversation_id -> {"response_id", "expect_history_len"}, for LM Studio's
+# native response-chaining (see _native_round's previous_response_id). Lets
+# a turn send only its new message instead of the whole growing transcript,
+# while still resending system_prompt/integrations every time (LM Studio
+# does not carry those over via previous_response_id, see _native_round).
+# `expect_history_len` guards against a stale chain: it's the `history`
+# length the NEXT turn must arrive with for this response_id to still be
+# valid (this turn's history length + 2, the user/assistant pair the
+# frontend appends) — anything else (history compacted/edited/branched, a
+# different conversation reusing an id) falls back to a fresh, full-
+# transcript round instead of risking a mismatched chain.
+# In-memory only: a Jarvis restart or an LM Studio restart both legitimately
+# invalidate any chain, and the fallback (full transcript) is always
+# correct, just not maximally cheap — nothing here is worth persisting.
+_response_chains: dict[str, dict] = {}
+
+
+def _chain_lookup(conversation_id: str | None, history: list | None) -> str | None:
+    if not conversation_id:
+        return None
+    state = _response_chains.get(conversation_id)
+    if not state or state["expect_history_len"] != len(history or []):
+        return None
+    return state["response_id"]
+
+
+def _chain_store(conversation_id: str | None, history: list | None, response_id: str | None) -> None:
+    if not conversation_id or not response_id:
+        return
+    _response_chains[conversation_id] = {
+        "response_id": response_id,
+        "expect_history_len": len(history or []) + 2,
+    }
+
+
+def _chain_clear(conversation_id: str | None) -> None:
+    if conversation_id:
+        _response_chains.pop(conversation_id, None)
+
+
+def _open_round(messages: list, turn_id: str | None, previous_response_id: str | None = None):
     """The event stream (see above) for one model round, from the first
     target in `_request_targets` that accepts the connection — falling back
     (e.g. from a dead DeepSeek key to LM Studio) only as long as nothing has
     streamed yet; once it has, a mid-stream error surfaces instead of
     silently restarting with a different model. LM Studio goes through its
-    native /api/v1/chat, DeepSeek through its OpenAI-compatible endpoint."""
+    native /api/v1/chat, DeepSeek through its OpenAI-compatible endpoint.
+    `previous_response_id` only ever applies to the LM Studio target —
+    DeepSeek has no such feature."""
     last_exc: Exception = ModelError("Kein Modell-Ziel konfiguriert.")
     for base_url, model, headers, extra in _request_targets():
         if base_url == config.DEEPSEEK_BASE_URL:
             stream = _openai_round(messages, base_url, model, headers, extra)
         else:
-            stream = _native_round(messages, model, turn_id)
+            stream = _native_round(messages, model, turn_id, previous_response_id)
         try:
             next(stream)
         except requests.RequestException as exc:
@@ -1838,19 +1909,19 @@ def _turn_cancelled(turn_id: str | None) -> bool:
     return bool(turn_id) and turn_id in _cancelled_turns
 
 
-def stream_reply(user_message: str, history: list | None = None, turn_id: str | None = None, mode: str | None = None, images: list[str] | None = None, is_speech: bool = False):
+def stream_reply(user_message: str, history: list | None = None, turn_id: str | None = None, mode: str | None = None, images: list[str] | None = None, is_speech: bool = False, conversation_id: str | None = None):
     """Thin wrapper around _stream_reply_impl that guarantees turn_id gets
     dropped from _cancelled_turns once the turn ends, cancelled or not —
     otherwise every turn_id a client ever sends would sit in that set
     forever."""
     try:
-        yield from _stream_reply_impl(user_message, history, turn_id, mode, images, is_speech)
+        yield from _stream_reply_impl(user_message, history, turn_id, mode, images, is_speech, conversation_id)
     finally:
         if turn_id:
             _cancelled_turns.discard(turn_id)
 
 
-def _stream_reply_impl(user_message: str, history: list | None = None, turn_id: str | None = None, mode: str | None = None, images: list[str] | None = None, is_speech: bool = False):
+def _stream_reply_impl(user_message: str, history: list | None = None, turn_id: str | None = None, mode: str | None = None, images: list[str] | None = None, is_speech: bool = False, conversation_id: str | None = None):
     """Generator yielding {"type": "sentence", "text": ...} as soon as each
     sentence of the reply is complete, then a final {"type": "done"}.
 
@@ -1880,6 +1951,19 @@ def _stream_reply_impl(user_message: str, history: list | None = None, turn_id: 
         return
 
     messages = _build_messages(user_message, history, mode, images, is_speech)
+    # LM Studio response_id this turn should chain off of (see _open_round's
+    # previous_response_id) if the stored chain still matches this
+    # conversation's history — None sends the full transcript instead, same
+    # as before chaining existed. Only ever offered to the FIRST round of
+    # the turn (is_first_round below); every round after that (leaked-call
+    # recovery, an OpenAI-style follow-up round) falls back to a full
+    # transcript rather than tracking a second, harder-to-reason-about delta
+    # within the same turn. next_chain_id is what actually gets persisted
+    # for the NEXT turn once this one settles — see the two _chain_store
+    # call sites below.
+    chain_id = _chain_lookup(conversation_id, history)
+    next_chain_id: str | None = None
+    is_first_round = True
 
     last_tool_result = None
     full_text_parts = []
@@ -1944,6 +2028,12 @@ def _stream_reply_impl(user_message: str, history: list | None = None, turn_id: 
         pending_claims = []
 
     for _ in range(MAX_TOOL_ROUNDS):
+        # See the chain_id comment above: only this outer loop's first pass
+        # ever offers previous_response_id, every corrupt-retry within it
+        # included (a retry re-forks from the same parent response rather
+        # than chaining off the discarded attempt).
+        round_previous_response_id = chain_id if is_first_round else None
+        is_first_round = False
         # A round is retried on its own (outside the tool-round budget above)
         # when the stream comes back corrupted — see _CORRUPT_PREFIX_RE.
         # Measured up to ~85% corruption for its worst-case trigger (a
@@ -1976,7 +2066,26 @@ def _stream_reply_impl(user_message: str, history: list | None = None, turn_id: 
             # Tools LM Studio already ran within this round (native path) —
             # (name, output) in order, for the next round's context.
             round_tools: list[tuple[str, str]] = []
-            stream = _open_round(messages, turn_id)
+            # This round's own response_id (see _native_round), once its
+            # chat.end arrives — the candidate for next_chain_id below.
+            round_response_id: str | None = None
+            try:
+                stream = _open_round(messages, turn_id, round_previous_response_id)
+            except LmStudioError:
+                # A chained request LM Studio itself rejects (e.g. it forgot
+                # this response_id across a restart) must not wedge this
+                # conversation into failing forever — the next turn would
+                # otherwise keep offering the same now-invalid id (the
+                # history-length check alone can't tell a stale id from a
+                # valid one). Clear it and let the normal retry loop above
+                # just try again without it, this same attempt.
+                if round_previous_response_id:
+                    _chain_clear(conversation_id)
+                    round_previous_response_id = None
+                    chain_id = None
+                    stream = _open_round(messages, turn_id, None)
+                else:
+                    raise
 
             for event in stream:
                 # The Stop button (chat/cancel) used to only be checked
@@ -1992,6 +2101,10 @@ def _stream_reply_impl(user_message: str, history: list | None = None, turn_id: 
                     yield {"type": "done", "full_text": "".join(full_text_parts)}
                     return
                 kind = event["kind"]
+
+                if kind == "response_id":
+                    round_response_id = event["id"]
+                    continue
 
                 if kind == "progress":
                     percent = int(event["progress"] * 100)
@@ -2150,6 +2263,14 @@ def _stream_reply_impl(user_message: str, history: list | None = None, turn_id: 
             # ran a tool in it, or that tool's side effect happens twice.
             # The garbage is dropped below instead, like after the last retry.
             if suspect != "corrupt" or round_tools:
+                # This round's output is what's being kept (not discarded
+                # for a retry) — its response_id becomes the candidate the
+                # NEXT turn chains off of. A corrupt round that still ran a
+                # tool (round_tools) keeps its response_id too: the
+                # corruption is in how the text rendered on this end, not
+                # in what LM Studio actually holds server-side.
+                if round_response_id:
+                    next_chain_id = round_response_id
                 break
 
         if tool_budget_exhausted:
@@ -2315,6 +2436,7 @@ def _stream_reply_impl(user_message: str, history: list | None = None, turn_id: 
             yield {"type": "sentence", "text": empty}
             full_text_parts.append(empty)
 
+        _chain_store(conversation_id, history, next_chain_id)
         yield {"type": "done", "full_text": " ".join(full_text_parts)}
         return
 
@@ -2333,6 +2455,7 @@ def _stream_reply_impl(user_message: str, history: list | None = None, turn_id: 
         )
     else:
         spoken = "Das dauert mir gerade zu lange, frag mich das nochmal."
+    _chain_store(conversation_id, history, next_chain_id)
     yield {"type": "sentence", "text": spoken}
     yield {"type": "done", "full_text": spoken}
 
