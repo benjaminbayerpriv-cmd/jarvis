@@ -4017,6 +4017,14 @@
     modelCapsMap = j.model_caps || {};
     modelFitMap = j.model_fit || {};
     currentModelSupportsVision = (j.current_caps || []).includes('vision');
+    if (j.notice) {
+      // Backend-Statusmeldung (z. B. "Modell bereit") in die Statuszeile
+      // über der Unterhaltung — statt Popup.
+      if (noticeStripEl && noticeStripTextEl) {
+        noticeStripTextEl.textContent = String(j.notice);
+        noticeStripEl.style.display = 'flex';
+      }
+    }
     if (!startupFitWarningShown && j.current_fit && j.current_fit.fits === false && j.current_fit.message) {
       startupFitWarningShown = true;
       showNotice(j.current_fit.message);

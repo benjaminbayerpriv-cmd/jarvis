@@ -242,9 +242,9 @@ class CancelRequest(BaseModel):
 
 class SelectModelRequest(BaseModel):
     model: str
-    # "Trotzdem laden" im Modell-Auswahlmenü — überspringt hardware.py's
-    # Speicher-Check, statt den Nutzer auf Chat-Nachrichten zu verweisen, wo
-    # dieselbe Umgehung schon existiert (siehe /model/force-load).
+    # "Trotzdem laden" im Modell-Auswahlmenü — bleibt im Request-Modell,
+    # damit das alte Frontend (schickt force bei jedem Wechsel) weiterhin
+    # valide bleibt, nachdem der Größen-/Speicher-Check entfernt wurde.
     force: bool = False
 
 
@@ -1105,6 +1105,11 @@ def list_models():
                     "message": hardware.blocked_reason(config.LM_STUDIO_MODEL),
                 }
             ),
+            # Letzte Status-Meldung ("Modell bereit …") für die Statuszeile
+            # im Frontend — der Startup-Hinweis wird über den WebSocket
+            # gebroadcastet, bevor der Browser lädt; nachgeliefert wird er
+            # über dieses Feld beim nächsten /models-Abruf.
+            "notice": panel.last_notice(),
         }
     except requests.RequestException as exc:
         return {"models": [], "current": current, "error": str(exc)}
