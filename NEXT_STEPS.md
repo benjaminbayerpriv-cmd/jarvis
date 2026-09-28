@@ -1,9 +1,56 @@
 # Übergabe: natives LM-Studio-Tool-Calling + Live-Fortschritt (MCP)
 
+## ERGEBNIS (2026-09-28): Ansatz verworfen — zwei harte Blocker
+
+Eine andere Session (Branch `claude/nice-archimedes-jxyh6q`, Commit
+`9d502de`) hat den kompletten Umbau bereits gebaut (MCP-Server,
+`llm_client.py` auf normalisierte Runden-Events umgestellt, ~740 Zeilen
+Diff) — **bevor** der in diesem Dokument unten beschriebene Testschritt 0
+durchlief. Claude Code hat das nachträglich in einem isolierten Worktree
+gegen echtes LM Studio getestet, BEVOR es auf einem echten Rechner
+ausprobiert wurde. Ergebnis: zwei voneinander unabhängige, harte Blocker.
+
+1. **Abhängigkeitskonflikt:** `mcp==2.2.0` (aus requirements.txt in diesem
+   Branch) zieht eine `starlette`-Version, die mit dem im Projekt
+   gepinnten `fastapi==0.115.6` inkompatibel ist. Ergebnis: die App
+   **stürzt beim Start komplett ab** (`TypeError: Router.__init__() got an
+   unexpected keyword argument 'on_startup'`), nicht nur das neue Feature.
+   Ein Downgrade von `starlette` auf eine mit fastapi kompatible Version
+   bringt die App zwar wieder zum Laufen, kollidiert dann aber mit `mcp`s
+   eigener Abhängigkeit `sse-starlette` (die eine neuere `starlette`
+   braucht) — ungelöst, vermutlich nur durch ein größeres fastapi-Upgrade
+   im ganzen Projekt behebbar (eigenes Risiko, nicht klein).
+
+2. **LM Studio lehnt private/LAN-Adressen für MCP grundsätzlich ab.** Live
+   getestet: eine echte Chat-Anfrage mit `ephemeral_mcp` gegen
+   `http://192.168.5.29:8766/mcp` (Jarvis' eigener MCP-Server, LAN-Adresse
+   dieses Macs) wurde von LM Studio mit dieser Fehlermeldung abgelehnt:
+   > "Unable to connect to remote MCP server 'jarvis' … URL resolves to a
+   > non-public address. We only allow public addresses for dynamic
+   > remote MCP connections."
+
+   Das ist keine Einstellung ("Allow per-request MCPs" war aktiv, Version
+   war neu genug), sondern eine feste Sicherheitsregel von LM Studio.
+   Benjamins/Christophs Setup (Jarvis und LM Studio beide im privaten
+   Heimnetz, keine öffentliche Adresse) kann `ephemeral_mcp` damit
+   grundsätzlich nicht nutzen — außer man hängt Jarvis' MCP-Server über
+   einen öffentlichen Tunnel (ngrok, Cloudflare Tunnel o.ä.) ins Internet,
+   was NICHT empfohlen wird: `run_shell` und die anderen Tools wären dann
+   (auch wenn token-geschützt) einem öffentlich erreichbaren Endpunkt
+   ausgesetzt.
+
+**Empfehlung: diesen Ansatz nicht weiterverfolgen.** Bei der bereits
+gemergten, pragmatischen Lösung bleiben (Live-Status über den normalen
+OpenAI-kompatiblen Pfad, siehe "Was schon erledigt ist" unten). Der Branch
+`claude/nice-archimedes-jxyh6q` sollte NICHT gemerged werden.
+
+---
+
 Stand: 2026-09-27, von Claude Code. Grund für diese Datei: Benjamins
 Wochenlimit war fast aufgebraucht, Untersuchung wurde bewusst NICHT
-begonnen, nur recherchiert. Nächste Session (egal ob OpenCode, Claude Code
-oder Codex) soll hier anschließen, nicht neu anfangen.
+begonnen, nur recherchiert. Der oben stehende Test wurde am 2026-09-28
+trotzdem nachgeholt, weil ein anderer Branch den Umbau schon ungetestet
+gebaut hatte.
 
 ## Ziel
 
