@@ -191,6 +191,9 @@
         { key: 'deepseek_model', label: 'DeepSeek Modell', placeholder: 'deepseek-chat' },
       ],
     },
+    { id: 'lm-studio-auth', title: 'LM Studio', desc: 'Nur nötig, wenn in LM Studio „Require Authentication“ eingeschaltet ist', icon: SETTINGS_ICONS.connection, fields: [
+      { key: 'lm_studio_api_token', label: 'LM-Studio-API-Token', placeholder: 'nur bei „Require Authentication“ nötig', type: 'password' },
+    ] },
     { id: 'gedaechtnis', title: 'Gedächtnis', desc: 'Embedding-Modell für die semantische Notizsuche', icon: SETTINGS_ICONS.memory, fields: [
       { key: 'embedding_model', label: 'Embedding-Modell (in LM Studio geladen)', placeholder: 'text-embedding-nomic-embed-text-v1.5' },
     ] },

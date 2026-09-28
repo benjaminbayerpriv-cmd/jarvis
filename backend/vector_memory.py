@@ -52,6 +52,7 @@ def embed(text: str, task: str = "document") -> list[float] | None:
         resp = requests.post(
             f"{config.LM_STUDIO_BASE_URL}/embeddings",
             json={"model": config.EMBEDDING_MODEL, "input": prefix + text},
+            headers=config.lm_studio_headers(),
             timeout=10,
         )
         resp.raise_for_status()

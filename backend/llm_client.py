@@ -574,7 +574,7 @@ def _request_targets() -> list[tuple[str, str, dict, dict]]:
             too_large = fit.get("message", too_large)
     lmstudio_target = None
     if not too_large:
-        lmstudio_target = (config.LM_STUDIO_BASE_URL, config.LM_STUDIO_MODEL, {}, {"reasoning_effort": "none"})
+        lmstudio_target = (config.LM_STUDIO_BASE_URL, config.LM_STUDIO_MODEL, config.lm_studio_headers(), {"reasoning_effort": "none"})
 
     if config.ACTIVE_PROVIDER == "lmstudio":
         ordered = [lmstudio_target, deepseek_target]
@@ -697,7 +697,7 @@ def list_models() -> list[str]:
     _request_targets(): a configured DeepSeek key always won, regardless of
     what was picked) — the picker looked broken specifically for DeepSeek."""
     try:
-        response = requests.get(f"{config.LM_STUDIO_BASE_URL}/models", timeout=5)
+        response = requests.get(f"{config.LM_STUDIO_BASE_URL}/models", headers=config.lm_studio_headers(), timeout=5)
         response.raise_for_status()
         # Embedding models can't chat — picking one in the model menu used
         # to break every following message.
@@ -735,7 +735,7 @@ def _native_model_meta() -> dict[str, dict]:
     base = config.LM_STUDIO_BASE_URL
     root = base[: base.rfind("/v1")].rstrip("/") if base.endswith("/v1") else base.rstrip("/")
     try:
-        response = requests.get(f"{root}/api/v0/models", timeout=4)
+        response = requests.get(f"{root}/api/v0/models", headers=config.lm_studio_headers(), timeout=4)
         response.raise_for_status()
         return {
             entry.get("id"): entry
@@ -794,7 +794,7 @@ def list_model_capabilities() -> dict[str, list[str]]:
     fallback so a metadata quirk never breaks the endpoint."""
     native = _native_model_meta()
     try:
-        response = requests.get(f"{config.LM_STUDIO_BASE_URL}/models", timeout=5)
+        response = requests.get(f"{config.LM_STUDIO_BASE_URL}/models", headers=config.lm_studio_headers(), timeout=5)
         response.raise_for_status()
         data = response.json().get("data", [])
     except requests.RequestException:
@@ -826,7 +826,7 @@ def eject_model(model_id: str) -> None:
     try:
         resp = requests.post(
             f"{hardware.lm_studio_root()}/api/v1/models/unload",
-            json={"instance_id": model_id}, timeout=10,
+            json={"instance_id": model_id}, headers=config.lm_studio_headers(), timeout=10,
         )
         if resp.status_code < 400:
             return
@@ -872,7 +872,7 @@ def model_health() -> tuple[bool, str]:
             print(f"[model] DeepSeek nicht erreichbar, prüfe LM Studio: {exc}")
 
     try:
-        response = requests.get(f"{config.LM_STUDIO_BASE_URL}/models", timeout=5)
+        response = requests.get(f"{config.LM_STUDIO_BASE_URL}/models", headers=config.lm_studio_headers(), timeout=5)
         response.raise_for_status()
         models = {entry.get("id") for entry in response.json().get("data", [])}
     except requests.RequestException as exc:
@@ -962,7 +962,7 @@ _reasoning_options_cache: dict[str, list[str]] = {}
 
 def _reasoning_options(model: str) -> list[str]:
     if model not in _reasoning_options_cache:
-        resp = requests.get(f"{hardware.lm_studio_root()}/api/v1/models", timeout=5)
+        resp = requests.get(f"{hardware.lm_studio_root()}/api/v1/models", headers=config.lm_studio_headers(), timeout=5)
         if resp.status_code >= 400:
             raise _native_rejection(resp)
         for entry in resp.json().get("models", []):
@@ -1002,8 +1002,19 @@ def _native_rejection(resp: requests.Response) -> LmStudioError:
         detail = ""
     detail = detail or resp.text.strip() or f"HTTP {resp.status_code}"
     hint = ""
+    # Message content decides first — a 403 specifically about mcp.json
+    # permissions needs the mcp.json hint, not the generic auth one, even
+    # though both surface as 401/403.
     if "mcp" in detail.lower():
-        hint = " In LM Studio unter Developer → Server Settings „Allow per-request MCPs“ einschalten."
+        hint = (
+            " In LM Studio unter Developer → Server Settings „Allow calling servers from mcp.json“ "
+            "einschalten und Jarvis' Eintrag in mcp.json prüfen."
+        )
+    elif resp.status_code in (401, 403):
+        hint = (
+            " Hat LM Studio „Require Authentication“ an? Dann muss das passende Token auch in "
+            "Jarvis unter Einstellungen -> LM-Studio-API-Token eingetragen sein."
+        )
     elif resp.status_code == 404:
         hint = " Jarvis braucht LM Studio 0.4.0 oder neuer."
     return LmStudioError(f"LM Studio hat die Anfrage abgelehnt: {detail}.{hint}")
@@ -1013,8 +1024,9 @@ def _native_error(err: dict) -> LmStudioError:
     message = err.get("message") or "unbekannter Fehler"
     if err.get("type") == "mcp_connection_error":
         return LmStudioError(
-            f"LM Studio erreicht Jarvis' Werkzeuge nicht ({message}). Ist „Allow per-request MCPs“ "
-            f"in LM Studio eingeschaltet, und lässt die Firewall Port {config.JARVIS_MCP_PORT} zu?"
+            f"LM Studio erreicht Jarvis' Werkzeuge nicht ({message}). Ist Jarvis' Eintrag in LM "
+            f"Studios mcp.json vorhanden, „Allow calling servers from mcp.json“ eingeschaltet, "
+            f"und lässt die Firewall Port {config.JARVIS_MCP_PORT} zu?"
         )
     return LmStudioError(f"LM Studio meldet einen Fehler: {message}")
 
@@ -1025,6 +1037,7 @@ def _native_events(body: dict):
     resp = requests.post(
         f"{hardware.lm_studio_root()}/api/v1/chat",
         json={**body, "stream": True},
+        headers=config.lm_studio_headers(),
         timeout=_CHAT_TIMEOUT,
         stream=True,
     )

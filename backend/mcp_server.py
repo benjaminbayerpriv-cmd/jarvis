@@ -1,30 +1,40 @@
 """MCP server that exposes Jarvis's tools to LM Studio's native chat API.
 
 LM Studio's /api/v1/chat has no `tools` field for client-side function
-definitions — the only way to give a model tools there is an MCP server
-passed per request as an `ephemeral_mcp` integration. LM Studio then runs
-the tool loop itself: it connects here, lists the tools, calls them and
-feeds the results back to the model, while streaming what happens
+definitions — the only way to give a model tools there is through an MCP
+server, listed under `integrations`. LM Studio then runs the tool loop
+itself: it connects here, lists the tools, calls them and feeds the
+results back to the model, while streaming what happens
 (`tool_call.start/success/failure`, plus model-load and prompt-processing
 progress) to Jarvis.
 
 Every call still ends up in tools.call_tool — only the transport changed.
 
+Registered in LM Studio's own `mcp.json`, NOT as a per-request
+`ephemeral_mcp` integration: LM Studio >= 0.4.15 rejects any ephemeral MCP
+server whose URL resolves to a non-public address — confirmed live even
+for `http://127.0.0.1:...` on the SAME machine (an SSRF guard against a
+chat request dynamically pointing LM Studio at an internal address; see
+https://github.com/lmstudio-ai/lms/issues/574). A server pre-registered by
+the user in mcp.json isn't affected — the address was never
+attacker-suppliable in the first place. See mcp_json_snippet() for the
+one-time entry the user adds, and SETUP.md for the full instructions.
+
 The server listens on all interfaces because LM Studio may run on another
-machine in the LAN; a per-process bearer token (sent by LM Studio via the
-integration's `headers`) keeps everyone else out — run_shell must never be
-reachable for arbitrary devices on the network.
+machine in the LAN; a bearer token keeps everyone else out — run_shell
+must never be reachable for arbitrary devices on the network. The token is
+persisted (config.JARVIS_MCP_TOKEN), not regenerated per start: mcp.json
+is a one-time, human-edited entry, so a token that changed on every
+restart would make it go stale immediately.
 """
 
 from __future__ import annotations
 
 import hmac
 import json
-import secrets
 import socket
 import threading
 import time
-import uuid
 from contextlib import contextmanager
 from typing import Callable, Iterator
 from urllib.parse import urlparse
@@ -38,16 +48,20 @@ from mcp.server.transport_security import TransportSecuritySettings
 from . import config, hardware, tools
 
 SERVER_LABEL = "jarvis"
+INTEGRATION_ID = f"mcp/{SERVER_LABEL}"
 _PATH = "/mcp"
-_REQUEST_HEADER = "x-jarvis-request"
-_TOKEN = secrets.token_urlsafe(32)
 
-# Chat request key -> "may tools still run for it?". A key only exists while
-# its LM Studio request is being streamed, so a call arriving after the
-# stream was closed (Stop button, pending confirmation, tool budget used up)
-# is refused instead of acting on a turn nobody is listening to anymore.
-_requests: dict[str, Callable[[], bool]] = {}
-_requests_lock = threading.Lock()
+# Whether a tool call may run right now, and for whom — set by whichever
+# native chat round (backend/llm_client.py) is currently talking to LM
+# Studio, cleared the moment that round ends (normally, cancelled, or a
+# warm-up that must never let a tool actually run). A single slot, not a
+# per-request registry, is safe here because LM Studio itself only ever
+# processes one chat request at a time (its "single-slot" completion
+# queue — already relied on elsewhere in this codebase) and mcp.json's
+# static headers give a tool call no per-request identifier to key a
+# registry on in the first place.
+_active_lock = threading.Lock()
+_active_may_run: Callable[[], bool] | None = None
 
 
 def _tool_list() -> list[types.Tool]:
@@ -65,16 +79,11 @@ async def _on_list_tools(ctx, params) -> types.ListToolsResult:
     return types.ListToolsResult(tools=_tool_list())
 
 
-def _may_run(request_key: str | None) -> bool:
-    with _requests_lock:
-        allowed = _requests.get(request_key or "")
-    return allowed is not None and allowed()
-
-
 async def _on_call_tool(ctx, params: types.CallToolRequestParams) -> types.CallToolResult:
-    request_key = ctx.request.headers.get(_REQUEST_HEADER) if ctx.request is not None else None
-    if not _may_run(request_key):
-        print(f"[mcp] {params.name} abgelehnt: zugehörige Anfrage ist beendet oder abgebrochen.")
+    with _active_lock:
+        may_run = _active_may_run
+    if may_run is None or not may_run():
+        print(f"[mcp] {params.name} abgelehnt: keine aktive Anfrage erlaubt das gerade.")
         text = "Abgebrochen — dieses Werkzeug wurde nicht ausgeführt."
     else:
         # tools.call_tool blocks (subprocesses, HTTP, the browser agent) —
@@ -94,7 +103,7 @@ def _build_app():
         # the actual protection.
         transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
     )
-    expected = f"Bearer {_TOKEN}".encode()
+    expected = f"Bearer {config.ensure_mcp_token()}".encode()
 
     async def app(scope, receive, send):
         if scope["type"] == "http":
@@ -138,12 +147,15 @@ def ensure_started() -> None:
             time.sleep(0.02)
         _uvicorn_server = server
         print(f"[mcp] Werkzeug-Server läuft auf Port {config.JARVIS_MCP_PORT}.")
+        print(f"[mcp] Einmalig in LM Studios mcp.json eintragen:\n{mcp_json_snippet()}")
 
 
 def _address_seen_by_lm_studio() -> str:
     """This machine's IP as LM Studio has to dial it: loopback when LM Studio
     runs here, otherwise the local interface that routes to LM Studio's host
-    — resolved per request, since the machine may switch networks."""
+    — resolved fresh each time, since the machine may switch networks. Only
+    matters for the mcp.json snippet shown to the user; unlike the old
+    ephemeral_mcp path this is no longer sent to LM Studio automatically."""
     host = urlparse(hardware.lm_studio_root()).hostname or "127.0.0.1"
     if host in ("127.0.0.1", "localhost", "::1"):
         return "127.0.0.1"
@@ -156,25 +168,43 @@ def server_url() -> str:
     return f"http://{_address_seen_by_lm_studio()}:{config.JARVIS_MCP_PORT}{_PATH}"
 
 
+def mcp_json_snippet() -> str:
+    """The one-time entry the user pastes into LM Studio's mcp.json (Program
+    tab -> Install -> Edit mcp.json). Re-print this (e.g. after a network
+    change moved server_url(), or a fresh JARVIS_MCP_TOKEN) rather than
+    assuming the previous entry still matches."""
+    return json.dumps(
+        {
+            "mcpServers": {
+                SERVER_LABEL: {
+                    "url": server_url(),
+                    "headers": {"Authorization": f"Bearer {config.ensure_mcp_token()}"},
+                }
+            }
+        },
+        indent=2,
+        ensure_ascii=False,
+    )
+
+
 @contextmanager
 def request_scope(may_run: Callable[[], bool]) -> Iterator[dict]:
-    """The `ephemeral_mcp` integration for one LM Studio chat request. Tool
-    calls carrying it only run while this scope is open and `may_run()`
-    holds."""
+    """The integration entry for one LM Studio chat request — referencing
+    the mcp.json server above by its plugin id, not carrying a URL/token of
+    its own (LM Studio's /api/v1/chat has no headers field for the
+    "plugin" integration type; only its own ephemeral_mcp type does, and
+    that one is what's blocked — see module docstring). Tool calls arriving
+    while this scope is open run only as long as `may_run()` holds."""
     ensure_started()
-    key = uuid.uuid4().hex
-    with _requests_lock:
-        _requests[key] = may_run
+    global _active_may_run
+    with _active_lock:
+        _active_may_run = may_run
     try:
-        yield {
-            "type": "ephemeral_mcp",
-            "server_label": SERVER_LABEL,
-            "server_url": server_url(),
-            "headers": {"Authorization": f"Bearer {_TOKEN}", "X-Jarvis-Request": key},
-        }
+        yield {"type": "plugin", "id": INTEGRATION_ID}
     finally:
-        with _requests_lock:
-            _requests.pop(key, None)
+        with _active_lock:
+            if _active_may_run is may_run:
+                _active_may_run = None
 
 
 def output_text(raw: str) -> str:

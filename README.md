@@ -129,7 +129,8 @@ Obsidian-Vault): [SETUP.md](SETUP.md).
 | `TAVILY_API_KEY` | (optional, kostenlos) Echte Web-Suchergebnisse; ohne Key öffnet `web_search` die Suche im Browser. |
 | `GEMINI_API_KEY` / `GEMINI_MODEL` | Nur für das experimentelle `backend/live_voice_test.py`, nicht Teil der normalen Pipeline. |
 | `JARVIS_HOST` / `JARVIS_PORT` | Bind-Adresse und Port des Servers. |
-| `JARVIS_MCP_PORT` | Port des MCP-Servers, über den LM Studio Jarvis' Werkzeuge aufruft (Standard 8765, token-geschützt). In LM Studio muss „Allow per-request MCPs“ an sein, siehe [SETUP.md](SETUP.md). |
+| `JARVIS_MCP_PORT` | Port des MCP-Servers, über den LM Studio Jarvis' Werkzeuge aufruft (Standard 8765, token-geschützt). Einmalig in LM Studios `mcp.json` eintragen, siehe [SETUP.md](SETUP.md). |
+| `LM_STUDIO_API_TOKEN` | (optional) Nur nötig, wenn LM Studio „Require Authentication“ eingeschaltet hat — Jarvis schickt es dann bei jeder Anfrage an LM Studio mit. |
 | `config.json` | Name, Persönlichkeit (`locker_direkt`), Standard-Stadt für „Wetter“, `code_dir`, `code_agent` (`opencode`/`claude`/`codex`, Code-Tab). |
 | `OPENCODE_BIN` / `CLAUDE_BIN` / `CODEX_BIN` | (optional) Pfad zur jeweiligen CLI überschreiben, falls sie nicht im PATH liegt. Claude Code (`npm i -g @anthropic-ai/claude-code`) und Codex (`npm i -g @openai/codex`) bringen ihre eigene Authentifizierung/Modellwahl mit. |
 

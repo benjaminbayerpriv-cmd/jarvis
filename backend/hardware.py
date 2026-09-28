@@ -158,7 +158,7 @@ def _v1_models() -> list[dict] | None:
     Returns None (not []) on failure/older LM Studio, so callers can fall
     back to the legacy sources instead of concluding "no models"."""
     try:
-        resp = requests.get(f"{lm_studio_root()}/api/v1/models", timeout=4)
+        resp = requests.get(f"{lm_studio_root()}/api/v1/models", headers=config.lm_studio_headers(), timeout=4)
         resp.raise_for_status()
         return resp.json().get("models", [])
     except (requests.RequestException, ValueError):
@@ -229,7 +229,7 @@ def _loaded_models_raw() -> list[dict]:
                     out.append({"id": inst["id"], "size_bytes": size})
         return out
     try:
-        resp = requests.get(f"{lm_studio_root()}/api/v0/models", timeout=4)
+        resp = requests.get(f"{lm_studio_root()}/api/v0/models", headers=config.lm_studio_headers(), timeout=4)
         resp.raise_for_status()
         return [
             {"id": e["id"], "size_bytes": 0}

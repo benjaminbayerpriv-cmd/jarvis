@@ -276,6 +276,7 @@ class UpdateSettingsRequest(BaseModel):
     # Typkonvertierung braucht.
     deepseek_enabled: bool | None = None
     tavily_api_key: str | None = None
+    lm_studio_api_token: str | None = None
 
 
 class CreateProjectRequest(BaseModel):
@@ -857,7 +858,7 @@ def model_test(req: UpdateSettingsRequest):
     if not base:
         return {"healthy": False, "detail": "Bitte einen Endpoint oder API-Key eintragen."}
     try:
-        resp = requests.get(f"{base}/models", timeout=6)
+        resp = requests.get(f"{base}/models", headers=config.lm_studio_headers(), timeout=6)
         resp.raise_for_status()
         models = [entry.get("id") for entry in resp.json().get("data", []) if entry.get("id")]
     except requests.RequestException as exc:
@@ -912,7 +913,12 @@ def _validate_lm_studio(ip: str, port: int) -> dict | None:
     model list — run via asyncio.to_thread since `requests` is synchronous
     and this only ever runs for the handful of hosts whose port answered."""
     try:
-        resp = requests.get(f"http://{ip}:{port}/v1/models", timeout=2.5)
+        # Nur der bereits konfigurierte LM-Studio-Token wird hier probiert
+        # (nicht irgendein anderswo gescannter Host bekäme ihn zu sehen,
+        # er geht ja nur an genau die IP, die gerade geprüft wird) — ohne
+        # ihn würde der Scan LM Studio selbst als "kein Treffer" verwerfen,
+        # sobald "Require Authentication" an ist.
+        resp = requests.get(f"http://{ip}:{port}/v1/models", headers=config.lm_studio_headers(), timeout=2.5)
         resp.raise_for_status()
         models = [m.get("id") for m in resp.json().get("data", []) if m.get("id")]
     except (requests.RequestException, ValueError):
@@ -1025,7 +1031,7 @@ def model_force_load():
     try:
         requests.post(
             f"{hardware.lm_studio_root()}/api/v1/models/load",
-            json={"model": config.LM_STUDIO_MODEL}, timeout=600,
+            json={"model": config.LM_STUDIO_MODEL}, headers=config.lm_studio_headers(), timeout=600,
         )
     except requests.RequestException as exc:
         print(f"[model] /api/v1/models/load für {config.LM_STUDIO_MODEL} fehlgeschlagen ({exc}), JIT-Laden bleibt als Fallback.")
