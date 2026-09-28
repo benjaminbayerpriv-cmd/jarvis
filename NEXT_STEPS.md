@@ -7,9 +7,20 @@ Stand: 2026-09-28, von Claude Code.
 Der Umbau steht, mit einem wichtigen Kurswechsel gegenüber der ersten
 Fassung: **nicht mehr `ephemeral_mcp`, sondern LM Studios `mcp.json`.**
 Grund und Belege unten unter "Warum `ephemeral_mcp` verworfen wurde".
-Noch **nicht** gegen ein echtes LM Studio getestet — nur gegen ein
-nachgebautes (`fake_lmstudio.py`, siehe unten). Das ist der eine offene
-Punkt vor "fertig".
+
+**Live gegen echtes LM Studio bestätigt** (2026-09-28, separat von
+Christoph getestet, siehe `main`-Commit `349b287`): eine echte
+Chat-Anfrage mit `{"type": "plugin", "id": "mcp/jarvis"}` erreicht LM
+Studio korrekt und bekommt eine präzise, LM-Studio-eigene Antwort zurück
+— *"Permission denied to use plugin 'mcp/jarvis' … 'Allow calling servers
+from mcp.json' einschalten"* — statt eines Absturzes oder einer
+kryptischen Meldung. Das bestätigt: das Request-Format wird richtig
+geparst, der Plugin-Id `mcp/jarvis` korrekt erkannt. Getestet wurde
+bewusst OHNE den `mcp.json`-Eintrag wirklich zu registrieren — der letzte
+Schritt (Eintrag wirklich eintragen, "Allow calling servers from
+mcp.json" + "Require Authentication" einschalten, dann ein Tool
+tatsächlich aufrufen lassen) ist der eine verbleibende Punkt vor
+"fertig", siehe Offene Punkte unten.
 
 ## Was jetzt so läuft
 
@@ -68,10 +79,10 @@ dynamisch pro Anfrage. Diese SSRF-Sperre betrifft laut LM Studios eigener
 Doku nur den dynamischen Weg; ein einmalig von Hand eingetragener
 `http://127.0.0.1:...`-Server ist eine andere Vertrauensstufe (die
 Adresse kommt vom Nutzer selbst, nicht aus einer möglicherweise fremden
-Chat-Anfrage). Diese Annahme ist plausibel und durch LM Studios
-Architektur-Doku gestützt, aber **nicht** durch eine offizielle Aussage
-von LM-Studio-Mitarbeitern in den beiden obigen Issues bestätigt — das
-ist der zentrale noch offene Punkt, siehe unten.
+Chat-Anfrage). **Live bestätigt** (siehe Kurzfassung oben): eine
+Chat-Anfrage mit dem `mcp.json`-Integrationstyp wird von echtem LM Studio
+angenommen und korrekt verarbeitet, nicht von derselben SSRF-Sperre
+abgewiesen.
 
 ## Was inzwischen umgebaut wurde
 
@@ -110,38 +121,30 @@ ist der zentrale noch offene Punkt, siehe unten.
 
 ## Offene Punkte für die nächste Session
 
-1. **Zuerst das hier, bevor irgendwas anderes:** live gegen echtes LM
-   Studio bestätigen, dass ein `mcp.json`-Eintrag mit
-   `http://127.0.0.1:8765/mcp` tatsächlich funktioniert (siehe
-   "Der Ausweg" oben — plausibel, aber nicht offiziell bestätigt).
-   Konkret: Jarvis einmal starten (gibt den `mcp.json`-Block in der
-   Konsole aus), den Block in LM Studio einfügen, "Allow calling servers
-   from mcp.json" + "Require Authentication" einschalten, ein Token in LM
-   Studio erzeugen und in Jarvis unter Einstellungen -> LM Studio
-   eintragen, dann eine normale Chat-Nachricht schicken, die ein Werkzeug
-   braucht (z.B. "wie spät ist es").
-2. Falls das ebenfalls an derselben SSRF-Sperre scheitert (mcp.json wäre
-   dann genauso betroffen wie ephemeral_mcp): Rückfalloption wäre ein
-   öffentlicher Tunnel (ngrok, Cloudflare Tunnel) für Jarvis' MCP-Server —
-   bewusst nicht implementiert, weil das `run_shell` und die anderen
-   Werkzeuge einem öffentlich erreichbaren Endpunkt aussetzen würde (auch
-   token-geschützt ein deutlich größeres Risiko). In dem Fall: bei der
-   bereits gemergten, pragmatischen Lösung bleiben (Live-Status über den
-   normalen OpenAI-kompatiblen Pfad, siehe unten) und diesen ganzen
-   MCP-Ansatz wirklich verwerfen.
-3. Welche LM-Studio-Version aktuell läuft, unklar (muss ≥ 0.4.0 für den
+1. **Zuerst das hier, bevor irgendwas anderes:** den vollen Kreislauf auf
+   dem echten Windows-Rechner einmal komplett durchspielen — die SSRF-
+   Kernfrage ist geklärt (siehe oben), es fehlt nur noch der manuelle
+   Teil: Jarvis einmal starten (gibt den `mcp.json`-Block mit der
+   aktuellen Adresse + Token in der Konsole aus), den Block wirklich in
+   LM Studios `mcp.json` einfügen, "Allow calling servers from mcp.json"
+   + "Require Authentication" einschalten, das Token in Jarvis unter
+   Einstellungen -> LM Studio eintragen, dann eine normale
+   Chat-Nachricht schicken, die ein Werkzeug braucht (z.B. "wie spät ist
+   es"). Klappt der Tool-Aufruf, ist der Branch aus fachlicher Sicht
+   mergebereit (nach normalem Code-Review).
+2. Welche LM-Studio-Version aktuell läuft, unklar (muss ≥ 0.4.0 für den
    `/api/v1/chat`-Endpunkt sein, und die `mcp.json`-Rechte brauchen
    vermutlich auch eine halbwegs aktuelle Version — noch nicht geprüft,
    ab welcher genau "Allow calling servers from mcp.json" existiert).
-4. Format von `tool_call.success.output`: angenommen ist die MCP-Content-
+3. Format von `tool_call.success.output`: angenommen ist die MCP-Content-
    Liste als JSON-String (wie im Doku-Beispiel); `mcp_server.output_text`
    nimmt sonst den Rohtext. Noch nicht live beobachtet.
-5. Verlauf: `/api/v1/chat` kennt nur EINE User-Nachricht. Der Verlauf geht
+4. Verlauf: `/api/v1/chat` kennt nur EINE User-Nachricht. Der Verlauf geht
    deshalb als beschriftetes Transkript in diese Nachricht
    (`_native_input`), nicht in den System-Prompt (sonst fiele der
    Tool-Teil jedes Mal aus LM Studios Prompt-Cache). Live beobachten, ob
    kleine Modelle damit genauso gut umgehen wie mit echten Rollen.
-6. Nebenbefund, nicht angefasst: die „Trotzdem laden"-Box
+5. Nebenbefund, nicht angefasst: die „Trotzdem laden"-Box
    (`#jsModelFitNotice`) fehlt auf der Sichtbarkeits-Whitelist in
    `frontend/claude-app.js` (Regel `body.js-app-active > :not(...)`) und
    ist dadurch vermutlich nie sichtbar (`#jsModelLoad`, die neue
