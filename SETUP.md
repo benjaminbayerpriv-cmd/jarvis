@@ -1,5 +1,11 @@
 # Jarvis — Setup & Start (macOS und Windows)
 
+Jarvis ist ein lokaler, sprachgesteuerter KI-Assistent für macOS und Windows.
+Er spricht Deutsch, nutzt lokale LM-Studio-Modelle und bietet Werkzeuge für
+Programme, Dateien, Shell, Web, Projekt-Builds, Notizen und ein Obsidian-
+Gedächtnis. Das FastAPI-Backend kombiniert Browser-UI, Sprachmodus, Code-Tab
+und optionale Cloud-Add-ons, sodass Jarvis vollständig lokal laufen kann.
+
 Jarvis läuft auf **macOS** und **Windows**. Der Code erkennt beim Start
 selbst, auf welcher Plattform er läuft (`platform.system()`), und wählt
 automatisch die passende Variante für Sprachausgabe und Programme öffnen —
@@ -31,26 +37,26 @@ unten unterschiedlich sind, ist es gekennzeichnet.
      Studio: in LM Studio unter "Manage Tokens" eines erzeugen und in
      Jarvis unter Einstellungen -> LM Studio -> "LM-Studio-API-Token"
      eintragen (oder `LM_STUDIO_API_TOKEN` in `.env`).
-
-  (Der alte Weg — LM Studio den MCP-Server dynamisch pro Chat-Anfrage
-  mitzuteilen, `"ephemeral_mcp"` — geht seit LM Studio 0.4.15 nicht mehr:
-  LM Studio lehnt das für jede nicht-öffentliche Adresse ab, auch
-  `127.0.0.1` auf demselben Rechner — ein SSRF-Schutz. Der mcp.json-Weg
-  oben ist davon nicht betroffen, weil die Adresse dort einmalig von Hand
-  eingetragen wird, nicht aus einer Chat-Anfrage kommt.)
-
-  Läuft LM Studio auf einem anderen Rechner im Netzwerk, muss dieser
-  Rechner Jarvis unter Port 8765 erreichen können (Firewall-Abfrage beim
-  ersten Start von Jarvis zulassen) — und der `url`-Wert im mcp.json-Eintrag
-  muss Jarvis' LAN-Adresse statt `127.0.0.1` tragen (steht so in der
-  ausgegebenen Konsolen-Meldung, sobald LM Studio nicht auf demselben
-  Rechner läuft).
+ 
+   (Der alte Weg — LM Studio den MCP-Server dynamisch pro Chat-Anfrage
+   mitzuteilen, `"ephemeral_mcp"` — geht seit LM Studio 0.4.15 nicht mehr:
+   LM Studio lehnt das für jede nicht-öffentliche Adresse ab, auch
+   `127.0.0.1` auf demselben Rechner — ein SSRF-Schutz. Der mcp.json-Weg
+   oben ist davon nicht betroffen, weil die Adresse dort einmalig von Hand
+   eingetragen wird, nicht aus einer Chat-Anfrage kommt.)
+ 
+   Läuft LM Studio auf einem anderen Rechner im Netzwerk, muss dieser
+   Rechner Jarvis unter Port 8765 erreichen können (Firewall-Abfrage beim
+   ersten Start von Jarvis zulassen) — und der `url`-Wert im mcp.json-Eintrag
+   muss Jarvis' LAN-Adresse statt `127.0.0.1` tragen (steht so in der
+   ausgegebenen Konsolen-Meldung, sobald LM Studio nicht auf demselben
+   Rechner läuft).
 - ElevenLabs API-Key in `.env` ist optional — ohne Key (oder wenn das
   Kontingent aufgebraucht ist) spricht Jarvis automatisch mit der lokalen
   Supertonic-Stimme weiter, siehe unten.
 - Python 3.12+ ist installiert (`python3 --version` bzw. unter Windows
   `python --version`).
-
+ 
 ## 2. Installation
 
 **Variante A — die beiliegende CLI macht alles** (einfachste, für
@@ -244,7 +250,7 @@ normal installiertes OpenCode (`npm i -g opencode-ai`), falls vorhanden. Ohne si
 
 - **Programme & Webseiten öffnen** — deutsche Namen ("Rechner", "Notizen")
   werden auf macOS über Spotlight, unter Windows über `App Paths`/PATH und
-  die Start-Menü-Verknüpfungen auf das echte Programm aufgelöst.
+die Start-Menü-Verknüpfungen auf das echte Programm aufgelöst.
 - **Ordner öffnen/auflisten** — `open_folder` zeigt einen Ordner im
   Finder/Explorer, `list_folder` sagt nur, was drin liegt, ohne etwas zu
   öffnen. "Desktop", "Dokumente", "Downloads" sind feste, bereits bekannte
@@ -252,7 +258,7 @@ normal installiertes OpenCode (`npm i -g opencode-ai`), falls vorhanden. Ohne si
 - **Dateien schreiben** — direkt per `write_file`, ohne Shell-Umweg.
 - **Löschen** — `delete_path` verschiebt in den Papierkorb (reversibel,
   nie ein endgültiges `rm`), fragt selbst nach Bestätigung und meldet
-  ehrlich, wenn das Ziel gar nicht existiert.
+ehrlich, wenn das Ziel gar nicht existiert.
 - **Verschieben** — `move_file` für Dateien/Ordner zwischen zwei Orten.
 - **Shell-Befehle ausführen** — Ausgaben über 400 Zeichen landen im
   Interface statt vorgelesen zu werden. Eine Sperrliste verhindert
@@ -260,13 +266,13 @@ normal installiertes OpenCode (`npm i -g opencode-ai`), falls vorhanden. Ohne si
   Fork-Bomben …) auf beiden Plattformen.
 - **Im Web suchen** — mit `TAVILY_API_KEY` (kostenlos, tavily.com) echte
   Ergebnisse zum Vorlesen/Zusammenfassen; ohne Key öffnet es stattdessen
-  die Suche im verbundenen Browser.
+die Suche im verbundenen Browser.
 - **Projekte programmieren** — Jarvis fragt nach dem Ordner und baut das
   Projekt mit seinem eigenen Modell selbst, ganz ohne externes Tool. Läuft
   im Hintergrund (dabei erscheint eine kleine zweite "arbeitet"-Kugel im
   Interface) und meldet sich per Sprache, wenn es fertig ist. Ein kleines
   lokales Modell liefert dabei spürbar schwächere Ergebnisse als ein
-  dediziertes Coding-Tool — für ernsthafte Projekte eher ein Ausgangspunkt.
+dediziertes Coding-Tool — für ernsthafte Projekte eher ein Ausgangspunkt.
 - **Inhalte anzeigen** — alles Längere (Code, Erklärungen, Listen) geht ins
   Interface, gesprochen wird nur ein kurzer Satz dazu.
 
