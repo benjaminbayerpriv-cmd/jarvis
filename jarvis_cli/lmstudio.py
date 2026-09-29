@@ -191,8 +191,14 @@ def select_model_interactively(auto: bool = True) -> str | None:
         return f"{entry['id']}   ({size}, {flags})"
 
     preferred = [i for i, e in enumerate(entries) if "embed" not in e["id"].lower()]
+    current = model()
+    default_index = next((i for i in preferred if entries[i]["id"] == current), None)
+    if default_index is None:
+        default_index = next((i for i in preferred if entries[i]["loaded"]), None)
+    if default_index is None:
+        default_index = preferred[0] if preferred else 0
     index = ui.choose("Welches Modell soll Jarvis benutzen?", [(e["id"], label(e)) for e in entries],
-                      default=preferred[0] if preferred else 0)
+                      default=default_index)
     if index is None:
         return None
     chosen = entries[index]["id"]
