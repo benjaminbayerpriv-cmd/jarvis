@@ -291,7 +291,15 @@ class Ui:
                 import getpass
 
                 raw = getpass.getpass("") if password else input("")
-            except (EOFError, KeyboardInterrupt):
+            except EOFError:
+                # No console attached — fall back to the default exactly as
+                # a blank Enter would, but only when one exists; otherwise
+                # there is nothing sensible to return, so let it propagate.
+                self.out()
+                if default or allow_empty:
+                    return default
+                raise
+            except KeyboardInterrupt:
                 self.out()
                 raise
             value = raw.strip()
@@ -308,7 +316,13 @@ class Ui:
         while True:
             self.clear_line()
             self.write(f"{self.paint('?', 'bcyan')} {label} " + self.paint(f"({hint})", "grey") + " ")
-            answer = input("").strip().lower()
+            try:
+                answer = input("").strip().lower()
+            except EOFError:
+                # No console attached (autostart, scheduled task, piped call
+                # with no answers left) — behave as if Enter was pressed.
+                self.out()
+                return default
             if not answer:
                 return default
             if answer in ("j", "ja", "y", "yes"):
