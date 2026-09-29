@@ -1,5 +1,12 @@
 # Jarvis
 
+Jarvis ist ein lokaler, sprachgesteuerter KI-Assistent für macOS und Windows:
+Deutschsprachige Voice-Interaktion, lokale LM-Studio-Modelle, Werkzeuge für
+Programme, Dateien, Shell, Web, Projekt-Builds und ein Obsidian-Gedächtnis.
+Das FastAPI-Backend kombiniert Browser-UI, Sprachmodus und Code-Tab mit
+OpenCode/Claude Code/Codex und läuft vollständig lokal – mit optionalen
+Cloud-Add-ons nur bei Bedarf.
+
 Ein lokaler, sprachgesteuerter KI-Assistent für den Desktop — läuft auf
 **macOS** und **Windows**, spricht mit dir in Deutsch und erledigt echte
 Aufgaben am Rechner: Programme öffnen, Dateien schreiben und verschieben,
@@ -24,7 +31,7 @@ DeepSeek, Tavily, experimentelles Gemini) verlassen die Maschine.
 │ • Sprachmodus: Orb-Animation, Live-Transkription, TTS-Ausgabe               │
 │ • Diktat direkt ins Eingabefeld                                             │
 │ • Fortschrittspanel für Hintergrund-Aufgaben (Builds, Dateien, Shell)       │
-└──────────────┬──────────────────────────────────────┬───────────────────────┘
+└──────────────┬──────────────────────────────────────┬──────────────┐
                │ SSE (Streaming) / WS                  │ Web Speech API (STT)
 ┌──────────────▼───────────────  Backend (FastAPI)  ──▼───────────────────────┐
 │ • Chat-Streaming, Turn-Abbruch, Konversations-Speicher                      │
@@ -34,11 +41,11 @@ DeepSeek, Tavily, experimentelles Gemini) verlassen die Maschine.
 │ • Browser-Agent via Chrome-Erweiterung (WebSocket)                          │
 │ • Ernste Antworten als Markdown-/Code-Blöcke im Interface, kurzer Satz      │
 │   wird gesprochen                                                           │
-└──────────────┬──────────────────────────────────────────────────────────────┘
+└──────────────┬──────────────────────────────────────────────────────────────┬
                │
-      LM Studio (/api/v1/chat, Tools per MCP, lokal) — Modell + Embeddings
-      optional: DeepSeek Cloud · Tavily Search · ElevenLabs · Gemini (experimentell)
-      Coding-Agent (Code-Tab): OpenCode (LM Studio) · Claude Code · Codex (eigene CLIs)
+       LM Studio (/api/v1/chat, Tools per MCP, lokal) — Modell + Embeddings
+       optional: DeepSeek Cloud · Tavily Search · ElevenLabs · Gemini (experimentell)
+       Coding-Agent (Code-Tab): OpenCode (LM Studio) · Claude Code · Codex (eigene CLIs)
 ```
 
 ## Features
@@ -157,13 +164,13 @@ Obsidian-Vault): [SETUP.md](SETUP.md).
 | `JARVIS_MCP_PORT` | Port des MCP-Servers, über den LM Studio Jarvis' Werkzeuge aufruft (Standard 8765, token-geschützt). Einmalig in LM Studios `mcp.json` eintragen, siehe [SETUP.md](SETUP.md). |
 | `LM_STUDIO_API_TOKEN` | (optional) Nur nötig, wenn LM Studio „Require Authentication“ eingeschaltet hat — Jarvis schickt es dann bei jeder Anfrage an LM Studio mit. |
 | `config.json` | Name, Persönlichkeit (`locker_direkt`), Standard-Stadt für „Wetter“, `code_dir`, `code_agent` (`opencode`/`claude`/`codex`, Code-Tab). |
-| `OPENCODE_BIN` / `CLAUDE_BIN` / `CODEX_BIN` | (optional) Pfad zur jeweiligen CLI überschreiben, falls sie nicht im PATH liegt. Claude Code (`npm i -g @anthropic-ai/claude-code`) und Codex (`npm i -g @openai/codex`) bringen ihre eigene Authentifizierung/Modellwahl mit. |
+| `OPENCODE_BIN` / `CLAUDE_BIN` / `CODEX_BIN` | (optional) Pfad zur jeweiligen CLI überschreiben, falls sie nicht im PATH liegt. Claude Code (`npm i -g @anthropic-ai/claude-code`) und Codex (`npm i -g @openai/codex`) |
 
 ## Komponenten
 
 | Verzeichnis | Inhalt |
 |---|---|
-| `backend/` | FastAPI-Server: `main.py` (Endpoints, SSE-Streaming), `llm_client.py`, `tools.py`, `tts.py`, `stt.py`, `memory.py` + `vector_memory.py`, `conversations.py`, `browser_agent.py`, `opencode_agent.py` (Code-Tab: PTY-Start von OpenCode/Claude Code/Codex), `panel.py`, `confirm.py` |
+| `backend/` | FastAPI-Server: `main.py` (Endpoints, SSE-Streaming), `llm_client.py`, `tools.py`, `tts.py`, `stt.py`, `memory.py` + `vector_memory.py`, `conversations.py`, `browser_agent.py`, `op[...` |
 | `frontend/` | UI: `index.html`/`app.js` (legacy), `claude.html`/`claude-app.js` (aktive UI), `style.css` |
 | `launcher/` | Globaler Hotkey, Server-Start, macOS-Login-Plist, Windows-`.bat`/`.exe`-Build |
 | `chrome-extension/` | Browser-Agent-Erweiterung (Tabs lesen/öffnen/suchen) |
