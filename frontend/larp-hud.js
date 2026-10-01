@@ -175,7 +175,7 @@
 :where(.lh-root) button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:pointer}
 .lh-panel{background:var(--pb);border:1px solid var(--bd);border-radius:7px;position:relative;min-width:0;min-height:0;
   box-shadow:inset 0 0 22px rgba(14,165,233,.07),0 0 0 1px rgba(0,0,0,.25),0 8px 30px rgba(0,0,0,.35);
-  backdrop-filter:blur(3px);padding:10px 12px;display:flex;flex-direction:column}
+  padding:10px 12px;display:flex;flex-direction:column}
 .lh-panel::before,.lh-panel::after{content:"";position:absolute;width:12px;height:12px;pointer-events:none;border-color:var(--c);border-style:solid;opacity:.85}
 .lh-panel::before{top:-1px;left:-1px;border-width:1.5px 0 0 1.5px;border-top-left-radius:7px}
 .lh-panel::after{bottom:-1px;right:-1px;border-width:0 1.5px 1.5px 0;border-bottom-right-radius:7px}
@@ -373,6 +373,84 @@
 @keyframes lh-pulse{0%{transform:scale(.9);opacity:.9}100%{transform:scale(1.35);opacity:0}}
 @keyframes lh-blink{50%{opacity:.2}}
 
+/* ---- 3D-Schicht ----
+   Cockpit-Anmutung: Seitenleiste und äußere Panels sind zum Betrachter hin
+   eingeklappt, Kopf- und Fußleiste nach hinten gekippt, die ganze Bühne
+   folgt leicht der Maus (siehe applyTilt). Panels/Kacheln bekommen eine
+   Glas-Fase (Lichtkante oben, Schatten unten) statt flacher Flächen. */
+.lh-stage{perspective:1500px;perspective-origin:50% 45%}
+.lh-row{perspective:1300px}
+.lh-side{transform:rotateY(8deg) scale(.95);transform-origin:100% 50%}
+.lh-top{transform:rotateX(-9deg);transform-origin:50% 0}
+.lh-bot{transform:rotateX(11deg);transform-origin:50% 100%}
+.lh-row1>.lh-panel:first-child{--lh-tf:rotateY(7deg) scale(.98);transform-origin:100% 50%}
+.lh-row1>.lh-panel:last-child,.lh-row2>.lh-panel:last-child{--lh-tf:rotateY(-7deg) scale(.97);transform-origin:0 50%}
+.lh-panel{--lh-tf:none;--lh-lift:0px;transform:var(--lh-tf) translateY(var(--lh-lift));
+  transition:transform .25s ease,box-shadow .25s ease,border-color .25s ease;
+  background:
+    linear-gradient(118deg,rgba(255,255,255,.055) 0%,rgba(255,255,255,0) 32%),
+    linear-gradient(180deg,rgba(22,68,112,.58) 0%,rgba(7,26,48,.82) 38%,rgba(3,12,26,.92) 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(170,235,255,.22),inset 0 -2px 0 rgba(0,0,0,.45),
+    inset 0 0 26px rgba(14,165,233,.08),
+    0 2px 0 rgba(0,0,0,.45),0 14px 28px rgba(0,0,0,.55),0 30px 60px -20px rgba(0,0,0,.7),
+    0 0 22px rgba(14,165,233,.07)}
+.lh-panel:hover{--lh-lift:-3px;border-color:rgba(56,189,248,.42);
+  box-shadow:
+    inset 0 1px 0 rgba(170,235,255,.3),inset 0 -2px 0 rgba(0,0,0,.45),
+    inset 0 0 30px rgba(14,165,233,.12),
+    0 4px 0 rgba(0,0,0,.4),0 22px 40px rgba(0,0,0,.6),0 0 30px rgba(34,211,255,.16)}
+.lh-core{background:radial-gradient(ellipse at 50% 45%,rgba(14,70,120,.35),rgba(3,12,26,.92) 70%)}
+/* Kacheln innerhalb der Panels: leicht erhaben */
+.lh-ov,.lh-fi,.lh-ag,.lh-llm,.lh-qb{
+  background:linear-gradient(180deg,rgba(26,74,118,.5),rgba(8,30,54,.55) 55%,rgba(4,18,36,.6));
+  box-shadow:inset 0 1px 0 rgba(170,235,255,.13),inset 0 -1px 0 rgba(0,0,0,.4),0 3px 6px rgba(0,0,0,.35);
+  transition:transform .15s ease,box-shadow .15s ease,border-color .15s}
+.lh-ag:hover,.lh-llm:hover,.lh-ov:hover,.lh-fi:hover,.lh-qb:hover{transform:translateY(-1px);
+  box-shadow:inset 0 1px 0 rgba(170,235,255,.2),inset 0 -1px 0 rgba(0,0,0,.4),0 6px 12px rgba(0,0,0,.45),0 0 12px rgba(34,211,255,.12)}
+.lh-fi.lh-alert{background:linear-gradient(180deg,rgba(120,30,45,.45),rgba(60,12,24,.5))}
+/* Icon-Kästchen als kleine Glas-Knöpfe */
+.lh-ibox{background:radial-gradient(circle at 35% 25%,rgba(120,220,255,.28),rgba(14,116,178,.14) 55%,rgba(2,20,40,.4));
+  box-shadow:inset 0 1px 0 rgba(200,245,255,.3),inset 0 -2px 3px rgba(0,0,0,.45),0 2px 4px rgba(0,0,0,.45),0 0 8px rgba(34,211,255,.12)}
+.lh-ibox.lh-t-green{background:radial-gradient(circle at 35% 25%,rgba(120,255,200,.25),rgba(59,232,160,.08) 55%,rgba(2,30,24,.4))}
+.lh-ibox.lh-t-orange{background:radial-gradient(circle at 35% 25%,rgba(255,210,140,.28),rgba(255,171,61,.08) 55%,rgba(40,20,2,.4))}
+.lh-ibox.lh-t-red{background:radial-gradient(circle at 35% 25%,rgba(255,150,160,.3),rgba(255,77,97,.1) 55%,rgba(40,4,10,.4))}
+.lh-ibox.lh-t-purple{background:radial-gradient(circle at 35% 25%,rgba(210,190,255,.3),rgba(169,139,255,.1) 55%,rgba(20,10,40,.4))}
+/* Kopf-/Fußleisten-Elemente erhaben */
+.lh-status,.lh-tbtn,.lh-op,.lh-wid,.lh-cmd,.lh-focus,.lh-search,.lh-close{
+  box-shadow:inset 0 1px 0 rgba(170,235,255,.16),inset 0 -1px 0 rgba(0,0,0,.45),0 6px 14px rgba(0,0,0,.5)}
+.lh-status,.lh-tbtn,.lh-op,.lh-wid,.lh-cmd,.lh-focus{background:linear-gradient(180deg,rgba(22,68,112,.55),rgba(5,20,40,.85))}
+.lh-nav-item.lh-on{box-shadow:inset 3px 0 0 var(--c),inset 0 1px 0 rgba(170,235,255,.2),0 6px 14px rgba(0,0,0,.45),0 0 16px rgba(34,211,255,.18)}
+/* Schriftzüge mit Extrusion */
+.lh-core-name{text-shadow:
+  0 1px 0 #9fe6f7,0 2px 0 #6ccbe6,0 3px 0 #3fa9cc,0 4px 0 #2387ad,0 5px 0 #146a8e,0 6px 0 #0b4f6d,
+  0 10px 14px rgba(0,0,0,.7),0 0 24px rgba(34,211,255,.85),0 0 60px rgba(34,211,255,.45)}
+.lh-brand-name{text-shadow:0 1px 0 #6ccbe6,0 2px 0 #2387ad,0 3px 0 #0b4f6d,0 5px 8px rgba(0,0,0,.6),0 0 12px rgba(34,211,255,.55)}
+.lh-time{text-shadow:0 1px 0 #6ccbe6,0 2px 0 #2387ad,0 3px 0 #0b4f6d,0 6px 10px rgba(0,0,0,.6),0 0 16px rgba(34,211,255,.6)}
+.lh-ms b,.lh-gl b{text-shadow:0 1px 0 #3fa9cc,0 2px 0 #0b4f6d,0 4px 6px rgba(0,0,0,.6),0 0 8px rgba(34,211,255,.5)}
+/* Ringanzeigen: Tiefe durch Schattenkranz und Innenschein */
+.lh-gauge{filter:drop-shadow(0 6px 8px rgba(0,0,0,.6))}
+.lh-gauge::before{content:"";position:absolute;inset:16%;border-radius:50%;
+  background:radial-gradient(circle at 40% 30%,rgba(60,160,220,.28),rgba(4,18,36,.85) 70%);
+  box-shadow:inset 0 2px 4px rgba(170,235,255,.18),inset 0 -6px 10px rgba(0,0,0,.6)}
+.lh-gauge .lh-gt{stroke:rgba(4,20,40,.9);stroke-width:9}
+.lh-gauge svg{position:relative;z-index:1}.lh-gl{z-index:2}
+/* Mikrofon und "Talk to Jarvis": gewölbt */
+.lh-micbtn{background:radial-gradient(circle at 40% 28%,#8ff0ff 0%,#1fb8e6 28%,#0b5f91 68%,#063a5c 100%);
+  box-shadow:0 0 18px rgba(34,211,255,.75),0 0 40px rgba(34,211,255,.35),0 8px 16px rgba(0,0,0,.6),inset 0 -6px 10px rgba(0,30,60,.6),inset 0 3px 6px rgba(255,255,255,.35)}
+.lh-talk{background:linear-gradient(180deg,rgba(120,220,255,.45) 0%,rgba(14,116,178,.6) 35%,rgba(5,40,72,.92) 100%);
+  box-shadow:0 0 22px rgba(34,211,255,.55),0 10px 20px rgba(0,0,0,.6),inset 0 2px 0 rgba(220,250,255,.45),inset 0 -6px 12px rgba(0,20,40,.6)}
+/* Perspektivischer Gitterboden + Horizontlicht hinter der Bühne */
+.lh-floor{position:absolute;left:-40%;right:-40%;bottom:-6%;height:62%;z-index:0;pointer-events:none;
+  background-image:linear-gradient(rgba(56,189,248,.28) 1px,transparent 1px),linear-gradient(90deg,rgba(56,189,248,.28) 1px,transparent 1px);
+  background-size:64px 64px;transform:perspective(420px) rotateX(64deg);transform-origin:50% 100%;
+  mask-image:linear-gradient(0deg,#000 0%,rgba(0,0,0,.6) 45%,transparent 92%);-webkit-mask-image:linear-gradient(0deg,#000 0%,rgba(0,0,0,.6) 45%,transparent 92%);
+  animation:lh-floor 6s linear infinite;opacity:.55}
+.lh-horizon{position:absolute;left:0;right:0;top:48%;height:180px;transform:translateY(-50%);z-index:0;pointer-events:none;
+  background:radial-gradient(ellipse 60% 50% at 50% 50%,rgba(34,180,255,.16),transparent 70%)}
+@keyframes lh-floor{to{background-position:0 64px}}
+html.jarvis-reduce-motion .lh-floor{animation:none}
+
 /* Niedrige Fenster: Zeitleisten-Uhrzeit einzeilig, damit vier Termine passen. */
 @media (max-height:800px){.lh-tl-time br{display:none}.lh-tl-time{white-space:nowrap}.lh-tli{grid-template-columns:52px 14px 1fr auto}.lh-tl::before{left:64px}.lh-tl-foot{margin-top:3px}}
 `;
@@ -430,7 +508,7 @@
 
   function buildHtml() {
     const now = new Date();
-    return `<div class="lh-stage">
+    return `<div class="lh-horizon"></div><div class="lh-floor"></div><div class="lh-stage">
 <aside class="lh-side">
   <div class="lh-brand">${LOGO}<div><div class="lh-brand-name">JARVIS</div><div class="lh-brand-sub">COMMAND CENTER</div></div></div>
   <nav class="lh-nav">${navHtml()}</nav>
@@ -577,19 +655,44 @@
     }
     ctx.restore();
 
-    // Orbit-Ellipsen mit wandernden Lichtpunkten
-    ctx.save(); ctx.translate(cx, cy);
-    [[1.75, 0.3, -0.12, 1], [1.55, 0.22, 0.18, -1.4], [2.05, 0.38, 0.04, 0.7]].forEach(([rx, ry, rot, sp], k) => {
-      ctx.save(); ctx.rotate(rot);
-      ctx.strokeStyle = `rgba(56,200,255,${0.32 - k * 0.07})`; ctx.lineWidth = 1;
-      ctx.beginPath(); ctx.ellipse(0, 0, R * rx, R * ry, 0, 0, Math.PI * 2); ctx.stroke();
-      const a = t * 0.0004 * sp + k * 2;
-      const px = Math.cos(a) * R * rx, py = Math.sin(a) * R * ry;
-      ctx.fillStyle = '#c9f7ff'; ctx.shadowColor = '#22d3ff'; ctx.shadowBlur = 12;
-      ctx.beginPath(); ctx.arc(px, py, 2.2, 0, Math.PI * 2); ctx.fill();
-      ctx.restore();
-    });
+    // Holo-Projektor: Sockel unter der Kugel und Lichtkegel nach oben
+    const baseY = cy + R + Math.max(14, (h / 2 - R) * 0.62), baseRx = R * 0.95, baseRy = R * 0.13;
+    ctx.save(); ctx.globalCompositeOperation = 'lighter';
+    let cone = ctx.createLinearGradient(0, baseY, 0, cy);
+    cone.addColorStop(0, 'rgba(34,211,255,.30)'); cone.addColorStop(1, 'rgba(34,211,255,0)');
+    ctx.fillStyle = cone;
+    ctx.beginPath(); ctx.moveTo(cx - baseRx, baseY); ctx.lineTo(cx - R * 0.98, cy + R * 0.2); ctx.lineTo(cx + R * 0.98, cy + R * 0.2); ctx.lineTo(cx + baseRx, baseY); ctx.closePath(); ctx.fill();
+    for (let i = 0; i < 3; i++) {
+      ctx.strokeStyle = `rgba(127,233,255,${0.55 - i * 0.15})`; ctx.lineWidth = 1.4 - i * 0.3;
+      ctx.shadowColor = '#22d3ff'; ctx.shadowBlur = 12;
+      ctx.beginPath(); ctx.ellipse(cx, baseY + i * 5, baseRx * (1 + i * 0.12), baseRy * (1 + i * 0.12), 0, 0, Math.PI * 2); ctx.stroke();
+    }
+    const pg = ctx.createRadialGradient(cx, baseY, 0, cx, baseY, baseRx);
+    pg.addColorStop(0, 'rgba(160,240,255,.45)'); pg.addColorStop(1, 'rgba(34,211,255,0)');
+    ctx.fillStyle = pg; ctx.beginPath(); ctx.ellipse(cx, baseY, baseRx, baseRy, 0, 0, Math.PI * 2); ctx.fill();
     ctx.restore();
+
+    // Orbit-Ellipsen mit wandernden Lichtpunkten — die obere Hälfte liegt
+    // "hinter" der Kugel und wird vor ihr gezeichnet, die untere danach
+    // (siehe drawOrbits(true) weiter unten), damit die Ringe sie umschließen.
+    const ORBITS = [[1.75, 0.3, -0.12, 1], [1.55, 0.22, 0.18, -1.4], [2.05, 0.38, 0.04, 0.7]];
+    const drawOrbits = (front) => {
+      ctx.save(); ctx.translate(cx, cy);
+      ORBITS.forEach(([rx, ry, rot, sp], k) => {
+        ctx.save(); ctx.rotate(rot);
+        ctx.strokeStyle = `rgba(56,200,255,${(front ? 0.5 : 0.22) - k * 0.07})`; ctx.lineWidth = front ? 1.3 : 1;
+        ctx.beginPath(); ctx.ellipse(0, 0, R * rx, R * ry, 0, front ? 0 : Math.PI, front ? Math.PI : Math.PI * 2); ctx.stroke();
+        const a = t * 0.0004 * sp + k * 2;
+        if ((Math.sin(a) >= 0) === front) {
+          const px = Math.cos(a) * R * rx, py = Math.sin(a) * R * ry;
+          ctx.fillStyle = front ? '#e4fbff' : 'rgba(150,220,255,.5)'; ctx.shadowColor = '#22d3ff'; ctx.shadowBlur = front ? 14 : 6;
+          ctx.beginPath(); ctx.arc(px, py, front ? 2.6 : 1.6, 0, Math.PI * 2); ctx.fill();
+        }
+        ctx.restore();
+      });
+      ctx.restore();
+    };
+    drawOrbits(false);
 
     // Äußerer Skalenring (dreht langsam)
     ctx.save(); ctx.translate(cx, cy); ctx.rotate(t * 0.00006);
@@ -663,6 +766,18 @@
     g = ctx.createRadialGradient(cx, cy, 0, cx, cy, R * 0.75);
     g.addColorStop(0, 'rgba(2,14,30,.55)'); g.addColorStop(1, 'rgba(2,14,30,0)');
     ctx.fillStyle = g; ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2); ctx.fill();
+
+    // Volumen: Glanzlicht oben links, Eigenschatten unten rechts
+    g = ctx.createRadialGradient(cx + R * 0.35, cy + R * 0.4, R * 0.2, cx + R * 0.1, cy + R * 0.1, R * 1.05);
+    g.addColorStop(0, 'rgba(0,6,16,0)'); g.addColorStop(.75, 'rgba(0,6,16,.28)'); g.addColorStop(1, 'rgba(0,6,16,.5)');
+    ctx.fillStyle = g; ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2); ctx.fill();
+    ctx.save(); ctx.globalCompositeOperation = 'lighter';
+    g = ctx.createRadialGradient(cx - R * 0.42, cy - R * 0.48, 0, cx - R * 0.42, cy - R * 0.48, R * 0.6);
+    g.addColorStop(0, 'rgba(190,245,255,.22)'); g.addColorStop(1, 'rgba(190,245,255,0)');
+    ctx.fillStyle = g; ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+
+    drawOrbits(true);
 
     // Funken
     ctx.save(); ctx.globalCompositeOperation = 'lighter';
@@ -767,6 +882,7 @@
       else if (cv.hasAttribute('data-mem')) drawMem(cv, t);
       else drawWave(cv, t);
     }
+    applyTilt(false);
     raf = requestAnimationFrame(frame);
   }
 
@@ -839,20 +955,45 @@
   // fester Designgröße proportional verkleinert — das Layout bleibt so exakt
   // wie im Vorbild, nur kleiner.
   const DESIGN_W = 1280, DESIGN_H = 720;
+  // stageBase/-W/-H merken die Skalierung, applyTilt() setzt die Maus-
+  // Neigung um die Bühnenmitte darauf.
+  let stageBase = '', stageW = 0, stageH = 0;
   function fitStage() {
     const stage = root && root.querySelector('.lh-stage');
     if (!stage) return;
     const vw = window.innerWidth, vh = window.innerHeight;
     if (vw >= 1180 && vh >= 640) {
       stage.classList.remove('lh-scaled');
-      stage.style.cssText = '';
-      return;
+      stage.style.width = stage.style.height = '';
+      stageBase = ''; stageW = vw; stageH = vh;
+    } else {
+      const k = Math.min(vw / DESIGN_W, vh / DESIGN_H);
+      stage.classList.add('lh-scaled');
+      stage.style.width = DESIGN_W + 'px';
+      stage.style.height = DESIGN_H + 'px';
+      stageBase = `translate(${((vw - DESIGN_W * k) / 2).toFixed(1)}px,${((vh - DESIGN_H * k) / 2).toFixed(1)}px) scale(${k.toFixed(4)})`;
+      stageW = DESIGN_W; stageH = DESIGN_H;
     }
-    const k = Math.min(vw / DESIGN_W, vh / DESIGN_H);
-    stage.classList.add('lh-scaled');
-    stage.style.width = DESIGN_W + 'px';
-    stage.style.height = DESIGN_H + 'px';
-    stage.style.transform = `translate(${((vw - DESIGN_W * k) / 2).toFixed(1)}px,${((vh - DESIGN_H * k) / 2).toFixed(1)}px) scale(${k.toFixed(4)})`;
+    applyTilt(true);
+  }
+
+  // Maus-Parallax: die Bühne neigt sich höchstens ~2,5° zur Maus hin,
+  // geglättet pro Frame; bei "Bewegung reduzieren" bleibt sie gerade.
+  const TILT_MAX = 2.4;
+  let tiltX = 0, tiltY = 0, tiltTX = 0, tiltTY = 0;
+  function onPointerMove(e) {
+    if (document.documentElement.classList.contains('jarvis-reduce-motion')) { tiltTX = tiltTY = 0; return; }
+    tiltTY = ((e.clientX / window.innerWidth) - 0.5) * 2 * TILT_MAX;
+    tiltTX = -((e.clientY / window.innerHeight) - 0.5) * 2 * TILT_MAX;
+  }
+  function applyTilt(force) {
+    const stage = root && root.querySelector('.lh-stage');
+    if (!stage) return;
+    const dx = tiltTX - tiltX, dy = tiltTY - tiltY;
+    if (!force && Math.abs(dx) < 0.003 && Math.abs(dy) < 0.003) return;
+    tiltX += dx * 0.08; tiltY += dy * 0.08;
+    const hw = (stageW / 2).toFixed(1), hh = (stageH / 2).toFixed(1);
+    stage.style.transform = `${stageBase} translate(${hw}px,${hh}px) perspective(2200px) rotateX(${tiltX.toFixed(3)}deg) rotateY(${tiltY.toFixed(3)}deg) translate(-${hw}px,-${hh}px)`;
   }
 
   // ------------------------------------------------------------ Aktionen
@@ -907,6 +1048,8 @@
     root.addEventListener('click', onClick);
     window.addEventListener('keydown', onKey, true);
     window.addEventListener('resize', fitStage);
+    window.addEventListener('pointermove', onPointerMove);
+    tiltX = tiltY = tiltTX = tiltTY = 0;
     fitStage();
     requestAnimationFrame(() => root && root.classList.add('lh-in'));
     raf = requestAnimationFrame(frame);
@@ -927,6 +1070,7 @@
     clearInterval(clockTimer); clearInterval(statsTimer); clearTimeout(toastTimer);
     window.removeEventListener('keydown', onKey, true);
     window.removeEventListener('resize', fitStage);
+    window.removeEventListener('pointermove', onPointerMove);
     canvases = [];
     el.classList.remove('lh-in');
     setTimeout(() => el.remove(), 320);
