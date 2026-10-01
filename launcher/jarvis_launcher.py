@@ -21,6 +21,7 @@ dragging the .app to /Applications) breaks that lookup.
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -144,6 +145,37 @@ def _webview_storage_dir() -> Path | None:
     return path
 
 
+def _window_state_file() -> Path | None:
+    storage = _webview_storage_dir()
+    return storage.parent / "window.json" if storage is not None else None
+
+
+def _load_window_size() -> tuple[int, int]:
+    """Zuletzt vom Benutzer eingestellte Fenstergröße, sonst der Standard.
+    Nur die Größe, nicht die Position: ein Fenster, das auf einem inzwischen
+    abgesteckten Monitor gespeichert wurde, würde sonst außerhalb des
+    sichtbaren Bereichs starten."""
+    state = _window_state_file()
+    try:
+        data = json.loads(state.read_text(encoding="utf-8")) if state else {}
+        width, height = int(data["width"]), int(data["height"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return WINDOW_WIDTH, WINDOW_HEIGHT
+    if not (640 <= width <= 10000 and 480 <= height <= 10000):
+        return WINDOW_WIDTH, WINDOW_HEIGHT
+    return width, height
+
+
+def _save_window_size(size: tuple[int, int]) -> None:
+    state = _window_state_file()
+    if state is None:
+        return
+    try:
+        state.write_text(json.dumps({"width": size[0], "height": size[1]}), encoding="utf-8")
+    except OSError:
+        pass
+
+
 def _warn_if_icon_stale(root_dir: Path, log) -> None:
     # The icon is baked into the .exe/.app at build time (launcher/
     # build_exe.bat, build_app.sh) — unlike the frontend, which this app
@@ -204,11 +236,15 @@ def main() -> None:
     server_log_path = root_dir / "launcher" / "server.err.log"
     server_log = open(server_log_path, "w")
     _warn_if_icon_stale(root_dir, server_log)
+    # CREATE_NO_WINDOW: from a windowed parent, a console child otherwise gets
+    # its own visible console window — and closing that window kills the
+    # server (CTRL_CLOSE_EVENT) while the app window stays open on a dead page.
     server = subprocess.Popen(
         [str(venv_python), "-m", "backend.main"],
         cwd=str(root_dir),
         stdout=server_log,
         stderr=subprocess.STDOUT,
+        creationflags=0x08000000 if IS_WINDOWS else 0,
     )
 
     try:
@@ -226,13 +262,20 @@ def main() -> None:
 
         _allow_microphone_macos()
 
-        webview.create_window(
+        width, height = _load_window_size()
+        window_size = [width, height]
+        window = webview.create_window(
             "Jarvis",
             URL,
-            width=WINDOW_WIDTH,
-            height=WINDOW_HEIGHT,
+            width=width,
+            height=height,
             min_size=(640, 480),
         )
+
+        def _on_resized(new_width: int, new_height: int) -> None:
+            window_size[:] = [new_width, new_height]
+
+        window.events.resized += _on_resized
         # private_mode=False: Einstellungen der UI (localStorage) über
         # Neustarts hinweg behalten, siehe _webview_storage_dir().
         storage_dir = _webview_storage_dir()
@@ -240,6 +283,7 @@ def main() -> None:
             webview.start(private_mode=False, storage_path=str(storage_dir))
         else:
             webview.start(private_mode=False)
+        _save_window_size((window_size[0], window_size[1]))
     finally:
         # The window closing is the signal to shut everything down — a
         # server left running invisibly in the background, un-killable

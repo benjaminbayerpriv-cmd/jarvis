@@ -296,7 +296,7 @@ def setup_token(interactive: bool = True, from_clipboard: bool = True) -> bool:
         ui.fail(message)
         if ui.confirm("Trotzdem speichern?", default=False):
             set_token(value)
-            ui.warn("Gespeichert — LM Studio wird damit weiterhin 401antworten.")
+            ui.warn("Gespeichert — LM Studio wird damit weiterhin 401 antworten.")
         return False
     set_token(value)
     ui.ok(message)
@@ -399,6 +399,34 @@ def explain_mcp() -> None:
     ui.note(f"Adresse: {mcp_url()}" + ("" if is_local() else "  (LM Studio läuft auf einem anderen Rechner)"))
     ui.note("Nach einem Netzwerkwechsel oder einem neuen Token den Block neu ausgeben — "
             "der Eintrag in mcp.json bleibt sonst stehen und passt nicht mehr.")
+
+
+def mcp_entry_problem() -> tuple[str, str] | None:
+    """(value, hint) for the first thing that keeps LM Studio from calling
+    Jarvis' tools — a missing/stale mcp.json entry, or the server-wide "Allow
+    calling servers from mcp.json" switch being off — None when it all looks
+    right. Chat itself keeps working in both cases, which is why the plain
+    reachability checks can't catch them."""
+    want = mcp_snippet()["mcpServers"]["jarvis"]
+    paths = mcp_json_paths()
+    if paths:
+        try:
+            entry = json.loads(paths[0].read_text(encoding="utf-8") or "{}")["mcpServers"]["jarvis"]
+        except (OSError, ValueError, KeyError, TypeError):
+            entry = None
+        sent = entry.get("headers") if isinstance(entry, dict) else None
+        if not (isinstance(entry, dict) and entry.get("url") == want["url"] and isinstance(sent, dict)
+                and sent.get("Authorization") == want["headers"]["Authorization"]):
+            return ("Eintrag fehlt oder ist veraltet", "jarvis mcp --install")
+    store = Path.home() / ".lmstudio" / ".internal" / "permissions-store.json"
+    try:
+        plugin_use = json.loads(store.read_text(encoding="utf-8"))["json"]["serverPermissions"]["pluginUse"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    if plugin_use == "deny":
+        return ("von LM Studio gesperrt",
+                "Developer → Server Settings → „Allow calling servers from mcp.json“ auf Allow")
+    return None
 
 
 def native_api_ok() -> bool:

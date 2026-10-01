@@ -9,9 +9,12 @@ model list — but on the standard library's thread pool instead of asyncio, so
 
 from __future__ import annotations
 
+import http.client
 import ipaddress
 import socket
 import time
+import urllib.error
+import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urlparse
 
@@ -48,15 +51,30 @@ def _port_open(ip: str, port: int) -> bool:
         return False
 
 
+def _is_lm_studio_auth_wall(url: str) -> bool:
+    """Whether the host's 401 is LM Studio's own "API token required" answer —
+    the only kind of host the token may be sent to. The extended scan also
+    probes routers, NAS boxes and dev servers on 8080/5000/8000, and the
+    request is plain HTTP."""
+    try:
+        urllib.request.urlopen(url, timeout=VALIDATE_TIMEOUT)
+    except urllib.error.HTTPError as exc:
+        return exc.code == 401 and b"LM Studio API token" in exc.read(4096)
+    except (OSError, http.client.HTTPException, ValueError):
+        return False
+    return False
+
+
 def _validate(ip: str, port: int, token: str) -> dict | None:
-    """Confirm a host answering on that port really is an LLM server. The
-    configured token is only ever sent to the IP currently being checked."""
+    """Confirm a host answering on that port really is an LLM server."""
     url = f"http://{ip}:{port}/v1/models"
-    headers = {"Authorization": f"Bearer {token}"} if token else {}
-    payload, _ = ctx.http_json(url, timeout=VALIDATE_TIMEOUT, headers=headers)
-    if payload is None:
+    payload, error = ctx.http_json(url, timeout=VALIDATE_TIMEOUT)
+    if error and "401" in error and token and _is_lm_studio_auth_wall(url):
+        payload, error = ctx.http_json(url, timeout=VALIDATE_TIMEOUT,
+                                       headers={"Authorization": f"Bearer {token}"})
+    if not isinstance(payload, dict) or not isinstance(payload.get("data"), list):
         return None
-    models = [m.get("id") for m in payload.get("data", []) if m.get("id")]
+    models = [m["id"] for m in payload["data"] if isinstance(m, dict) and m.get("id")]
     return {"ip": ip, "port": port, "url": f"http://{ip}:{port}/v1", "models": models}
 
 

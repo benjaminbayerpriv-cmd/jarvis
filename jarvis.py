@@ -15,6 +15,10 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+if sys.version_info < (3, 10):
+    sys.exit(f"Jarvis braucht Python 3.10 oder neuer (hier: {sys.version.split()[0]}) — "
+             "bitte von python.org installieren und neu aufrufen.")
+
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from jarvis_cli.cli import main  # noqa: E402

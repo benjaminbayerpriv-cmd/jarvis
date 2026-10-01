@@ -27,6 +27,7 @@ EPILOG = """Beispiele:
   jarvis start --no-browser  Server im Hintergrund starten
   jarvis stop                Server beenden
   jarvis doctor              Alles prüfen
+  jarvis <befehl> --debug    Bei einem Fehler den vollständigen Traceback zeigen
 """
 
 
@@ -381,6 +382,10 @@ def _to_exit(result: object) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
+    # Handled before argparse: a per-command flag would have to be declared on
+    # every subparser, and without it argparse rejects "--debug" outright.
+    debug = "--debug" in argv
+    argv = [a for a in argv if a != "--debug"]
     parser = build_parser()
     if not argv:
         return menu.run()
@@ -398,8 +403,8 @@ def main(argv: list[str] | None = None) -> int:
         return 130
     except Exception as exc:
         ui.fail(f"{exc.__class__.__name__}: {exc}")
-        if "--debug" in argv:
+        if debug:
             raise
-        ui.note("Mehr Details:  jarvis doctor  oder  jarvis logs")
+        ui.note("Mehr Details:  jarvis doctor  oder  jarvis logs  (oder den Befehl mit --debug wiederholen)")
         return 1
     return _to_exit(result)
