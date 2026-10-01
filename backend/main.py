@@ -5,6 +5,7 @@ import base64
 import ipaddress
 import json
 import os
+import platform
 import re
 import shutil
 import socket
@@ -719,25 +720,166 @@ def transcript():
     return {"turns": transcript_log.read_recent_turns()}
 
 
+# ---- Telemetrie fürs "/larp"-Command-Center (frontend/larp-hud.js) ----
+_NO_WINDOW = 0x08000000 if sys.platform.startswith("win") else 0
+_net_last: tuple[float, int, int] | None = None
+_gpu_cache: tuple[float, list[dict] | None] = (-1e9, None)
+_hud_weather_cache: dict[str, tuple[float, dict]] = {}
+
+
+def _num(value: str) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None  # nvidia-smi meldet nicht unterstützte Felder als "[N/A]"
+
+
+def _gpu_stats() -> list[dict] | None:
+    """NVIDIA-Karten über nvidia-smi, falls installiert — 3 s gecacht, weil
+    ein Aufruf ~50-100 ms kostet und das HUD jede Sekunde fragt. Ohne
+    NVIDIA-Treiber None; das HUD zeigt dann den WebGL-Namen und schätzt."""
+    global _gpu_cache
+    now = time.monotonic()
+    if now - _gpu_cache[0] < 3:
+        return _gpu_cache[1]
+    gpus: list[dict] | None = None
+    exe = shutil.which("nvidia-smi")
+    if exe:
+        try:
+            out = subprocess.run(
+                [exe, "--query-gpu=name,utilization.gpu,memory.used,memory.total,temperature.gpu", "--format=csv,noheader,nounits"],
+                capture_output=True, text=True, timeout=2, creationflags=_NO_WINDOW,
+            ).stdout
+            gpus = []
+            for line in out.strip().splitlines():
+                parts = [p.strip() for p in line.split(",")]
+                if len(parts) != 5:
+                    continue
+                name, util, used, total, temp = parts
+                mib = 1024 * 1024
+                gpus.append({
+                    "name": name, "util": _num(util), "temp": _num(temp),
+                    "mem_used": _num(used) * mib if _num(used) is not None else None,
+                    "mem_total": _num(total) * mib if _num(total) is not None else None,
+                })
+            gpus = gpus or None
+        except (OSError, subprocess.SubprocessError):
+            gpus = None
+    _gpu_cache = (now, gpus)
+    return gpus
+
+
 @app.get("/system/stats")
 def system_stats():
-    """CPU-/RAM-/Festplattenauslastung in Prozent für die Ring-Anzeigen im
-    "/larp"-Command-Center. psutil ist optional — fehlt es, kommen CPU/RAM
-    als None zurück und das HUD zeigt seine Platzhalterwerte."""
-    stats: dict[str, float | None] = {"cpu": None, "ram": None, "disk": None}
-    try:
-        import psutil
-
-        stats["cpu"] = psutil.cpu_percent(interval=None)
-        stats["ram"] = psutil.virtual_memory().percent
-    except Exception:
-        pass
+    """Live-Werte des PCs für das "/larp"-Command-Center: CPU gesamt und pro
+    Kern, RAM, Swap, Festplatte, Netzwerk-Durchsatz, Akku, Uptime und
+    NVIDIA-GPUs. psutil ist optional — was ohne psutil nicht messbar ist,
+    kommt als None zurück und das HUD schätzt bzw. zeigt "n/a"."""
+    stats: dict = {
+        "cpu": None, "cpu_cores": None, "cpu_count": os.cpu_count(), "cpu_freq_mhz": None, "cpu_temp": None,
+        "ram": None, "ram_used": None, "ram_total": None, "swap": None, "swap_used": None,
+        "disk": None, "disk_used": None, "disk_total": None,
+        "net_up": None, "net_down": None, "battery": None, "plugged": None,
+        "uptime_s": None, "processes": None, "gpus": _gpu_stats(),
+        "host": platform.node(), "os": f"{platform.system()} {platform.release()}",
+    }
     try:
         usage = shutil.disk_usage(Path.home().anchor or "/")
-        stats["disk"] = round(usage.used / usage.total * 100, 1)
-    except Exception:
+        stats.update(disk=round(usage.used / usage.total * 100, 1), disk_used=usage.used, disk_total=usage.total)
+    except OSError:
         pass
+    try:
+        import psutil
+    except ImportError:
+        return stats
+
+    def safe(fn):
+        try:
+            fn()
+        except Exception:
+            pass  # einzelne Sensoren fehlen je nach OS/Rechten — der Rest bleibt gültig
+
+    def cpu():
+        cores = psutil.cpu_percent(percpu=True)
+        stats.update(cpu_cores=cores, cpu=round(sum(cores) / len(cores), 1) if cores else None)
+
+    def freq():
+        f = psutil.cpu_freq()
+        stats["cpu_freq_mhz"] = f.current if f else None
+
+    def memory():
+        vm, sw = psutil.virtual_memory(), psutil.swap_memory()
+        stats.update(ram=vm.percent, ram_used=vm.total - vm.available, ram_total=vm.total, swap=sw.percent, swap_used=sw.used)
+
+    def net():
+        global _net_last
+        io, now = psutil.net_io_counters(), time.monotonic()
+        if _net_last and now > _net_last[0]:
+            dt = now - _net_last[0]
+            stats.update(net_up=max(0.0, (io.bytes_sent - _net_last[1]) / dt), net_down=max(0.0, (io.bytes_recv - _net_last[2]) / dt))
+        _net_last = (now, io.bytes_sent, io.bytes_recv)
+
+    def battery():
+        b = psutil.sensors_battery()
+        if b:
+            stats.update(battery=b.percent, plugged=b.power_plugged)
+
+    def temps():
+        readings = psutil.sensors_temperatures()
+        for key in ("coretemp", "k10temp", "zenpower", "cpu_thermal", "acpitz"):
+            if readings.get(key):
+                stats["cpu_temp"] = readings[key][0].current
+                return
+
+    def misc():
+        stats.update(uptime_s=time.time() - psutil.boot_time(), processes=len(psutil.pids()))
+
+    for fn in (cpu, freq, memory, net, battery, temps, misc):
+        safe(fn)
     return stats
+
+
+@app.get("/hud/weather")
+def hud_weather(city: str = "Malibu"):
+    """Echtes Wetter fürs "/larp"-HUD über Open-Meteo (dieselbe Quelle wie
+    das get_weather-Tool, ohne API-Key), 10 Minuten pro Stadt gecacht."""
+    key = city.strip().lower() or "malibu"
+    hit = _hud_weather_cache.get(key)
+    if hit and time.monotonic() - hit[0] < 600:
+        return hit[1]
+    try:
+        geo = requests.get(
+            "https://geocoding-api.open-meteo.com/v1/search",
+            params={"name": city, "count": 1, "language": "de"}, timeout=8,
+        ).json()
+        results = geo.get("results")
+        if not results:
+            raise HTTPException(status_code=404, detail=f"Stadt '{city}' nicht gefunden.")
+        place = results[0]
+        forecast = requests.get(
+            "https://api.open-meteo.com/v1/forecast",
+            params={
+                "latitude": place["latitude"], "longitude": place["longitude"], "timezone": "auto",
+                "current": "temperature_2m,apparent_temperature,relative_humidity_2m,weather_code,cloud_cover,"
+                           "pressure_msl,wind_speed_10m,wind_direction_10m,is_day,visibility,uv_index",
+                "hourly": "temperature_2m,weather_code,is_day",
+                "forecast_hours": 13,
+                "daily": "sunrise,sunset",
+                "forecast_days": 1,
+                "wind_speed_unit": "kn",
+            },
+            timeout=8,
+        ).json()
+    except requests.RequestException as exc:
+        raise HTTPException(status_code=502, detail=f"Wetterdienst nicht erreichbar: {exc}")
+    data = {
+        "city": place.get("name", city), "country": place.get("country_code", ""),
+        "lat": place["latitude"], "lon": place["longitude"],
+        "timezone": forecast.get("timezone"), "utc_offset_seconds": forecast.get("utc_offset_seconds", 0),
+        "current": forecast.get("current", {}), "hourly": forecast.get("hourly", {}), "daily": forecast.get("daily", {}),
+    }
+    _hud_weather_cache[key] = (time.monotonic(), data)
+    return data
 
 
 @app.get("/conversations")

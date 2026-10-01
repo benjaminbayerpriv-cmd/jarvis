@@ -9,8 +9,8 @@ pywinpty>=2.0.11; platform_system == "Windows"
 
 python-multipart==0.0.32
 
-# CPU/RAM-Auslastung für das "/larp"-Command-Center (GET /system/stats).
-# Optional — ohne psutil zeigt das HUD Platzhalterwerte.
+# Live-Systemwerte (CPU pro Kern, RAM, Netz, Akku …) für das "/larp"-Cockpit
+# (GET /system/stats). Optional — ohne psutil schätzt bzw. zeigt das HUD "n/a".
 psutil>=5.9
 
 # MCP server (backend/mcp_server.py) through which LM Studio's native
