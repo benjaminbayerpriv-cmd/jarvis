@@ -1427,6 +1427,7 @@
     setMode('chat');
     refreshModelHealth();
     setInterval(refreshModelHealth, 20000);
+    initWarmLock();
   }
 
   // CSS für :root und :root[data-jarvis-theme="…"] aus JARVIS_THEMES erzeugen,
@@ -1452,7 +1453,7 @@
       .jarvis-reduce-motion, .jarvis-reduce-motion * {
         transition-duration: 0s !important; animation-duration: 0s !important; animation-delay: 0s !important;
       }
-      body.js-app-active > :not(#jsApp):not(#jarvisOrb):not(#jarvisOrbHit):not(#jsSpeechTerm):not(#jsCamWindow):not(#jsSpeechbar):not(#jsSpeechCaption):not(#jsSettingsSheet):not(#jsNewProjectSheet):not(#jsRenameChatSheet):not(#jsBtwWindow):not(#jsNotice):not(#jsModelLoad):not(#jarvisLarp):not(script):not(style) { display:none !important; }
+      body.js-app-active > :not(#jsApp):not(#jarvisOrb):not(#jarvisOrbHit):not(#jsSpeechTerm):not(#jsCamWindow):not(#jsSpeechbar):not(#jsSpeechCaption):not(#jsSettingsSheet):not(#jsNewProjectSheet):not(#jsRenameChatSheet):not(#jsBtwWindow):not(#jsNotice):not(#jsModelLoad):not(#jsWarmLock):not(#jarvisLarp):not(script):not(style) { display:none !important; }
       body.js-app-active { overflow:hidden; }
       /* Jeder neu gestreamte Buchstabe (siehe setAssistantText/wrapCharsForReveal)
          erscheint erst unscharf und schärft sich dann ein, statt abrupt
@@ -4157,6 +4158,56 @@
   }
   let noticeEl = null;
   let noticeTimer = null;
+  // Sperrt Jarvis hinter einem Fortschrittsbalken, solange das Backend noch
+  // seine Fork-Basen baut (Start, Modellwechsel — siehe llm_client.
+  // warm_system_prompt/GET /model/warmup). Ohne das wartet die erste Nachricht
+  // still bis zu einer Minute hinter dem Aufbau. "Überspringen" bleibt als
+  // Notausgang, falls LM Studio hängt und der Aufbau nie fertig wird.
+  function initWarmLock() {
+    const el = document.createElement('div');
+    el.id = 'jsWarmLock';
+    el.style.cssText = `display:none;position:fixed;inset:0;z-index:20000;align-items:center;justify-content:center;background:rgba(0,0,0,.72);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);font-family:${C.font};color:${C.text};`;
+    el.innerHTML = `
+      <div style="width:min(420px,calc(100vw - 48px));padding:26px 28px;border:1px solid ${C.border};border-radius:16px;background:${C.bgSurface3};box-shadow:0 12px 40px rgba(0,0,0,.4);text-align:center;">
+        <div style="font-size:17px;font-weight:600;margin-bottom:6px;">Jarvis wird vorbereitet</div>
+        <div class="js-warm-label" style="font-size:13px;color:${C.textSoft};margin-bottom:16px;min-height:18px;"></div>
+        <div style="height:8px;border-radius:4px;background:${C.bgHover};overflow:hidden;">
+          <div class="js-warm-fill" style="height:100%;width:0%;background:${C.accent};border-radius:4px;transition:width .5s ease;"></div>
+        </div>
+        <div class="js-warm-pct" style="font-size:12px;color:${C.textDim};margin-top:8px;">0 %</div>
+        <button class="js-warm-skip" style="margin-top:16px;background:none;border:none;color:${C.textDim};font-size:12px;text-decoration:underline;cursor:pointer;font-family:${C.font};">Überspringen</button>
+      </div>`;
+    document.body.appendChild(el);
+    const label = $('.js-warm-label', el), fill = $('.js-warm-fill', el), pct = $('.js-warm-pct', el);
+    let skipped = false, wasActive = false;
+    const setLocked = (on) => {
+      el.style.display = on ? 'flex' : 'none';
+      if (uiEl) uiEl.inert = on;
+      if (on && document.activeElement && document.activeElement.blur) document.activeElement.blur();
+    };
+    $('.js-warm-skip', el).addEventListener('click', () => { skipped = true; setLocked(false); });
+    async function poll() {
+      let j;
+      try { j = await (await fetch('/model/warmup')).json(); } catch (e) { return; }
+      if (j.active && !skipped) {
+        const p = Math.max(0, Math.min(1, j.progress || 0));
+        label.textContent = j.label || 'Wird vorbereitet …';
+        fill.style.width = Math.round(p * 100) + '%';
+        pct.textContent = Math.round(p * 100) + ' %';
+        setLocked(true);
+      } else {
+        setLocked(false);
+      }
+      if (!j.active) {
+        skipped = false;
+        if (wasActive && j.error) showNotice('Vorbereitung fehlgeschlagen: ' + j.error);
+      }
+      wasActive = !!j.active;
+    }
+    poll();
+    setInterval(poll, 1000);
+  }
+
   function showNotice(text) {
     if (!noticeEl) {
       noticeEl = document.createElement('div');

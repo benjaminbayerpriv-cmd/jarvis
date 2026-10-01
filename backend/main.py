@@ -137,7 +137,7 @@ def _warm_with_load_progress(model: str) -> bool:
             last_step = step
             panel.push("model_load", model=model, progress=step * 5)
 
-    ok = llm_client.warm_system_prompt(model, on_load_progress=on_progress)
+    ok = llm_client.warm_system_prompt(model, on_load_progress=on_progress, report=True)
     # An already-loaded model reports no progress — no "geladen" flash then.
     if not ok or last_step >= 0:
         panel.push("model_load", model=model, progress=100 if ok else None)
@@ -468,7 +468,7 @@ async def summarize(req: SummarizeRequest):
     # aufwärmen, statt die nächste echte Chat-Nachricht dafür zahlen zu
     # lassen. Fire-and-forget, damit es die Antwort hier nicht verzögert.
     threading.Thread(
-        target=llm_client.warm_system_prompt,
+        target=llm_client.refresh_prompt_cache,
         args=(config.LM_STUDIO_MODEL,),
         daemon=True,
     ).start()
@@ -581,7 +581,7 @@ def chat_stream(req: ChatRequest):
             # cached at startup/model-switch, so the NEXT chat turn (of THIS
             # conversation, or a brand new one) would silently pay the full
             # prefill cost again. Re-warm right away instead of only once.
-            llm_client.warm_system_prompt(config.LM_STUDIO_MODEL)
+            llm_client.refresh_prompt_cache(config.LM_STUDIO_MODEL)
 
         threading.Thread(target=_job, daemon=True).start()
 
@@ -846,6 +846,14 @@ def get_settings():
         "deepseek_enabled": config.DEEPSEEK_ENABLED,
         **config.get_simple_settings(),
     }
+
+
+@app.get("/model/warmup")
+def model_warmup():
+    """Whether Jarvis is still building its fork bases (startup, model switch)
+    and how far along — the interface locks behind a progress bar while
+    `active` is true. See llm_client.warm_system_prompt."""
+    return llm_client.warmup_status()
 
 
 @app.get("/model/health")

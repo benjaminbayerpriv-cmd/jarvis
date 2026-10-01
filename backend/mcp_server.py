@@ -236,6 +236,19 @@ def request_scope(may_run: Callable[[], bool]) -> Iterator[dict]:
                 _active_may_run = None
 
 
+def warm_integration() -> dict:
+    """The plugin integration for a warm-up request, WITHOUT touching the
+    single "may a tool run right now" slot request_scope manages. A warm-up
+    that took the slot (with `lambda: False`) refused every tool call of a
+    real chat that happened to run meanwhile — observed live: a chat started
+    while the post-title re-warm was still running got "Abgebrochen" for its
+    tools and the model invented an answer. With no scope open the slot is
+    empty and tool calls are refused anyway, which is exactly what a warm-up
+    wants; a chat's own scope stays untouched."""
+    ensure_started()
+    return {"type": "plugin", "id": INTEGRATION_ID}
+
+
 def output_text(raw: str) -> str:
     """LM Studio reports a tool's output as the raw MCP content list
     (`[{"type":"text","text":"..."}]`) — back to the plain string
