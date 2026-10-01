@@ -3364,7 +3364,7 @@
     { cmd: 'anheften', label: 'Anheften', desc: 'Aktuelle Unterhaltung an-/loslösen', run: () => togglePinCurrentConversation() },
     { cmd: 'ordner', label: 'Im Ordner anzeigen', desc: 'Unterhaltungsdatei im Explorer/Finder zeigen', run: () => revealCurrentConversation() },
     { cmd: 'löschen', label: 'Löschen', desc: 'Aktuelle Unterhaltung löschen', run: () => deleteCurrentConversation() },
-    { cmd: 'larp', label: 'LARP-Modus', desc: 'JARVIS-Command-Center im Vollbild einblenden (Kreuz oben rechts oder Esc schließt)', run: () => openLarpHud() },
+    { cmd: 'larp', label: 'LARP-Modus', desc: 'JARVIS-Cockpit mit Live-Systemwerten im Vollbild (Kreuz oben rechts oder Esc schließt)', run: () => openLarpHud() },
     { cmd: 'hilfe', label: 'Hilfe', desc: 'Alle Slash-Befehle auflisten', run: () => showSlashHelp() },
   ];
 
@@ -3405,16 +3405,16 @@
     startNewConversation();
     loadConversationList();
   }
-  // "/larp": legt das Iron-Man-artige Command-Center (frontend/larp-hud.js)
-  // über die Oberfläche. Die hooks verbinden dessen Sprach-/Neuer-Task-Knöpfe
-  // mit den echten Aktionen hier; alles andere im HUD ist reine Kulisse.
+  // "/larp": legt das JARVIS-Werkstatt-Cockpit (frontend/larp-hud.js) über
+  // die Oberfläche. Es holt seine Live-Werte selbst (/system/stats,
+  // /hud/weather, /models, /chat); die hooks geben ihm nur den Sprachmodus
+  // und die echte Jarvis-Stimme für die Antworten in seiner Konsole.
   function openLarpHud() {
     if (!window.JarvisLarp) { showNotice('LARP-Modus nicht verfügbar (larp-hud.js fehlt).'); return; }
     closeSlashMenu();
     window.JarvisLarp.open({
       voice: () => { if (!speechMode) enterSpeech(); },
-      newChat: () => startNewConversation(),
-      getState: () => ({ turns: history.filter((m) => m.role === 'user').length }),
+      speak: (text) => speakNotice(text),
       onClose: () => { if (composerInput && !speechMode) composerInput.focus(); },
     });
   }
