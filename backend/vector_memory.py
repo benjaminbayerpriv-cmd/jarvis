@@ -22,6 +22,7 @@ import hashlib
 import json
 import re
 import threading
+import time
 from pathlib import Path
 
 import numpy as np
@@ -37,6 +38,45 @@ _lock = threading.Lock()
 _cache: dict | None = None
 
 
+_load_checked_at = 0.0
+_LOAD_CHECK_INTERVAL = 60.0
+
+
+def _ensure_explicitly_loaded() -> None:
+    """Load the embedding model through LM Studio's REST API before its
+    /embeddings endpoint would just-in-time load it.
+
+    With LM Studio's default "unload previous JIT model on load", a JIT
+    load of the embedding model evicts the (JIT-loaded) chat model, and the
+    chat request right after evicts the embedding model again — observed
+    live: every single turn reloaded the 9B model from disk (~7 s) as soon
+    as the notes index was non-empty. Explicitly loaded models are exempt
+    from that eviction, so both stay resident."""
+    global _load_checked_at
+    now = time.monotonic()
+    if now - _load_checked_at < _LOAD_CHECK_INTERVAL:
+        return
+    _load_checked_at = now
+    from . import hardware
+
+    models = hardware._v1_models()
+    if models is None:
+        return  # older LM Studio without the v1 REST API — JIT as before
+    wanted = config.EMBEDDING_MODEL
+    for m in models:
+        if m.get("key") == wanted or any(i.get("id") == wanted for i in m.get("loaded_instances") or []):
+            if m.get("loaded_instances"):
+                return
+            break
+    try:
+        requests.post(
+            f"{hardware.lm_studio_root()}/api/v1/models/load",
+            json={"model": wanted}, headers=config.lm_studio_headers(), timeout=120,
+        ).raise_for_status()
+    except requests.RequestException as exc:
+        print(f"[memory] Embedding-Modell {wanted} ließ sich nicht explizit laden ({exc}), JIT-Laden bleibt als Fallback.")
+
+
 def embed(text: str, task: str = "document") -> list[float] | None:
     """A single embedding vector for `text`, or None if the embedding
     model isn't reachable/loaded — callers must treat that as "semantic
@@ -48,6 +88,7 @@ def embed(text: str, task: str = "document") -> list[float] | None:
     embedding space; this model was specifically trained expecting it.
     """
     prefix = "search_query: " if task == "query" else "search_document: "
+    _ensure_explicitly_loaded()
     try:
         resp = requests.post(
             f"{config.LM_STUDIO_BASE_URL}/embeddings",

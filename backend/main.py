@@ -588,6 +588,13 @@ def chat_stream(req: ChatRequest):
 
     def generate():
         full_text = ""
+        if not (req.message or "").strip() and not req.images:
+            # LM Studio rejects an empty input with a raw English error
+            # ("input must not be an empty string") that was shown verbatim.
+            text = "Ich habe nichts verstanden — sag oder schreib es bitte nochmal."
+            yield json.dumps({"type": "sentence", "text": text, "audio": ""}) + "\n"
+            yield json.dumps({"type": "done", "full_text": text, "conversation_id": conv_id}) + "\n"
+            return
         try:
             # Ephemeral turns (the /btw window) mint a throwaway conv_id
             # every time (see conv_id above) that's never reused — chaining
@@ -840,10 +847,18 @@ def system_stats():
 
 
 @app.get("/hud/weather")
-def hud_weather(city: str = "Malibu"):
+def hud_weather(city: str = ""):
     """Echtes Wetter fürs "/larp"-HUD über Open-Meteo (dieselbe Quelle wie
-    das get_weather-Tool, ohne API-Key), 10 Minuten pro Stadt gecacht."""
-    key = city.strip().lower() or "malibu"
+    das get_weather-Tool, ohne API-Key), 10 Minuten pro Stadt gecacht.
+    Ohne Stadt gilt default_city aus config.json — vorher stand hier fest
+    "Malibu", das HUD zeigte also nie das Wetter am Wohnort."""
+    if not city.strip():
+        try:
+            city = str(config.load_config().get("default_city") or "")
+        except (OSError, ValueError):
+            city = ""
+    city = city.strip() or "Hamburg"
+    key = city.lower()
     hit = _hud_weather_cache.get(key)
     if hit and time.monotonic() - hit[0] < 600:
         return hit[1]
@@ -1038,13 +1053,13 @@ def model_test(req: UpdateSettingsRequest):
     except requests.RequestException as exc:
         return {"healthy": False, "detail": f"Nicht erreichbar: {exc}"}
     if not models:
-        return {"healthy": False, "detail": "Erreichbar, aber es ist kein Modell geladen."}
+        return {"healthy": False, "detail": "Erreichbar, aber kein Modell verfügbar."}
     if config.LM_STUDIO_MODEL and config.LM_STUDIO_MODEL not in models:
         return {
             "healthy": True,
-            "detail": f"Erreichbar — {config.LM_STUDIO_MODEL} ist dort aber nicht geladen. Geladen: {', '.join(models[:5])}",
+            "detail": f"Erreichbar — {config.LM_STUDIO_MODEL} ist dort aber nicht verfügbar. Verfügbar: {', '.join(models[:5])}",
         }
-    return {"healthy": True, "detail": f"Erreichbar ({len(models)} Modell(e) geladen)."}
+    return {"healthy": True, "detail": f"Erreichbar ({len(models)} Modell(e) verfügbar)."}
 
 
 def _local_subnet() -> ipaddress.IPv4Network | None:
