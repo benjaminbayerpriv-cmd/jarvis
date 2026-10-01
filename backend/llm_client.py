@@ -5,6 +5,7 @@ import platform
 import re
 import subprocess
 import threading
+import time
 from typing import Callable
 
 import requests
@@ -1117,17 +1118,60 @@ def _native_events(body: dict):
     return _sse_payloads(resp)
 
 
-def _sse_payloads(resp: requests.Response):
+# Events that only exist once the prompt is prefilled and the model is
+# actually answering.
+_ANSWER_EVENTS = ("reasoning.", "message.", "tool_call.", "chat.end", "error")
+# How long an abandoned prefill may keep running in the background.
+_PREFILL_DRAIN_SECONDS = 900
+
+
+def _drain_prefill(resp: requests.Response, lines) -> None:
+    """Read an abandoned stream up to the end of its prompt prefill, then
+    drop it. Closing the connection mid-prefill makes LM Studio throw the
+    half-built prompt cache away, so every retry (a second message, the stop
+    button, a barge-in) restarted a minutes-long prefill from zero and Jarvis
+    never answered. Finishing the prefill keeps the cache for the next turn."""
+    deadline = time.monotonic() + _PREFILL_DRAIN_SECONDS
     try:
-        for line in resp.iter_lines():
+        for line in lines:
+            if time.monotonic() > deadline:
+                break
             if not line.startswith(b"data:"):
                 continue
             try:
-                yield json.loads(line[len(b"data:"):])
-            except json.JSONDecodeError:
+                kind = json.loads(line[len(b"data:"):]).get("type", "")
+            except (json.JSONDecodeError, AttributeError):
                 continue
+            if kind.startswith(_ANSWER_EVENTS):
+                break
+    except requests.RequestException:
+        pass
     finally:
         resp.close()
+
+
+def _sse_payloads(resp: requests.Response):
+    lines = resp.iter_lines()
+    answering = False
+    try:
+        for line in lines:
+            if not line.startswith(b"data:"):
+                continue
+            try:
+                payload = json.loads(line[len(b"data:"):])
+            except json.JSONDecodeError:
+                continue
+            if str(payload.get("type", "")).startswith(_ANSWER_EVENTS):
+                answering = True
+            yield payload
+    except GeneratorExit:
+        if not answering:
+            threading.Thread(target=_drain_prefill, args=(resp, lines), daemon=True).start()
+            resp = None
+        raise
+    finally:
+        if resp is not None:
+            resp.close()
 
 
 def _content_text(content) -> str:

@@ -29,8 +29,10 @@ def check_venv() -> Check:
     if python is None:
         return ("fail", ".venv", "fehlt", "jarvis setup")
     version = ctx.venv_python_version()
-    label = f"Python {'.'.join(map(str, version))}" if version else "vorhanden"
-    return ("ok", ".venv", label, str(python))
+    if version is None:
+        return ("fail", ".venv", "Python startet nicht",
+                "Ordner .venv löschen, dann jarvis setup (Basis-Python wurde entfernt/aktualisiert)")
+    return ("ok", ".venv", f"Python {'.'.join(map(str, version))}", str(python))
 
 
 def check_deps() -> Check:
@@ -87,6 +89,9 @@ def check_mcp() -> Check:
     if not lmstudio.native_api_ok():
         return ("warn", "MCP-Zugriff", "native API antwortet nicht",
                 "LM Studio neu starten; Token prüfen")
+    problem = lmstudio.mcp_entry_problem()
+    if problem:
+        return ("warn", "MCP", *problem)
     return ("ok", "MCP", f"Bereit auf Port {lmstudio.mcp_port()}", lmstudio.mcp_url())
 
 
