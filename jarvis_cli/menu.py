@@ -128,13 +128,13 @@ def act_lmstudio() -> None:
     while True:
         healthy, detail = lmstudio.health()
         entries = [
-            ("health", f"Verbindung prüfen  ·  {detail}", "health"),
-            ("base", f"Adresse ändern  ·  {lmstudio.base_url()}", "base"),
-            ("model", f"Modell wählen  ·  {lmstudio.model()}", "model"),
-            ("load", "Modell jetzt laden", "load"),
-            ("unload", "Andere Modelle entladen", "unload"),
-            ("scan", "Im Netzwerk suchen", "scan"),
-            ("back", "Zurück", "back"),
+            ("health", f"Verbindung prüfen  ·  {detail}"),
+            ("base", f"Adresse ändern  ·  {lmstudio.base_url()}"),
+            ("model", f"Modell wählen  ·  {lmstudio.model()}"),
+            ("load", "Modell jetzt laden"),
+            ("unload", "Andere Modelle entladen"),
+            ("scan", "Im Netzwerk suchen"),
+            ("back", "Zurück"),
         ]
         ui.heading("LM Studio")
         index = ui.choose("Was möchtest du?", entries)
@@ -175,10 +175,10 @@ def act_lmstudio() -> None:
 def act_token() -> None:
     while True:
         entries = [
-            ("set", "Token einfügen (Zwischenablage oder tippen)", "set"),
-            ("show", f"Gespeichertes Token anzeigen  ·  {ctx.secret(lmstudio.token(), 6)}", "show"),
-            ("clear", "Token entfernen", "clear"),
-            ("back", "Zurück", "back"),
+            ("set", "Token einfügen (Zwischenablage oder tippen)"),
+            ("show", f"Gespeichertes Token anzeigen  ·  {ctx.secret(lmstudio.token(), 6)}"),
+            ("clear", "Token entfernen"),
+            ("back", "Zurück"),
         ]
         ui.heading("LM-Studio-API-Token")
         good, message = lmstudio.health()
@@ -208,10 +208,10 @@ def act_mcp() -> None:
     lmstudio.explain_mcp()
     ui.out()
     entries = [
-        ("copy", "Block in die Zwischenablage kopieren", "copy"),
-        ("install", "Direkt in eine mcp.json eintragen", "install"),
-        ("manual", "Pfad zu einer mcp.json angeben", "manual"),
-        ("back", "Zurück", "back"),
+        ("copy", "Block in die Zwischenablage kopieren"),
+        ("install", "Direkt in eine mcp.json eintragen"),
+        ("manual", "Pfad zu einer mcp.json angeben"),
+        ("back", "Zurück"),
     ]
     index = ui.choose("Wie fortfahren?", entries)
     if index is None:

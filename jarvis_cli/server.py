@@ -24,7 +24,10 @@ PROJECT_DIR = ctx.ROOT / "launcher"
 
 
 def host() -> str:
-    return ctx.env("JARVIS_HOST") or "127.0.0.1"
+    # JARVIS_HOST is the bind address; a wildcard bind (LAN access) is still
+    # reached on loopback — connecting to 0.0.0.0 fails on Windows.
+    value = ctx.env("JARVIS_HOST")
+    return "127.0.0.1" if value in ("", "0.0.0.0", "::") else value
 
 
 def port() -> int:
@@ -70,21 +73,19 @@ def port_busy() -> bool:
 def port_owner(port_no: int) -> int:
     """PID that currently listens on the given port (0 if none). Reliable even
     when the backend re-execed itself and our pid file points at a dead pid."""
-    if ctx.IS_WINDOWS:
-        script = ("Get-NetTCPConnection -LocalPort {p} -State Listen -ErrorAction SilentlyContinue "
-                  "| Select-Object -ExpandProperty OwningProcess -First 1")
-        result = subprocess.run(["powershell", "-NoProfile", "-Command", script.format(p=port_no)],
-                                capture_output=True, text=True, timeout=10,
-                                encoding="utf-8", errors="replace", creationflags=ctx.no_window())
-        try:
-            return int(result.stdout.strip())
-        except ValueError:
-            return 0
-    result = subprocess.run(["lsof", "-t", f"-iTCP:{port_no}", "-sTCP:LISTEN"],
-                            capture_output=True, text=True, timeout=10)
     try:
+        if ctx.IS_WINDOWS:
+            script = ("Get-NetTCPConnection -LocalPort {p} -State Listen -ErrorAction SilentlyContinue "
+                      "| Select-Object -ExpandProperty OwningProcess -First 1")
+            result = subprocess.run(["powershell", "-NoProfile", "-Command", script.format(p=port_no)],
+                                    capture_output=True, text=True, timeout=10,
+                                    encoding="utf-8", errors="replace", creationflags=ctx.no_window())
+            return int(result.stdout.strip())
+        result = subprocess.run(["lsof", "-t", f"-iTCP:{port_no}", "-sTCP:LISTEN"],
+                                capture_output=True, text=True, timeout=10)
         return int(result.stdout.strip().splitlines()[0])
-    except (ValueError, IndexError):
+    except (OSError, subprocess.SubprocessError, ValueError, IndexError):
+        # No lsof/PowerShell, a hung PowerShell, or nobody listening.
         return 0
 
 
@@ -185,14 +186,12 @@ def start(open_browser: bool = True, wait: bool = True, quiet: bool = False) -> 
                 ui.ok(f"Jarvis läuft auf {url()}")
                 break
             if process.poll() is not None:
-                bar.finish()
                 ui.fail("Der Server ist beim Starten abgestürzt — die letzten Zeilen:")
                 ui.lines("\n".join(ctx.tail(ctx.SERVER_LOG, 15)))
                 return False
             time.sleep(0.5)
             bar.set(int(STARTUP_TIMEOUT - (deadline - time.time())))
         else:
-            bar.finish()
             ui.warn(f"Noch nicht erreichbar nach {STARTUP_TIMEOUT}s. Log: jarvis logs")
             return False
 
@@ -275,19 +274,23 @@ def hotkey_running() -> bool:
     pid = ctx.read_pid(ctx.HOTKEY_PID)
     if pid and ctx.process_alive(pid):
         return True
-    if ctx.IS_WINDOWS:
-        script = (
-            "(Get-CimInstance Win32_Process -Filter \"Name='python.exe'\" "
-            "| Where-Object { $_.CommandLine -like '*hotkey_listener*' }).ProcessId"
-        )
-        out = subprocess.run(["powershell", "-NoProfile", "-Command", script],
-                             capture_output=True, text=True, timeout=30,
-                             errors="replace", creationflags=ctx.no_window())
-        return out.returncode == 0 and out.stdout.strip().isdigit()
-    finder = "pgrep"
-    out = subprocess.run([finder, "-f", "hotkey_listener"], capture_output=True, text=True,
-                         timeout=20, errors="replace")
-    return out.returncode == 0
+    try:
+        if ctx.IS_WINDOWS:
+            script = (
+                "(Get-CimInstance Win32_Process -Filter \"Name='python.exe'\" "
+                "| Where-Object { $_.CommandLine -like '*hotkey_listener*' }).ProcessId"
+            )
+            out = subprocess.run(["powershell", "-NoProfile", "-Command", script],
+                                 capture_output=True, text=True, timeout=30,
+                                 errors="replace", creationflags=ctx.no_window())
+            return out.returncode == 0 and out.stdout.strip().isdigit()
+        out = subprocess.run(["pgrep", "-f", "hotkey_listener"], capture_output=True, text=True,
+                             timeout=20, errors="replace")
+        return out.returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        # A slow/hung PowerShell or a missing pgrep must not take the whole
+        # status screen down — "not running" is the safe answer.
+        return False
 
 
 def hotkey_start() -> bool:
@@ -349,7 +352,9 @@ def autostart_enable() -> bool:
     if ctx.IS_WINDOWS:
         ok = True
         for name, script in ((TASK_SERVER, "start_server.bat"), (TASK_HOTKEY, "start_hotkey.bat")):
-            target = str(PROJECT_DIR / script)
+            # Quoted: an unquoted path with a space ("C:\Users\Max Muster\…")
+            # is stored as-is and the task then fails to start at login.
+            target = f'"{PROJECT_DIR / script}"'
             _schtasks("/delete", "/tn", name, "/f")
             result = _schtasks("/create", "/tn", name, "/tr", target, "/sc", "onlogon", "/rl", "highest")
             if result.returncode == 0:
@@ -379,9 +384,13 @@ def autostart_disable() -> bool:
         ui.ok("Autostart entfernt (geplante Aufgaben gelöscht).")
         return True
     for label in (PLIST_SERVER, PLIST_HOTKEY):
-        subprocess.run(["launchctl", "unload", f"~/Library/LaunchAgents/{label}.plist"],
+        # No shell here, so "~" would not be expanded and the unload silently
+        # did nothing; autostart_installed() also keys off the plist file.
+        plist = ctx.Path.home() / "Library/LaunchAgents" / f"{label}.plist"
+        subprocess.run(["launchctl", "unload", str(plist)],
                        capture_output=True, text=True, errors="replace")
-    ui.ok("Autostart deaktiviert (LaunchAgents entladen).")
+        plist.unlink(missing_ok=True)
+    ui.ok("Autostart deaktiviert (LaunchAgents entladen und entfernt).")
     return True
 
 

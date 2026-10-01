@@ -10,6 +10,7 @@ installed, i.e. in exactly the state a fresh ZIP is in.
 
 from __future__ import annotations
 
+import http.client
 import os
 import re
 import shutil
@@ -162,11 +163,18 @@ def missing_modules(python: Path | None = None) -> list[str]:
                              creationflags=no_window()).stdout
     except (OSError, subprocess.SubprocessError):
         return ["(pip-Status unbekannt)"]
-    missing = []
+    missing, probed = [], 0
     for line in out.splitlines():
         name, _, flag = line.partition(" ")
+        if name not in REQUIRED_MODULES:
+            continue
+        probed += 1
         if flag.strip() == "1":
-            missing.append(REQUIRED_MODULES.get(name, name))
+            missing.append(REQUIRED_MODULES[name])
+    if probed < len(REQUIRED_MODULES):
+        # The interpreter didn't run the probe (e.g. a .venv whose base Python
+        # was removed) — silence must not read as "everything installed".
+        return ["(pip-Status unbekannt)"]
     return missing
 
 
@@ -186,9 +194,10 @@ def venv_python_version() -> tuple[int, int, int] | None:
         out = subprocess.run([str(python), "--version"], capture_output=True, text=True,
                              timeout=20, errors="replace",
                              creationflags=no_window()).stdout
-        return tuple(int(p) for p in out.split()[-1].split("."))  # type: ignore[return-value]
-    except (OSError, ValueError, IndexError, subprocess.SubprocessError):
+        match = re.search(r"(\d+)\.(\d+)(?:\.(\d+))?", out)
+    except (OSError, subprocess.SubprocessError):
         return None
+    return (int(match[1]), int(match[2]), int(match[3] or 0)) if match else None
 
 
 def system_python_ok() -> bool:
@@ -302,6 +311,10 @@ def http_json(url: str, timeout: float = 5.0, headers: dict | None = None, metho
         return None, f"nicht erreichbar ({exc.reason})"
     except TimeoutError:
         return None, "Zeitüberschreitung"
+    except (OSError, http.client.HTTPException) as exc:
+        # getresponse() errors (server reset/closed the connection mid-request)
+        # are not wrapped in URLError by urllib.
+        return None, f"Verbindung abgebrochen ({exc.__class__.__name__})"
     except ValueError:
         return None, "ungültige Antwort"
 

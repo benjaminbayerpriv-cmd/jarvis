@@ -144,6 +144,19 @@ def update() -> bool:
         if not restart_ok:
             ui.fail("Server konnte nicht neu starten —  jarvis start")
             return False
+    elif was_running:
+        # Still the old process, i.e. the new code isn't live yet. Only a
+        # server started by this CLI can be restarted without pulling the
+        # rug from under the app window that owns it (Jarvis.exe).
+        if server.running_pid():
+            with ui.spinner("Server wird neu gestartet"):
+                restart_ok = server.restart(open_browser=False, quiet=True)
+            if not restart_ok:
+                ui.fail("Server konnte nicht neu starten —  jarvis start")
+                return False
+        else:
+            ui.note("Der Server läuft außerhalb der CLI (z. B. Jarvis.exe) — dort neu starten, "
+                    "damit die neue Version aktiv wird.")
     return True
 
 
@@ -169,6 +182,11 @@ def check_python() -> bool:
 def create_venv() -> bool:
     ui.heading("Python-Umgebung (.venv)")
     if ctx.venv_python():
+        if ctx.venv_python_version() is None:
+            ui.fail(".venv ist kaputt — ihr Python startet nicht (meist wurde die zugrunde liegende "
+                    "Python-Installation entfernt oder aktualisiert). Den Ordner .venv löschen und "
+                    "jarvis setup erneut ausführen.")
+            return False
         ui.status("ok", ".venv", "vorhanden", str(ctx.venv_python()))
         return True
     ui.info("Lege .venv an …")
