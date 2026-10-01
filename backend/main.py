@@ -137,7 +137,7 @@ def _warm_with_load_progress(model: str) -> bool:
             last_step = step
             panel.push("model_load", model=model, progress=step * 5)
 
-    ok = llm_client.warm_system_prompt(model, on_load_progress=on_progress)
+    ok = llm_client.warm_system_prompt(model, on_load_progress=on_progress, report=True)
     # An already-loaded model reports no progress — no "geladen" flash then.
     if not ok or last_step >= 0:
         panel.push("model_load", model=model, progress=100 if ok else None)
@@ -846,6 +846,14 @@ def get_settings():
         "deepseek_enabled": config.DEEPSEEK_ENABLED,
         **config.get_simple_settings(),
     }
+
+
+@app.get("/model/warmup")
+def model_warmup():
+    """Whether Jarvis is still building its fork bases (startup, model switch)
+    and how far along — the interface locks behind a progress bar while
+    `active` is true. See llm_client.warm_system_prompt."""
+    return llm_client.warmup_status()
 
 
 @app.get("/model/health")

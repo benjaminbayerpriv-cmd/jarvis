@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import platform
 import re
@@ -216,25 +217,73 @@ _CHAT_TIMEOUT = (10, 300)
 # Titel-Generierung) verdrängt wurde. Nur im Speicher: nach einem Neustart
 # legt warm_system_prompt sie neu an; ist eine Basis bei LM Studio nicht mehr
 # auffindbar, fällt _native_round auf den normalen Weg zurück.
-_fork_bases: dict[tuple[str, str], str] = {}
+_FORK_BASES_FILE = config.ROOT_DIR / ".jarvis_fork_bases.json"
 _FORK_BASES_MAX = 6
 
 
+def _fork_key(model: str, system_prompt: str) -> str:
+    """Model + a fingerprint of the system prompt AND the tool definitions —
+    a stored base is only valid for exactly that combination."""
+    digest = hashlib.sha256(
+        (system_prompt + json.dumps(tools.TOOL_SCHEMAS, sort_keys=True, ensure_ascii=False)).encode()
+    ).hexdigest()[:24]
+    return f"{model}|{digest}"
+
+
+def _load_fork_bases() -> dict[str, str]:
+    try:
+        data = json.loads(_FORK_BASES_FILE.read_text(encoding="utf-8"))
+        return {str(k): str(v) for k, v in data.items()} if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _save_fork_bases() -> None:
+    try:
+        _FORK_BASES_FILE.write_text(json.dumps(_fork_bases, indent=2), encoding="utf-8")
+    except OSError as exc:
+        print(f"[model] Basis-IDs konnten nicht gespeichert werden: {exc}")
+
+
+# Persisted next to .env (not in git): LM Studio keeps stored responses for 30
+# days, so after a Jarvis restart the bases are still there as long as LM
+# Studio's own cache survived — no rebuild needed. A stale id is caught by the
+# HTTP 400 fallback in _native_round.
+_fork_bases: dict[str, str] = _load_fork_bases()
+
+
 def _fork_base_lookup(model: str, system_prompt: str) -> str | None:
-    return _fork_bases.get((model, system_prompt))
+    return _fork_bases.get(_fork_key(model, system_prompt))
 
 
 def _fork_base_store(model: str, system_prompt: str, response_id: str) -> None:
     if len(_fork_bases) >= _FORK_BASES_MAX:
         _fork_bases.clear()
-    _fork_bases[(model, system_prompt)] = response_id
+    _fork_bases[_fork_key(model, system_prompt)] = response_id
+    _save_fork_bases()
 
 
 def _fork_base_forget(model: str, system_prompt: str) -> None:
-    _fork_bases.pop((model, system_prompt), None)
+    if _fork_bases.pop(_fork_key(model, system_prompt), None) is not None:
+        _save_fork_bases()
 
 
-def warm_system_prompt(model: str, on_load_progress: Callable[[float], None] | None = None) -> bool:
+# What the interface shows while warm_system_prompt(report=True) runs (cold
+# start, model switch): Jarvis is locked behind a progress bar until it's done,
+# so nobody's first message silently waits minutes behind the build.
+_warmup = {"active": 0, "progress": 0.0, "label": "", "error": ""}
+
+
+def warmup_status() -> dict:
+    return {
+        "active": _warmup["active"] > 0,
+        "progress": round(_warmup["progress"], 3),
+        "label": _warmup["label"],
+        "error": _warmup["error"],
+    }
+
+
+def warm_system_prompt(model: str, on_load_progress: Callable[[float], None] | None = None, report: bool = False) -> bool:
     """Throwaway native chat request carrying the real system prompt and the
     real tool integration, so LM Studio loads the model (just-in-time, if it
     isn't yet) and processes those tokens ahead of time. Returns whether that
@@ -257,8 +306,14 @@ def warm_system_prompt(model: str, on_load_progress: Callable[[float], None] | N
     model is being loaded. Never raises — this must never block startup or a
     model switch.
     """
+    variants = (False, True)
+    labels = ("Textmodus", "Sprachmodus")
+    if report:
+        _warmup["active"] += 1
+        _warmup.update(progress=0.0, label="Wird vorbereitet …", error="")
+    ok = False
     try:
-        for speech in (False, True):
+        for i, speech in enumerate(variants):
             system_prompt = _system_prompt(speech)
             is_new_base = _fork_base_lookup(model, system_prompt) is None
             body = {
@@ -267,20 +322,41 @@ def warm_system_prompt(model: str, on_load_progress: Callable[[float], None] | N
                 # complete one; one is enough for a pure cache refresh.
                 "max_output_tokens": 16 if is_new_base else 1,
             }
+            if report:
+                _warmup.update(progress=i / len(variants), label=f"{labels[i]} wird vorbereitet …")
             for data in _native_events(body):
                 kind = data.get("type")
-                if kind == "model_load.progress" and on_load_progress:
-                    on_load_progress(data.get("progress", 0.0))
+                if kind == "model_load.progress":
+                    if on_load_progress:
+                        on_load_progress(data.get("progress", 0.0))
+                    if report:
+                        _warmup["label"] = f"Modell wird geladen … {int(data.get('progress', 0.0) * 100)} %"
+                elif kind == "prompt_processing.progress" and report:
+                    _warmup.update(
+                        progress=(i + data.get("progress", 0.0)) / len(variants),
+                        label=f"{labels[i]} wird vorbereitet …",
+                    )
                 elif kind == "error":
                     raise _native_error(data.get("error") or {})
                 elif kind == "chat.end" and is_new_base:
                     rid = (data.get("result") or {}).get("response_id")
                     if rid:
                         _fork_base_store(model, system_prompt, rid)
-        return True
+            if report:
+                _warmup["progress"] = (i + 1) / len(variants)
+        ok = True
     except (requests.RequestException, ModelError, RuntimeError) as exc:
         print(f"[model] Vorwärmen des System-Prompts für {model} fehlgeschlagen: {exc}")
-        return False
+        if report:
+            _warmup["error"] = str(exc)
+    finally:
+        if report:
+            _warmup["active"] = max(0, _warmup["active"] - 1)
+            if ok:
+                _warmup.update(progress=1.0, label="Fertig")
+    return ok
+
+
 
 
 # model -> system prompt of the most recent real native round, so a cache
