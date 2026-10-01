@@ -18,3 +18,4 @@ launcher/build/
 launcher/dist/
 launcher/*.spec
 .jarvis/
+.jarvis_fork_bases.json
