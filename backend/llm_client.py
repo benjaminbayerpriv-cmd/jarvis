@@ -4,6 +4,7 @@ import json
 import platform
 import re
 import subprocess
+import threading
 from typing import Callable
 
 import requests
@@ -205,11 +206,38 @@ def _note_active_target(base_url: str, model: str) -> None:
 _CHAT_TIMEOUT = (10, 300)
 
 
+# (Modell, System-Prompt) -> response_id einer gespeicherten "Basis"-Antwort:
+# ein Chat, in dem der System-Prompt samt Werkzeug-Definitionen schon
+# verarbeitet ist. Jeder NEUE Chat startet als Fork davon (siehe
+# _native_round), statt den ganzen System-Prompt (~3000 Token) neu zu
+# verarbeiten — live gemessen: 20-38 s bei kaltem Cache gegen unter 1 s im
+# Fork, auch wenn der Prefix-Cache zwischendurch (z.B. durch die
+# Titel-Generierung) verdrängt wurde. Nur im Speicher: nach einem Neustart
+# legt warm_system_prompt sie neu an; ist eine Basis bei LM Studio nicht mehr
+# auffindbar, fällt _native_round auf den normalen Weg zurück.
+_fork_bases: dict[tuple[str, str], str] = {}
+_FORK_BASES_MAX = 6
+
+
+def _fork_base_lookup(model: str, system_prompt: str) -> str | None:
+    return _fork_bases.get((model, system_prompt))
+
+
+def _fork_base_store(model: str, system_prompt: str, response_id: str) -> None:
+    if len(_fork_bases) >= _FORK_BASES_MAX:
+        _fork_bases.clear()
+    _fork_bases[(model, system_prompt)] = response_id
+
+
+def _fork_base_forget(model: str, system_prompt: str) -> None:
+    _fork_bases.pop((model, system_prompt), None)
+
+
 def warm_system_prompt(model: str, on_load_progress: Callable[[float], None] | None = None) -> bool:
     """Throwaway native chat request carrying the real system prompt and the
     real tool integration, so LM Studio loads the model (just-in-time, if it
-    isn't yet) and its llama.cpp backend prefills and caches those tokens
-    ahead of time. Returns whether that worked.
+    isn't yet) and processes those tokens ahead of time. Returns whether that
+    worked.
 
     Observed live: with a big model (Qwen3.6 35B A3B), the FIRST real message
     after a (re)load took noticeably longer than every one after it — because
@@ -219,25 +247,64 @@ def warm_system_prompt(model: str, on_load_progress: Callable[[float], None] | N
     ahead of time moves that one-time cost off the user's first real message.
     Goes through the same /api/v1/chat + MCP path as a real turn: the tool
     definitions LM Studio renders from the MCP server belong to the cached
-    prefix too. `on_load_progress` gets LM Studio's model-load progress
-    (0..1) while the model is being loaded. Never raises — this must never
-    block startup or a model switch.
+    prefix too.
+
+    Where no stored base exists yet for a system-prompt variant (text and
+    speech mode differ), this request is also kept (store=True) and its
+    response_id registered as that variant's fork base — see _fork_bases.
+    `on_load_progress` gets LM Studio's model-load progress (0..1) while the
+    model is being loaded. Never raises — this must never block startup or a
+    model switch.
     """
     try:
-        with mcp_server.request_scope(lambda: False) as integration:
+        for speech in (False, True):
+            system_prompt = _system_prompt(speech)
+            is_new_base = _fork_base_lookup(model, system_prompt) is None
             body = {
-                **_native_body(model, _system_prompt(False), "hi", integration, store=False),
-                "max_output_tokens": 1,
+                **_native_body(model, system_prompt, "hi", mcp_server.warm_integration(), store=is_new_base),
+                # A few tokens for a new base so the stored exchange is a
+                # complete one; one is enough for a pure cache refresh.
+                "max_output_tokens": 16 if is_new_base else 1,
             }
             for data in _native_events(body):
-                if data.get("type") == "model_load.progress" and on_load_progress:
+                kind = data.get("type")
+                if kind == "model_load.progress" and on_load_progress:
                     on_load_progress(data.get("progress", 0.0))
-                elif data.get("type") == "error":
+                elif kind == "error":
                     raise _native_error(data.get("error") or {})
+                elif kind == "chat.end" and is_new_base:
+                    rid = (data.get("result") or {}).get("response_id")
+                    if rid:
+                        _fork_base_store(model, system_prompt, rid)
         return True
     except (requests.RequestException, ModelError, RuntimeError) as exc:
         print(f"[model] Vorwärmen des System-Prompts für {model} fehlgeschlagen: {exc}")
         return False
+
+
+# model -> system prompt of the most recent real native round, so a cache
+# refresh can target the prompt actually in use (text and speech differ).
+_last_chat_system: dict[str, str] = {}
+
+
+def refresh_prompt_cache(model: str) -> None:
+    """Re-prime LM Studio's prompt-prefix cache for the system prompt the last
+    real chat used — after a side call (title, summary) with its own short
+    system prompt pushed it out, so the NEXT message of that chat doesn't pay
+    the full prefill again. Only that one prompt, not every variant (each
+    costs a cold prefill and LM Studio handles one request at a time).
+    Fork-started chats don't need it for their first turn (their base
+    survives eviction); this is for the turns after. Never raises."""
+    system_prompt = _last_chat_system.get(model)
+    if not system_prompt:
+        return
+    try:
+        body = {**_native_body(model, system_prompt, "hi", mcp_server.warm_integration(), store=False), "max_output_tokens": 1}
+        for data in _native_events(body):
+            if data.get("type") == "error":
+                raise _native_error(data.get("error") or {})
+    except (requests.RequestException, ModelError, RuntimeError) as exc:
+        print(f"[model] Cache-Auffrischung für {model} fehlgeschlagen: {exc}")
 
 
 def _platform_note() -> str:
@@ -1123,11 +1190,36 @@ def _native_round(messages: list, model: str, turn_id: str | None, previous_resp
         system_prompt, user_input = _native_input([messages[0], messages[-1]])
     else:
         system_prompt, user_input = _native_input(messages)
+    # A brand-new chat (system prompt + first message, no history) whose
+    # system prompt is exactly the one a stored base was made with starts as a
+    # fork of that base: the base already carries the processed system prompt,
+    # so it must NOT be sent again (LM Studio answers a re-sent one with a 500
+    # "System message must be at the beginning" — verified live), while the
+    # tool integration has to be (without it the model only writes the call as
+    # text — also verified). Every other case takes the normal path.
+    _last_chat_system[model] = system_prompt
+    base_id = None
+    if not previous_response_id and len(messages) == 2:
+        base_id = _fork_base_lookup(model, system_prompt)
     with mcp_server.request_scope(lambda: not _turn_cancelled(turn_id)) as integration:
         body = _native_body(model, system_prompt, user_input, integration)
         if previous_response_id:
             body["previous_response_id"] = previous_response_id
-        events = _native_events(body)
+        events = None
+        if base_id:
+            fork_body = {k: v for k, v in body.items() if k != "system_prompt"}
+            fork_body["previous_response_id"] = base_id
+            try:
+                events = _native_events(fork_body)
+            except LmStudioError as exc:
+                print(f"[model] Fork der Basis nicht möglich, normaler Weg: {exc}")
+                if "previous_response_id" in str(exc):
+                    # Base gone on LM Studio's side — make a fresh one in the
+                    # background for the next new chat.
+                    _fork_base_forget(model, system_prompt)
+                    threading.Thread(target=warm_system_prompt, args=(model,), daemon=True).start()
+        if events is None:
+            events = _native_events(body)
         try:
             yield None
             for data in events:
@@ -1175,6 +1267,11 @@ def _native_round(messages: list, model: str, turn_id: str | None, previous_resp
 # weil das Plugin im chained Kontext nicht mehr live verbunden ist. Die
 # Helfer bleiben nur als Anknüpfpunkt stehen, falls LM Studio den
 # Chained-Pfad repariert; bis dahin schickt jede Runde den vollen
+# Transcript. NACHTRAG: Ein Gegentest ohne Jarvis-Anfrage-Scope (Fork ohne
+# system_prompt, MIT Integration) führte get_time in einem Fork sehr wohl aus
+# — die zweite Beobachtung (stornierte Tool-Aufrufe) war vermutlich Jarvis'
+# eigene Ablehnung außerhalb eines aktiven request_scope. Der Fork von der
+# Basis (_fork_bases) nutzt deshalb genau diese Kombination.
 # Transcript. In-memory only, Neustarts von Jarvis oder LM Studio
 # invalidieren eine Kette ohnehin.
 _response_chains: dict[str, dict] = {}
