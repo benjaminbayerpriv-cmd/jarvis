@@ -468,7 +468,7 @@ async def summarize(req: SummarizeRequest):
     # aufwärmen, statt die nächste echte Chat-Nachricht dafür zahlen zu
     # lassen. Fire-and-forget, damit es die Antwort hier nicht verzögert.
     threading.Thread(
-        target=llm_client.warm_system_prompt,
+        target=llm_client.refresh_prompt_cache,
         args=(config.LM_STUDIO_MODEL,),
         daemon=True,
     ).start()
@@ -581,7 +581,7 @@ def chat_stream(req: ChatRequest):
             # cached at startup/model-switch, so the NEXT chat turn (of THIS
             # conversation, or a brand new one) would silently pay the full
             # prefill cost again. Re-warm right away instead of only once.
-            llm_client.warm_system_prompt(config.LM_STUDIO_MODEL)
+            llm_client.refresh_prompt_cache(config.LM_STUDIO_MODEL)
 
         threading.Thread(target=_job, daemon=True).start()
 

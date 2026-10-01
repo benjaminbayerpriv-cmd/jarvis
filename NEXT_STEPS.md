@@ -119,56 +119,44 @@ abgewiesen.
   nicht, um zwischen beidem zu unterscheiden, jetzt zählt zuerst der
   Nachrichtentext).
 
-## Chatforken (`previous_response_id`) — neu, noch NICHT live getestet
+## Neue Chats starten als Fork einer Basis (live getestet, 2026-10-01)
 
-Auf Benjamins Wunsch zusätzlich gebaut: `/api/v1/chat` ist laut LM Studios
-Doku standardmäßig zustandsbehaftet (`store: true`, jede Antwort bekommt
-eine `response_id`) — ein Folge-Turn kann per `previous_response_id` daran
-anknüpfen, statt den ganzen bisherigen Verlauf als Text erneut zu
-schicken. Vorher schickte Jarvis bei jedem Turn `store: false` und den
-kompletten Verlauf als beschriftetes Transkript im `input`-Feld
-(`_native_input`) — das ist jetzt der Fallback-Weg, nicht mehr der einzige.
+**Idee:** Jeder neue Chat soll aus einem Chat starten, in dem der System-Prompt
+samt Werkzeug-Definitionen (~3000 Token) schon verarbeitet ist. Bei kaltem
+Prompt-Cache kostete der erste Prompt live **20-38 s**; im Fork unter 1 s.
 
-**Wichtige Erkenntnis vor dem Bauen recherchiert** (nicht angenommen):
-`system_prompt`/`integrations` werden von LM Studio NICHT automatisch über
-`previous_response_id` mitgeführt — genau wie bei OpenAIs Responses API,
-die dieser Endpunkt nachbildet (belegt u.a. durch
-[vllm-project/vllm#37697](https://github.com/vllm-project/vllm/issues/37697),
-ein als Bug gemeldetes Leck genau dieses Verhaltens). Jarvis schickt beide
-deshalb bei JEDER Anfrage weiterhin frisch mit, verkettet wird nur der
-`input`-Teil (die neue Nachricht statt des ganzen Verlaufs).
+**Umsetzung** (`backend/llm_client.py`):
+- `warm_system_prompt()` legt pro System-Prompt-Variante (Text, Sprache) beim
+  Start/Modellwechsel eine gespeicherte **Basis**-Antwort an (`store=True`,
+  `_fork_bases`, Schlüssel = Modell + exakter System-Prompt-Text).
+- `_native_round()`: Besteht die Anfrage nur aus System-Prompt + erster
+  Nachricht (kein Verlauf) und passt der System-Prompt exakt zu einer Basis,
+  geht sie als Fork raus (`previous_response_id` = Basis) — **ohne**
+  `system_prompt` (LM Studio antwortet auf einen erneut mitgeschickten mit
+  500 "System message must be at the beginning"), **mit** der
+  Werkzeug-Integration (ohne sie schreibt das Modell den Aufruf nur als Text).
+- Ist die Basis bei LM Studio nicht mehr auffindbar (HTTP 400 "Could not find
+  stored response"), fällt Jarvis auf den normalen Weg zurück, vergisst die
+  Basis und legt im Hintergrund eine neue an.
+- Alles andere (Folge-Turns, anderer System-Prompt z.B. mit Gedächtnis-Treffer
+  oder Code-Modus, DeepSeek) läuft unverändert den normalen Weg; Folge-Turns
+  profitieren vom Prefix-Cache.
+- `refresh_prompt_cache()` ersetzt das Aufwärmen nach Titel/Zusammenfassung und
+  frischt nur den zuletzt wirklich genutzten System-Prompt auf.
 
-**Design** (`backend/llm_client.py`):
-- Ein `conversation_id -> {response_id, expect_history_len}`-Speicher
-  (`_response_chains`, nur im Speicher — ein Neustart von Jarvis oder LM
-  Studio macht eine Kette ohnehin ungültig, der Fallback ist immer
-  korrekt, nur nicht maximal günstig).
-- Verkettet wird NUR die erste Runde eines Turns (`is_first_round`) — eine
-  Recovery-Runde (geleakter Aufruf, erfundenes Tool) fällt für den Rest
-  des Turns auf vollen Transkript-Aufbau zurück, statt eine zweite,
-  schwerer nachvollziehbare Verkettungs-Ebene einzuziehen.
-- `expect_history_len` verhindert eine falsch passende Kette: weicht die
-  vom Frontend geschickte `history`-Länge beim nächsten Turn ab (Verlauf
-  kompaktiert/bearbeitet/verzweigt), wird automatisch neu aufgebaut statt
-  eine möglicherweise falsche Kette zu verwenden.
-- Lehnt LM Studio eine verkettete Anfrage ab (z.B. nach einem eigenen
-  Neustart, `response_id` vergessen), fängt Jarvis das ab, löscht die
-  Kette für diese Konversation und wiederholt DENSELBEN Versuch einmal
-  ohne Verkettung — der Nutzer merkt vom Ausfall nichts, und am Ende des
-  Turns steht wieder eine frische, gültige Kette.
-- `warm_system_prompt()` bleibt bei `store: false` (Wegwerf-Ping, soll
-  nicht im gespeicherten Antwort-Graphen von LM Studio landen).
+**Wichtige Korrektur:** Der frühere Befund "Tool-Aufrufe werden im verketteten
+Kontext storniert" war ein Test-Artefakt — Jarvis lehnt Tool-Aufrufe selbst ab
+("Abgebrochen — dieses Werkzeug wurde nicht ausgeführt"), solange kein
+`request_scope` offen ist. Dazu eine echte, schon vorher vorhandene Race
+Condition behoben: Das Aufwärmen nach der Titel-Generierung hielt den
+globalen Tool-Schalter mit `lambda: False` besetzt; ein Chat, der in dieser
+Zeit lief, bekam alle Werkzeuge abgelehnt und das Modell erfand die Antwort.
+`mcp_server.warm_integration()` fasst den Schalter nicht mehr an.
 
-**Getestet:** ausführlich gegen `fake_lmstudio.py` (frischer Turn ohne
-Kette, Folge-Turn verkettet mit kurzem `input` + weiterhin vollem
-`system_prompt`/`integrations`, Verlaufs-Mismatch fällt zurück,
-Mehrrunden-Turn verkettet nur Runde 1, abgelehnte Kette heilt sich selbst
-und baut am Ende wieder eine gültige Kette auf) — **noch nicht gegen
-echtes LM Studio**. Insbesondere unbestätigt: ob LM Studio bei einer
-abgelehnten `previous_response_id` wirklich mit einem sofortigen
-HTTP-Fehler antwortet (das fängt Jarvis' Selbstheilung ab) oder anders
-(z.B. als gestreamtes Fehler-Event mitten im Stream — dafür gibt es aktuell
-KEINE Selbstheilung, nur den bestehenden generischen Fehlerpfad).
+**Gemessen** (Cache vorher absichtlich verdrängt): 5 neue Chats in Folge
+(Text/Sprache gemischt, Tool-Aufruf nötig) je 3,5-4,7 s bis zum ersten Text,
+alle korrekt. Das per-Konversation-Chaining (`_chain_*`) bleibt deaktiviert und
+ist für den Fork nicht nötig.
 
 ## Offene Punkte für die nächste Session
 
