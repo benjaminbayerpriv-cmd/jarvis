@@ -9,6 +9,10 @@ pywinpty>=2.0.11; platform_system == "Windows"
 
 python-multipart==0.0.32
 
+# CPU/RAM-Auslastung für das "/larp"-Command-Center (GET /system/stats).
+# Optional — ohne psutil zeigt das HUD Platzhalterwerte.
+psutil>=5.9
+
 # MCP server (backend/mcp_server.py) through which LM Studio's native
 # /api/v1/chat calls Jarvis's tools. 2.x — FastMCP was renamed and the
 # low-level API changed versus 1.x.

@@ -6,6 +6,7 @@ import ipaddress
 import json
 import os
 import re
+import shutil
 import socket
 import subprocess
 import sys
@@ -368,6 +369,13 @@ def _render_app_shell(frontend_dir: Path, static_prefix: str) -> str:
     # Das Kamera-Modul (Hand-/Körpertracking) muss vor claude-app.js laufen,
     # weil buildUi() es beim Aufbau in die Seitenleiste einhängt. Nur wenn die
     # Datei in diesem Frontend-Stand existiert — /backup hat sie nicht.
+    # Das "/larp"-Command-Center (larp-hud.js) ist ein eigenständiges Overlay;
+    # claude-app.js öffnet es nur, wenn window.JarvisLarp existiert.
+    larp_script = (
+        '    <script src="{p}/larp-hud.js?v={v}"></script>\n'.format(p=static_prefix, v=_BUILD)
+        if (frontend_dir / "larp-hud.js").exists()
+        else ""
+    )
     camera_script = (
         '    <script src="{p}/camera-tracking.js?v={v}"></script>\n'.format(p=static_prefix, v=_BUILD)
         if (frontend_dir / "camera-tracking.js").exists()
@@ -378,6 +386,7 @@ def _render_app_shell(frontend_dir: Path, static_prefix: str) -> str:
         + '    <script src="{p}/xterm.js?v={v}"></script>\n'.format(p=static_prefix, v=_BUILD)
         + '    <script src="{p}/xterm-addon-fit.js?v={v}"></script>\n'.format(p=static_prefix, v=_BUILD)
         + camera_script
+        + larp_script
         + '    <script src="{p}/claude-app.js?v={v}"></script>\n'.format(p=static_prefix, v=_BUILD)
     )
     return html.replace("</body>", f"{assets}  </body>")
@@ -708,6 +717,27 @@ def transcript():
     opened, so this just reads it back instead of the panel only ever
     showing turns from the current page session."""
     return {"turns": transcript_log.read_recent_turns()}
+
+
+@app.get("/system/stats")
+def system_stats():
+    """CPU-/RAM-/Festplattenauslastung in Prozent für die Ring-Anzeigen im
+    "/larp"-Command-Center. psutil ist optional — fehlt es, kommen CPU/RAM
+    als None zurück und das HUD zeigt seine Platzhalterwerte."""
+    stats: dict[str, float | None] = {"cpu": None, "ram": None, "disk": None}
+    try:
+        import psutil
+
+        stats["cpu"] = psutil.cpu_percent(interval=None)
+        stats["ram"] = psutil.virtual_memory().percent
+    except Exception:
+        pass
+    try:
+        usage = shutil.disk_usage(Path.home().anchor or "/")
+        stats["disk"] = round(usage.used / usage.total * 100, 1)
+    except Exception:
+        pass
+    return stats
 
 
 @app.get("/conversations")
