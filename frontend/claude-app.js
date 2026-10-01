@@ -1452,7 +1452,7 @@
       .jarvis-reduce-motion, .jarvis-reduce-motion * {
         transition-duration: 0s !important; animation-duration: 0s !important; animation-delay: 0s !important;
       }
-      body.js-app-active > :not(#jsApp):not(#jarvisOrb):not(#jarvisOrbHit):not(#jsSpeechTerm):not(#jsCamWindow):not(#jsSpeechbar):not(#jsSpeechCaption):not(#jsSettingsSheet):not(#jsNewProjectSheet):not(#jsRenameChatSheet):not(#jsBtwWindow):not(#jsNotice):not(#jsModelLoad):not(script):not(style) { display:none !important; }
+      body.js-app-active > :not(#jsApp):not(#jarvisOrb):not(#jarvisOrbHit):not(#jsSpeechTerm):not(#jsCamWindow):not(#jsSpeechbar):not(#jsSpeechCaption):not(#jsSettingsSheet):not(#jsNewProjectSheet):not(#jsRenameChatSheet):not(#jsBtwWindow):not(#jsNotice):not(#jsModelLoad):not(#jarvisLarp):not(script):not(style) { display:none !important; }
       body.js-app-active { overflow:hidden; }
       /* Jeder neu gestreamte Buchstabe (siehe setAssistantText/wrapCharsForReveal)
          erscheint erst unscharf und schärft sich dann ein, statt abrupt
@@ -3363,6 +3363,7 @@
     { cmd: 'anheften', label: 'Anheften', desc: 'Aktuelle Unterhaltung an-/loslösen', run: () => togglePinCurrentConversation() },
     { cmd: 'ordner', label: 'Im Ordner anzeigen', desc: 'Unterhaltungsdatei im Explorer/Finder zeigen', run: () => revealCurrentConversation() },
     { cmd: 'löschen', label: 'Löschen', desc: 'Aktuelle Unterhaltung löschen', run: () => deleteCurrentConversation() },
+    { cmd: 'larp', label: 'LARP-Modus', desc: 'JARVIS-Command-Center im Vollbild einblenden (Kreuz oben rechts oder Esc schließt)', run: () => openLarpHud() },
     { cmd: 'hilfe', label: 'Hilfe', desc: 'Alle Slash-Befehle auflisten', run: () => showSlashHelp() },
   ];
 
@@ -3402,6 +3403,19 @@
     } catch (e) {}
     startNewConversation();
     loadConversationList();
+  }
+  // "/larp": legt das Iron-Man-artige Command-Center (frontend/larp-hud.js)
+  // über die Oberfläche. Die hooks verbinden dessen Sprach-/Neuer-Task-Knöpfe
+  // mit den echten Aktionen hier; alles andere im HUD ist reine Kulisse.
+  function openLarpHud() {
+    if (!window.JarvisLarp) { showNotice('LARP-Modus nicht verfügbar (larp-hud.js fehlt).'); return; }
+    closeSlashMenu();
+    window.JarvisLarp.open({
+      voice: () => { if (!speechMode) enterSpeech(); },
+      newChat: () => startNewConversation(),
+      getState: () => ({ turns: history.filter((m) => m.role === 'user').length }),
+      onClose: () => { if (composerInput && !speechMode) composerInput.focus(); },
+    });
   }
   function showSlashHelp() {
     showThread();
