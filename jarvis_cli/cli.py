@@ -241,8 +241,12 @@ def cmd_autostart(args) -> int:
 def cmd_ask(args) -> int:
     question = " ".join(args.question).strip()
     if not question:
-        question = ui.ask("Was soll Jarvis fragen?")
+        try:
+            question = ui.ask("Was soll Jarvis fragen?")
+        except EOFError:
+            question = ""
     if not question:
+        ui.fail("Keine Frage angegeben — z. B.  jarvis ask Wie spät ist es?")
         return 1
     if not server.is_running():
         ui.fail("Jarvis läuft nicht — erst  jarvis start")

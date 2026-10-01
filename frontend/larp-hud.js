@@ -9,8 +9,8 @@
 // Akku, Uptime, NVIDIA-GPU), /hud/weather (Open-Meteo), /models (aktives
 // Modell), dazu FPS/Frame-Zeit und der WebGL-Grafikchip aus dem Browser.
 // Die Konsole beantwortet Hardware-Fragen direkt aus diesen Werten und
-// schickt alles andere über POST /chat an das echte Modell. Rüstung, Radar,
-// Tracking und Reaktor sind Kulisse und als SIM markiert.
+// schickt alles andere über POST /chat an das echte Modell. Radar und Reaktor
+// sind Kulisse und als SIM markiert; Weltkarte und Hauptstädte stimmen.
 // hooks (aus claude-app.js): voice() = Sprachmodus, speak(text) = Jarvis-
 // Stimme, onClose(). Geschlossen wird über das Kreuz oben rechts oder Esc.
 (() => {
@@ -186,10 +186,10 @@ html.jarvis-reduce-motion #jarvisLarp .lh-ticker div{animation:none;padding-left
     gpu: '<rect x="3" y="7" width="18" height="10" rx="1.5"/><circle cx="9" cy="12" r="2.5"/><circle cx="16" cy="12" r="2.5"/><path d="M6 17v3"/>',
     weather: '<circle cx="9" cy="9" r="3.5"/><path d="M9 2.5v1.5M2.5 9H4M4.4 4.4l1 1M13.6 4.4l-1 1"/><path d="M8 19h10a3.5 3.5 0 0 0 0-7 5 5 0 0 0-9.6 1.5A2.8 2.8 0 0 0 8 19z"/>',
     net: '<path d="M2 9a15 15 0 0 1 20 0M5 13a10 10 0 0 1 14 0M8.5 16.5a5 5 0 0 1 7 0"/><circle cx="12" cy="20" r="1"/>',
-    suit: '<path d="M12 3l5 2v5c0 4-2.5 7-5 9-2.5-2-5-5-5-9V5z"/><path d="M9.5 11h5"/>',
+    model: '<rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/><path d="M10 10h4v4h-4z"/>',
     comms: '<path d="M4 6h16v10H9l-5 4z"/>',
   };
-  const NODES = [['cpu', 'CPU'], ['gpu', 'GPU'], ['weather', 'WETTER'], ['net', 'NETZ'], ['suit', 'SUIT'], ['comms', 'COMMS']];
+  const NODES = [['cpu', 'CPU'], ['gpu', 'GPU'], ['weather', 'WETTER'], ['net', 'NETZ'], ['model', 'MODELL'], ['comms', 'COMMS']];
   const kv = (rows) => `<dl class="lh-kv">${rows.map(([k, id]) => `<dt>${k}</dt><dd data-k="${id}">—</dd>`).join('')}</dl>`;
   const src = (id, cls, txt, title) => `<span class="lh-src lh-${cls}" data-src="${id}" title="${title}">${txt}</span>`;
 
@@ -263,9 +263,11 @@ html.jarvis-reduce-motion #jarvisLarp .lh-ticker div{animation:none;padding-left
   </section>
 
   <section class="lh-deck">
-    <article class="lh-panel" data-panel="suit">
-      <div class="lh-ph"><h2>SUIT</h2><span class="lh-sub">MK · PROTOTYPE</span>${src('suit', 'sim', 'SIM', 'Kulisse')}</div>
-      <div class="lh-row" style="flex:1;align-items:stretch"><canvas data-c="armor" style="width:120px" aria-label="Rüstung als Drahtgitter"></canvas><ul class="lh-list" data-k="suitList" style="flex:1;align-content:center"></ul></div>
+    <article class="lh-panel" data-panel="model">
+      <div class="lh-ph"><h2>AI MODEL</h2><span class="lh-sub" data-k="mdlProv">LM STUDIO</span>${src('model', 'live', 'LIVE', 'Aktives Modell, Zustand und geladene Modelle direkt von LM Studio; VRAM von der Grafikkarte')}</div>
+      <div class="lh-row" style="flex:none;align-items:center"><canvas class="lh-ring" data-c="mdlRing" style="width:92px;height:92px" aria-label="VRAM-Belegung"></canvas>
+        <dl class="lh-kv" style="flex:1;min-width:0"><dt>AKTIV</dt><dd data-k="mdlName">—</dd><dt>STATUS</dt><dd data-k="mdlState">—</dd><dt>VRAM</dt><dd data-k="mdlVram">—</dd><dt>CHATS</dt><dd data-k="mdlConv">—</dd></dl></div>
+      <ul class="lh-list" data-k="mdlList" style="margin-top:6px;overflow:hidden"></ul>
     </article>
     <article class="lh-panel" data-panel="scan">
       <div class="lh-ph"><h2>THREAT SCAN</h2><span class="lh-sub">40 KM</span>${src('scan', 'sim', 'SIM', 'Kulisse')}</div>
@@ -294,8 +296,8 @@ html.jarvis-reduce-motion #jarvisLarp .lh-ticker div{animation:none;padding-left
       <canvas class="lh-fill" data-c="powSpark" aria-label="Reaktorleistung"></canvas>
     </article>
     <article class="lh-panel" data-panel="globe">
-      <div class="lh-ph"><h2>TRACKING</h2><span class="lh-sub">SAT 14/14</span>${src('globe', 'sim', 'SIM', 'Kulisse; der weiße Punkt ist deine Wetter-Stadt')}</div>
-      <canvas class="lh-fill" data-c="globe" aria-label="Globus mit verfolgten Orten"></canvas>
+      <div class="lh-ph"><h2>EARTH</h2><span class="lh-sub">KONTINENTE · HAUPTSTÄDTE</span>${src('globe', 'live', 'MAP', 'Weltkarte mit Hauptstädten; der weiße Punkt ist deine Wetter-Stadt')}</div>
+      <canvas class="lh-fill" data-c="globe" aria-label="Erdglobus mit Kontinenten und Hauptstädten"></canvas>
     </article>
   </section>
   <div class="lh-ticker" aria-hidden="true"><div data-k="ticker"></div></div>
@@ -314,7 +316,7 @@ html.jarvis-reduce-motion #jarvisLarp .lh-ticker div{animation:none;padding-left
   const T = {}; // live telemetry, filled by pollStats()/frame()
   const S = { reactor: 3.2 };
   const HIST = {};
-  let WX = null, wxCity = 'Malibu', wxError = null;
+  let WX = null, wxCity = '', wxError = null;
   let voiceLevel = 0, typing = false, voiceOn = false, chatBusy = false;
   let chatHistory = [];
   const queue = [];
@@ -372,8 +374,10 @@ html.jarvis-reduce-motion #jarvisLarp .lh-ticker div{animation:none;padding-left
   }
   async function pollModel() {
     try {
-      const [m, h] = await Promise.all([fetch('/models').then((r) => r.json()), fetch('/model/health').then((r) => r.json())]);
-      T.model = m.current || null; T.modelOk = !!h.healthy;
+      const [m, h, l, c] = await Promise.all([fetch('/models').then((r) => r.json()), fetch('/model/health').then((r) => r.json()),
+        fetch('/model/loaded').then((r) => r.json()).catch(() => ({ models: [] })), fetch('/conversations').then((r) => r.json()).catch(() => null)]);
+      T.model = m.current || null; T.modelOk = !!h.healthy; T.modelDetail = h.detail || '';
+      T.loaded = l.models || []; T.convCount = c && Array.isArray(c.conversations) ? c.conversations.length : null;
     } catch (e) { T.modelOk = false; }
   }
 
@@ -404,7 +408,8 @@ html.jarvis-reduce-motion #jarvisLarp .lh-ticker div{animation:none;padding-left
   const wxKind = (code) => code <= 1 ? 'clear' : code <= 3 ? 'cloud' : code <= 48 ? 'fog' : code <= 67 || (code >= 80 && code <= 82) ? 'rain' : code <= 86 ? 'snow' : 'storm';
   const hhmm = (iso) => (iso || '').slice(11, 16) || '—';
   function cityLocalNow() { return WX ? new Date(Date.now() + (WX.utc_offset_seconds || 0) * 1000).toISOString().slice(11, 16) : '—'; }
-  function loadCity() { try { return localStorage.getItem('jarvisLarpCity') || 'Malibu'; } catch (e) { return 'Malibu'; } }
+  // Leer = der Server nimmt default_city aus config.json.
+  function loadCity() { try { return localStorage.getItem('jarvisLarpCity') || ''; } catch (e) { return ''; } }
   function saveCity(c) { try { localStorage.setItem('jarvisLarpCity', c); } catch (e) {} }
   async function loadWeather() {
     try {
@@ -419,7 +424,7 @@ html.jarvis-reduce-motion #jarvisLarp .lh-ticker div{animation:none;padding-left
     if (!root) return;
     const tag = root.querySelector('[data-src="wx"]');
     const cityBtn = $('.lh-city');
-    if (cityBtn) cityBtn.textContent = WX ? `${WX.city.toUpperCase()}${WX.country ? ', ' + WX.country : ''} · ${WX.lat.toFixed(2)}° ${WX.lon.toFixed(2)}°` : wxCity.toUpperCase();
+    if (cityBtn) cityBtn.textContent = WX ? `${WX.city.toUpperCase()}${WX.country ? ', ' + WX.country : ''} · ${WX.lat.toFixed(2)}° ${WX.lon.toFixed(2)}°` : (wxCity || 'Standort').toUpperCase();
     if (!WX) {
       tag.textContent = 'OFFLINE'; tag.className = 'lh-src lh-off'; tag.title = wxError || '';
       K('wxCond').textContent = wxError ? 'KEINE WETTERDATEN' : 'LADE …';
@@ -451,7 +456,7 @@ html.jarvis-reduce-motion #jarvisLarp .lh-ticker div{animation:none;padding-left
   function editCity() {
     const btn = $('.lh-city');
     const inp = document.createElement('input');
-    inp.className = 'lh-city-input'; inp.value = wxCity; inp.setAttribute('aria-label', 'Stadt für das Wetter');
+    inp.className = 'lh-city-input'; inp.value = wxCity || (WX ? WX.city : ''); inp.setAttribute('aria-label', 'Stadt für das Wetter');
     btn.replaceWith(inp); inp.focus(); inp.select();
     const done = (ok) => {
       if (!inp.isConnected) return;
@@ -680,32 +685,7 @@ html.jarvis-reduce-motion #jarvisLarp .lh-ticker div{animation:none;padding-left
     ctx.restore();
   }
 
-  // --- suit / radar / globe / wave (Kulisse)
-  const HALF = [
-    [[0.44, 0.02], [0.5, 0.012], [0.5, 0.165], [0.46, 0.16], [0.42, 0.13], [0.41, 0.07]], [[0.47, 0.165], [0.5, 0.165], [0.5, 0.195], [0.47, 0.195]],
-    [[0.36, 0.195], [0.5, 0.195], [0.5, 0.5], [0.42, 0.5], [0.39, 0.44], [0.34, 0.3]], [[0.28, 0.19], [0.36, 0.195], [0.35, 0.27], [0.27, 0.27]],
-    [[0.27, 0.275], [0.34, 0.275], [0.32, 0.4], [0.26, 0.4]], [[0.258, 0.408], [0.318, 0.408], [0.308, 0.53], [0.248, 0.53]],
-    [[0.245, 0.537], [0.31, 0.537], [0.305, 0.59], [0.25, 0.59]], [[0.42, 0.505], [0.5, 0.505], [0.5, 0.6], [0.4, 0.56]],
-    [[0.41, 0.575], [0.493, 0.605], [0.48, 0.76], [0.42, 0.76]], [[0.42, 0.768], [0.48, 0.768], [0.476, 0.928], [0.426, 0.928]],
-    [[0.41, 0.936], [0.48, 0.936], [0.484, 0.982], [0.4, 0.982]],
-  ];
-  function drawArmor(t) {
-    const f = fit(CV('armor')); if (!f) return;
-    const { ctx, w, h } = f;
-    const s = Math.min(h * 0.98, w / 0.56), ox = w / 2 - 0.5 * s, oy = (h - s) / 2;
-    const P = (x, y) => [ox + x * s, oy + y * s];
-    const poly = (pts, warn) => {
-      ctx.beginPath(); pts.forEach(([x, y], i) => { const [px, py] = P(x, y); i ? ctx.lineTo(px, py) : ctx.moveTo(px, py); }); ctx.closePath();
-      const col = warn ? C.amber : C.holo; ctx.fillStyle = rgba(col, warn ? 0.18 : 0.06); ctx.fill();
-      ctx.strokeStyle = rgba(col, 0.85); ctx.lineWidth = 1; ctx.stroke();
-    };
-    HALF.forEach((p, i) => { poly(p, i === 6); poly(p.map(([x, y]) => [1 - x, y]), false); });
-    const [rx, ry] = P(0.5, 0.27); const rg = ctx.createRadialGradient(rx, ry, 0, rx, ry, s * 0.05); rg.addColorStop(0, '#fff'); rg.addColorStop(1, rgba(C.holo, 0));
-    ctx.fillStyle = rg; ctx.beginPath(); ctx.arc(rx, ry, s * 0.05, 0, Math.PI * 2); ctx.fill();
-    const scan = ((t * 0.00025 * SPEED) % 1.2) - 0.1;
-    if (scan > 0 && scan < 1) { const [, sy] = P(0, scan); ctx.strokeStyle = rgba(C.hi, 0.8); ctx.beginPath(); ctx.moveTo(ox + 0.2 * s, sy); ctx.lineTo(ox + 0.8 * s, sy); ctx.stroke(); }
-  }
-  const SUIT = [['HELMET', 100], ['REPULSORS', 97], ['FLIGHT STAB.', 93], ['LIFE SUPPORT', 100], ['GAUNTLET L', 82, true], ['UNIBEAM', 64], ['FLARES', 12, true]];
+  // --- radar / globe / wave
   const BLIPS = [[0.31, 0.6, C.holo], [1.9, 0.7, C.amber], [3.6, 0.83, C.holo], [5.0, 0.4, C.holo]];
   function drawRadar(t) {
     const f = fit(CV('radar')); if (!f) return;
@@ -718,26 +698,146 @@ html.jarvis-reduce-motion #jarvisLarp .lh-ticker div{animation:none;padding-left
     ctx.strokeStyle = rgba(C.hi, 0.9); ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx + Math.cos(sw) * R, cy + Math.sin(sw) * R); ctx.stroke();
     BLIPS.forEach(([a, d, col]) => { let since = sw - a; if (since < 0) since += Math.PI * 2; ctx.fillStyle = rgba(col, Math.max(0.12, 1 - since / 4)); ctx.beginPath(); ctx.arc(cx + Math.cos(a) * R * d, cy + Math.sin(a) * R * d, 3, 0, Math.PI * 2); ctx.fill(); });
   }
-  const SPHERE = (() => { const p = [], n = 420, ga = Math.PI * (3 - Math.sqrt(5)); for (let i = 0; i < n; i++) { const y = 1 - (i / (n - 1)) * 2, r = Math.sqrt(1 - y * y), th = ga * i; p.push([Math.cos(th) * r, y, Math.sin(th) * r]); } return p; })();
-  const CITIES = [['NEW YORK', 40.71, -74.0], ['LONDON', 51.5, -0.12], ['DUBAI', 25.2, 55.27], ['TOKYO', 35.68, 139.69]];
-  const ll = (la, lo) => [Math.cos(la * RAD) * Math.sin(lo * RAD), -Math.sin(la * RAD), Math.cos(la * RAD) * Math.cos(lo * RAD)];
+  // ================================================================ Weltkarte
+  // Grobe Küstenlinien (Länge, Breite in Grad, ca. 3–5° genau) — bei der
+  // Größe des Globus nicht von Natural-Earth zu unterscheiden. Die Karte wird
+  // einmal in eine Textur gerastert und dann pro Pixel auf die Kugel projiziert.
+  const LAND = [
+    // Nordamerika
+    [[-168,66],[-162,70],[-156,71.3],[-141,69.6],[-128,70],[-115,68],[-95,72],[-88,68],[-82,69.5],[-80,63],[-94,59],[-93,56],[-85,55],[-82,52.5],[-79,51.5],[-78,56],[-77,60],[-70,59],[-65,60.3],[-61,56],[-56,52],[-60,50],[-66,50],[-64,48.5],[-60,46],[-66,44.5],[-70,43.5],[-70,41.7],[-74,40.5],[-76,38],[-76,35],[-81,31.5],[-80,27],[-80,25.2],[-82.5,27],[-84,30],[-89,30.2],[-94,29.5],[-97.3,27],[-97.7,22],[-96,19],[-94.5,18.2],[-91,18.8],[-90.5,21],[-87,21.5],[-88,17.5],[-88.5,15.8],[-83.5,15],[-83.5,11],[-81,8.8],[-77.5,8.5],[-78.5,7.2],[-80.5,7.3],[-83,8.3],[-86,11],[-87.7,13],[-91.5,14],[-94.5,16],[-97,15.8],[-101,17.3],[-105.5,20],[-105.5,23],[-109,25.5],[-112,29],[-114.7,31.7],[-117,32.5],[-120.5,34.5],[-122.5,37.5],[-124,40.4],[-124.5,43],[-124,46.5],[-124.5,48.3],[-123,49],[-127,51],[-130,54.5],[-134,57.5],[-138,59.5],[-146,60.8],[-152,59.5],[-157,57],[-162,55],[-165,54.7],[-161,58.5],[-165.5,61.5],[-166,64],[-168,66]],
+    // Südamerika
+    [[-77.5,8.5],[-75,11],[-71.5,12],[-68,10.7],[-62,10.7],[-60,8.5],[-57,6],[-52,5],[-50,1.5],[-50,-1],[-44.5,-2.5],[-40,-3],[-35,-5.5],[-35,-9],[-39,-13.5],[-39,-18],[-41,-22],[-45,-23.5],[-48.5,-26],[-48.7,-28.7],[-52,-32],[-54,-34.5],[-57,-34.7],[-57.5,-36.5],[-62,-39],[-62.2,-41],[-65,-41],[-64,-43],[-66,-45.5],[-67.5,-46.5],[-66,-48],[-69,-51],[-68.5,-52.5],[-72,-53.5],[-74,-52],[-75,-48],[-73.7,-43],[-73.5,-37],[-71.5,-31],[-70.3,-24],[-70.3,-18.5],[-76,-14],[-79,-7.5],[-81,-5],[-80.3,-2.5],[-78.8,1.5],[-77.4,4],[-77.5,8.5]],
+    // Eurasien
+    [[-9,37],[-9.5,43],[-1.5,43.5],[-1,46],[-4.5,48.5],[-1.5,48.7],[2,51],[5,53.5],[8.5,55],[8,57],[10.5,57.5],[10.5,54.5],[14,54.2],[19,54.5],[21,57],[24,57.5],[24.2,59.4],[28,59.8],[23,60],[21.5,61],[21.5,63],[25,65.2],[22,65.8],[17,62.5],[18.5,60],[16.5,57],[12.5,56],[11,59],[7,58],[5,60.5],[5.5,62.5],[11,64.5],[14.5,68.5],[18,70],[24,71],[31,70.2],[40,67],[34,66.2],[33,64.5],[38,64.5],[44,66.5],[44,68.5],[53,68.5],[60,69.5],[66,69],[69,73],[75,72],[80,73],[87,75],[100,77],[106,76.5],[113,74],[128,72],[140,72.5],[150,71.5],[160,70],[170,70],[180,69],[180,65],[177,64.5],[173,61.5],[166,60],[163,58],[160,53],[156.7,51],[155.8,55.5],[156.8,58.5],[152,59],[143,59.3],[137,54],[140.5,53],[141.5,48],[138,46],[133,42.8],[130.8,42.5],[129.5,40.5],[127.5,39.5],[129.4,36.5],[129,35],[126.5,34.5],[126.5,37.5],[125,39.5],[121.5,39],[121,40.8],[118,39],[119,37],[122.5,37],[119.5,35],[121,32],[122,30],[121.5,28],[119,25],[117,23.5],[113.5,22.2],[110.5,21],[108,21.7],[106.5,20],[105.8,18.5],[108.5,15.5],[109,12],[107,10.3],[105,8.7],[104.8,10.2],[103,10.5],[100.5,13.5],[99.5,10],[100.5,6.5],[103.4,4.5],[104.2,1.4],[101.3,2.8],[100.3,5.5],[98.3,8],[98.5,12.5],[97.5,16.5],[94.5,16],[94,19.5],[92,21.5],[91,22.5],[89,21.8],[86.5,20.2],[84.5,19],[82,16.5],[80.2,15.5],[80.3,13],[79.8,10.3],[78.2,8.8],[77.3,8.1],[76.3,10],[75,12.5],[73.5,16.5],[72.8,20.5],[72.5,21.5],[70.5,20.8],[69,22.3],[67,24.5],[66.5,25.4],[62,25.2],[57.5,25.8],[56.5,27],[54.5,26.5],[51.5,27.8],[50,30],[48.8,30],[48,29.5],[50,26],[51.2,24.5],[53.5,24],[56,26],[56.5,24.5],[58.5,23.5],[59.8,22.4],[58,20.5],[55,17],[52.2,16],[49,14.5],[45,12.8],[43.3,12.7],[42.8,15],[41,19],[39,21.5],[37,24.5],[35,28],[34.8,29.5],[34.2,31.3],[35,33],[36,35.5],[36,36.8],[32.5,36.2],[30.5,36.8],[28,36.7],[27,37.5],[26.2,40],[29,41],[31,41.2],[35,42],[38,41],[41.5,41.5],[40,43.5],[37.5,45],[35,45],[33.5,44.5],[32.5,45.5],[30,46],[29.7,45.2],[28.7,44],[28,42],[26,40.8],[23.5,40.2],[24,38],[23,36.5],[21.7,37],[21,39.5],[19.5,41.8],[16,43.5],[13.7,45.5],[12.3,45.3],[12.5,44],[14,42.2],[16,41.5],[18.5,40.2],[16.5,38.5],[15.7,38],[16,39.5],[15.5,40],[13,41.2],[10.5,43],[8.8,44.4],[6.5,43],[3.2,43.2],[3,41.8],[0.5,40.5],[-0.5,38.8],[-2,36.7],[-5.5,36],[-6.5,36.9],[-9,37]],
+    // Afrika
+    [[-5.5,36],[-2,35.2],[2,36.8],[10,37.2],[11,36.5],[10.2,34],[11,33.2],[15,32.3],[20,32.3],[20,30.5],[25,31.8],[29,30.9],[32.3,31.3],[32.6,29.9],[34,27.5],[35.5,24],[37.3,20],[39,16],[41.5,13.5],[43.2,11.7],[44.5,10.5],[51.2,11.8],[51,10.3],[49.8,7],[47.5,4],[44,1],[41.5,-1.5],[40,-4],[39,-6.5],[39.3,-8.5],[40.5,-11],[40.6,-15],[37,-18],[35,-20],[35.5,-24],[32.8,-26],[32.8,-28.5],[30,-31.5],[27,-33.5],[22,-34.2],[19,-34.5],[18.3,-32.5],[16.5,-28.5],[14.5,-22.5],[12,-17.5],[11.8,-13.5],[13.5,-11],[13,-8.5],[12.3,-6],[9,-1],[9.5,3.8],[8.5,4.5],[5.5,4.3],[2,6.2],[-1.5,5],[-4.5,5.2],[-7.5,4.4],[-11,6.8],[-13.3,9.5],[-15,11],[-17.2,14.7],[-16.5,19],[-16,22],[-13.5,27.5],[-10,29.5],[-9.7,31.5],[-9,33.5],[-6.8,34.5],[-5.5,36]],
+    // Australien, Tasmanien, Neuseeland
+    [[114,-22],[113.5,-26],[115,-34],[118,-35],[123.5,-34],[129,-31.5],[132,-32],[135.7,-34.8],[138,-35.5],[140.5,-38],[146,-39],[150,-37.5],[153,-31],[153.5,-27],[152.5,-24.5],[149,-21],[146,-18.8],[145.5,-15],[143.5,-14],[142.5,-10.7],[141.5,-13],[140.5,-17.5],[137.5,-16],[135.5,-15],[136.5,-12.2],[132.5,-11.5],[130,-12.5],[129.5,-15],[125.5,-14.5],[122.2,-17.5],[120,-19.8],[117,-20.7],[114,-22]],
+    [[144.7,-40.7],[148.3,-40.9],[148,-43.2],[146,-43.6],[145,-42],[144.7,-40.7]],
+    [[172.7,-34.4],[175.5,-37],[178.5,-37.7],[177,-39.5],[175.2,-41.5],[173.8,-39.5],[174.5,-37],[172.7,-34.4]],
+    [[172.7,-40.5],[174.3,-41.7],[172.7,-43.5],[170.5,-46],[167,-46],[168,-44],[171,-42.5],[172.7,-40.5]],
+    // Inseln: Grönland, Island, Großbritannien, Irland, Japan, Sri Lanka, Philippinen, Indonesien, Neuguinea, Madagaskar, Karibik
+    [[-73,78.5],[-60,82],[-30,83.5],[-20,81],[-18,77],[-20,72],[-22,70],[-30,68],[-40,65],[-43,60],[-48,61],[-53,66],[-55,70],[-58,75],[-67,76],[-73,78.5]],
+    [[-24,65.5],[-22,66.4],[-16,66.4],[-13.5,65],[-18,63.4],[-22,63.8],[-24,65.5]],
+    [[-5.5,50],[1.5,51],[1.7,52.7],[0,53.5],[-2,55.8],[-1.7,57.5],[-3.5,58.6],[-5,58.6],[-6,56.5],[-5,55],[-3,54.8],[-3,53.4],[-4.8,52.6],[-5.2,51.7],[-3.2,51.4],[-5.5,50]],
+    [[-10,51.8],[-6,52],[-6,54],[-5.8,55.2],[-8.5,55.2],[-10,54],[-10,51.8]],
+    [[130.5,31],[132,33.8],[135,33.5],[136.8,34.5],[140,35],[141,38.5],[142,40.5],[141,41.5],[140,40],[139.5,38],[137,37],[135.5,35.7],[133,35.5],[131,34.5],[130.5,33.5],[130.5,31]],
+    [[140,42],[141.5,45.4],[145.5,43.5],[143,42],[140,42]],
+    [[80,9.8],[81.8,7.5],[81,6],[80,6.2],[79.8,8],[80,9.8]],
+    [[120,18.5],[122.5,18.4],[122,16],[121,14],[120,14.5],[120.3,16.2],[120,18.5]],
+    [[122,8],[126.5,9],[126,6.5],[124,6.2],[122,7],[122,8]],
+    [[95.3,5.6],[98.5,4],[104,-1],[106,-3],[105.8,-5.9],[102,-4],[98.5,0.5],[95.3,5.6]],
+    [[105.5,-6.8],[110,-6.9],[114.5,-7.8],[114.5,-8.6],[108,-7.8],[105.2,-6.8]],
+    [[109,1.5],[111,2],[114,4.5],[117.5,7],[119,5],[117.7,1],[116,-3.5],[114.5,-4],[111,-3],[110,-1.5],[109,1.5]],
+    [[119.5,-5.5],[120,0.5],[125,1.5],[121,-1],[123,-5],[121,-4.5],[120.5,-3],[119.5,-5.5]],
+    [[131,-1],[138,-1.7],[141,-2.5],[146,-5.5],[150,-10.3],[147,-10.2],[143.5,-9],[141,-9.1],[138,-8.3],[137.5,-5],[134,-4],[132,-2.8],[131,-1]],
+    [[49.3,-12],[50.5,-15.5],[49.5,-18],[47,-25],[45,-25.2],[43.5,-22],[44.3,-17],[46.5,-15.5],[49.3,-12]],
+    [[-85,22],[-82,23],[-77.5,21.5],[-74.2,20.3],[-77.5,19.9],[-80.5,22],[-85,22]],
+    [[-74.4,19.8],[-70,19.9],[-68.4,18.6],[-71.5,17.8],[-74.3,18.4],[-74.4,19.8]],
+    // Antarktis
+    [[-180,-78],[-155,-78],[-130,-74.5],[-102,-74],[-80,-73.5],[-70,-72],[-64,-66],[-60,-64],[-66,-69],[-62,-74],[-60,-80],[-40,-78],[-25,-74],[-10,-71],[10,-70],[30,-69.5],[50,-67.5],[70,-68],[80,-66],[100,-66.5],[115,-66],[135,-66],[150,-69],[165,-71],[170,-77],[180,-78],[180,-90],[-180,-90]],
+  ];
+  // Hauptstädte: [Name, Breite, Länge]
+  const CAPITALS = [['WASHINGTON', 38.9, -77.04], ['OTTAWA', 45.42, -75.7], ['MEXIKO-STADT', 19.43, -99.13], ['HAVANNA', 23.11, -82.37], ['BOGOTÁ', 4.71, -74.07],
+    ['LIMA', -12.05, -77.04], ['BRASÍLIA', -15.79, -47.88], ['BUENOS AIRES', -34.6, -58.38], ['SANTIAGO', -33.45, -70.67], ['REYKJAVÍK', 64.15, -21.94],
+    ['LONDON', 51.5, -0.12], ['PARIS', 48.85, 2.35], ['BERLIN', 52.52, 13.4], ['MADRID', 40.42, -3.7], ['ROM', 41.9, 12.5], ['STOCKHOLM', 59.33, 18.07],
+    ['WARSCHAU', 52.23, 21.0], ['KIEW', 50.45, 30.52], ['MOSKAU', 55.75, 37.62], ['ANKARA', 39.93, 32.86], ['KAIRO', 30.04, 31.24], ['ABUJA', 9.07, 7.4],
+    ['NAIROBI', -1.29, 36.82], ['PRETORIA', -25.75, 28.19], ['RIAD', 24.71, 46.68], ['TEHERAN', 35.69, 51.39], ['NEU-DELHI', 28.61, 77.21], ['PEKING', 39.9, 116.4],
+    ['SEOUL', 37.57, 126.98], ['TOKIO', 35.68, 139.69], ['BANGKOK', 13.75, 100.5], ['JAKARTA', -6.2, 106.85], ['CANBERRA', -35.28, 149.13], ['WELLINGTON', -41.29, 174.78]];
+  const TEXW = 1024, TEXH = 512;
+  let WORLD = null; // Uint8Array: 0 Meer, 1 Land, 2 Küste
+  function buildWorld() {
+    const cv = document.createElement('canvas'); cv.width = TEXW; cv.height = TEXH;
+    const g = cv.getContext('2d');
+    g.fillStyle = '#fff';
+    LAND.forEach((poly) => {
+      g.beginPath();
+      poly.forEach(([lo, la], i) => { const x = ((lo + 180) / 360) * TEXW, y = ((90 - la) / 180) * TEXH; i ? g.lineTo(x, y) : g.moveTo(x, y); });
+      g.closePath(); g.fill();
+    });
+    const px = g.getImageData(0, 0, TEXW, TEXH).data, out = new Uint8Array(TEXW * TEXH);
+    for (let i = 0; i < out.length; i++) out[i] = px[i * 4] > 127 ? 1 : 0;
+    for (let y = 1; y < TEXH - 1; y++) for (let x = 0; x < TEXW; x++) {
+      const i = y * TEXW + x;
+      if (out[i] === 1 && (!out[i - TEXW] || !out[i + TEXW] || !out[y * TEXW + ((x + 1) % TEXW)] || !out[y * TEXW + ((x + TEXW - 1) % TEXW)])) out[i] = 2;
+    }
+    return out;
+  }
+  // Pro Pixel der Kugel einmal vorberechnet (hängt nur von Größe und Neigung ab).
+  let GRID = null;
+  const LAT0 = 0.38;
+  function buildGrid(D) {
+    const R = D / 2, n = D * D, row = new Int16Array(n), dlon = new Float32Array(n), shade = new Float32Array(n), alpha = new Float32Array(n);
+    const s0 = Math.sin(LAT0), c0 = Math.cos(LAT0);
+    for (let j = 0; j < D; j++) for (let i = 0; i < D; i++) {
+      const k = j * D + i, x = (i + 0.5 - R) / R, y = (R - (j + 0.5)) / R, rho = Math.hypot(x, y);
+      if (rho >= 1.02) { alpha[k] = 0; continue; }
+      const r = Math.min(rho, 1), c = Math.asin(r), sc = Math.sin(c), cc = Math.cos(c);
+      const lat = r < 1e-6 ? LAT0 : Math.asin(cc * s0 + (y * sc * c0) / r);
+      dlon[k] = Math.atan2(x * sc, r * c0 * cc - y * s0 * sc);
+      row[k] = Math.max(0, Math.min(TEXH - 1, Math.floor(((Math.PI / 2 - lat) / Math.PI) * TEXH)));
+      const z = cc, light = Math.max(0, -0.45 * x + 0.5 * y + 0.74 * z);
+      shade[k] = 0.32 + 0.75 * light * light + 0.25 * Math.pow(z, 0.5);
+      alpha[k] = clamp((1.0 - rho) * R * 0.9 + 0.5, 0, 1);
+    }
+    return { D, row, dlon, shade, alpha, img: new ImageData(D, D), lastRot: null };
+  }
+  const MAPCV = typeof document !== 'undefined' ? document.createElement('canvas') : null;
+  function renderSphere(lon0) {
+    const G = GRID, n = G.D * G.D, d = G.img.data, wrapW = TEXW / (Math.PI * 2);
+    for (let k = 0; k < n; k++) {
+      const a = G.alpha[k];
+      if (a === 0) { d[k * 4 + 3] = 0; continue; }
+      let col = Math.floor((G.dlon[k] + lon0 + Math.PI) * wrapW) % TEXW; if (col < 0) col += TEXW;
+      const t = WORLD[G.row[k] * TEXW + col], sh = G.shade[k];
+      let r, g, b;
+      if (t === 2) { r = 120 * sh + 60; g = 215 * sh + 30; b = 255; }
+      else if (t === 1) { r = 10 + 30 * sh; g = 52 + 82 * sh; b = 78 + 80 * sh; }
+      else { r = 2 + 12 * sh; g = 10 + 40 * sh; b = 26 + 70 * sh; }
+      d[k * 4] = Math.min(255, r); d[k * 4 + 1] = Math.min(255, g); d[k * 4 + 2] = Math.min(255, b); d[k * 4 + 3] = a * 255;
+    }
+    MAPCV.width = G.D; MAPCV.height = G.D;
+    MAPCV.getContext('2d').putImageData(G.img, 0, 0);
+  }
+  const ll = (la, lo) => [la * RAD, lo * RAD];
   function drawGlobe(t) {
     const f = fit(CV('globe')); if (!f) return;
     const { ctx, w, h } = f;
-    const cx = w / 2, cy = h / 2, R = Math.min(w, h) * 0.44, rot = t * 0.00015 * SPEED, tilt = 0.35;
-    const cr = Math.cos(rot), sr = Math.sin(rot), ct = Math.cos(tilt), st = Math.sin(tilt);
-    const pr = ([x, y, z]) => { const x1 = x * cr + z * sr, z1 = -x * sr + z * cr; return [cx + x1 * R, cy + (y * ct - z1 * st) * R, y * st + z1 * ct]; };
-    for (const p of SPHERE) { const [x, y, z] = pr(p); if (z < 0) continue; ctx.fillStyle = rgba(C.holo, 0.15 + z * 0.55); ctx.fillRect(x - 0.7, y - 0.7, 1.4, 1.4); }
-    ctx.strokeStyle = rgba(C.hi, 0.55); ctx.lineWidth = 1; ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2); ctx.stroke();
-    const homeName = WX ? WX.city.toUpperCase() : 'MALIBU', home = WX ? [WX.lat, WX.lon] : [34.03, -118.78];
-    const hv = ll(home[0], home[1]);
-    CITIES.forEach(([, la, lo], k) => {
-      const b = ll(la, lo); ctx.beginPath(); let on = false;
-      for (let i = 0; i <= 30; i++) { const u = i / 30, lift = 1 + Math.sin(u * Math.PI) * 0.2; let v = hv.map((c, j) => c * (1 - u) + b[j] * u); const n = Math.hypot(...v) || 1; v = v.map((c) => (c / n) * lift); const [x, y, z] = pr(v); if (z >= -0.05) { on ? ctx.lineTo(x, y) : ctx.moveTo(x, y); on = true; } else on = false; }
-      ctx.strokeStyle = rgba(k === 2 ? C.amber : C.holo, 0.6); ctx.stroke();
-    });
-    ctx.font = `10px ${MONO}`; ctx.textBaseline = 'middle';
-    [[homeName, home[0], home[1], true], ...CITIES].forEach(([name, la, lo, isHome]) => { const [x, y, z] = pr(ll(la, lo)); if (z < 0) return; ctx.fillStyle = rgba(isHome ? C.hi : C.holo, 1); ctx.beginPath(); ctx.arc(x, y, isHome ? 3 : 2.2, 0, Math.PI * 2); ctx.fill(); ctx.textAlign = x > cx ? 'left' : 'right'; ctx.fillText(name, x + (x > cx ? 6 : -6), y); });
+    if (!WORLD) WORLD = buildWorld();
+    const cx = w / 2, cy = h / 2 + 2, R = Math.min(w, h) * 0.44;
+    const dpr = Math.min(window.devicePixelRatio || 1, 2), D = Math.max(64, Math.min(420, Math.round(R * 2 * dpr)));
+    if (!GRID || GRID.D !== D) GRID = buildGrid(D);
+    const home = WX ? [WX.lat, WX.lon] : [53.55, 9.99], homeName = WX ? WX.city.toUpperCase() : 'HAMBURG';
+    const lon0 = home[1] * RAD - (t * 0.000045 * SPEED) % (Math.PI * 2);
+    // Atmosphäre
+    let g = ctx.createRadialGradient(cx, cy, R * 0.92, cx, cy, R * 1.22);
+    g.addColorStop(0, rgba(C.holo, 0.38)); g.addColorStop(1, rgba(C.holo, 0)); ctx.fillStyle = g; ctx.beginPath(); ctx.arc(cx, cy, R * 1.22, 0, Math.PI * 2); ctx.fill();
+    if (GRID.lastRot === null || Math.abs(lon0 - GRID.lastRot) > 0.0015) { renderSphere(lon0); GRID.lastRot = lon0; }
+    ctx.drawImage(MAPCV, cx - R, cy - R, R * 2, R * 2);
+    const s0 = Math.sin(LAT0), c0 = Math.cos(LAT0);
+    const pr = (la, lo) => { const d = lo - lon0, sl = Math.sin(la), cl = Math.cos(la), cd = Math.cos(d);
+      return [cx + cl * Math.sin(d) * R, cy - (c0 * sl - s0 * cl * cd) * R, s0 * sl + c0 * cl * cd]; };
+    // Gradnetz
+    ctx.lineWidth = 0.6; ctx.strokeStyle = rgba(C.holo, 0.16);
+    const line = (pts) => { ctx.beginPath(); let on = false; pts.forEach(([x, y, z]) => { if (z < 0) { on = false; return; } on ? ctx.lineTo(x, y) : ctx.moveTo(x, y); on = true; }); ctx.stroke(); };
+    for (let la = -60; la <= 60; la += 30) line(Array.from({ length: 73 }, (_, i) => pr(la * RAD, (i * 5 - 180) * RAD)));
+    for (let lo = -180; lo < 180; lo += 30) line(Array.from({ length: 37 }, (_, i) => pr((i * 5 - 90) * RAD, lo * RAD)));
+    ctx.strokeStyle = rgba(C.hi, 0.5); ctx.lineWidth = 1; ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2); ctx.stroke();
+    // Hauptstädte
+    ctx.font = `9px ${MONO}`; ctx.textBaseline = 'middle'; ctx.textAlign = 'left';
+    const boxes = [];
+    const place = (name, la, lo, isHome) => {
+      const [x, y, z] = pr(la * RAD, lo * RAD); if (z < 0.08) return;
+      ctx.fillStyle = rgba(isHome ? C.hi : C.amber, Math.min(1, 0.45 + z)); ctx.beginPath(); ctx.arc(x, y, isHome ? 3 : 2, 0, Math.PI * 2); ctx.fill();
+      if (isHome) { ctx.strokeStyle = rgba(C.hi, 0.8); ctx.beginPath(); ctx.arc(x, y, 6 + 2 * Math.sin(t * 0.004), 0, Math.PI * 2); ctx.stroke(); }
+      if (z < 0.4 && !isHome) return;
+      const tw = ctx.measureText(name).width, bx = x + 5, by = y - 5, box = [bx - 1, by, bx + tw + 1, by + 10];
+      if (!isHome && boxes.some((o) => box[0] < o[2] && box[2] > o[0] && box[1] < o[3] && box[3] > o[1])) return;
+      boxes.push(box);
+      ctx.fillStyle = rgba(isHome ? C.hi : C.holo, Math.min(1, z + 0.2)); ctx.fillText(name, bx, y);
+    };
+    place(homeName, home[0], home[1], true);
+    CAPITALS.forEach(([name, la, lo]) => { if (name !== homeName) place(name, la, lo, false); });
   }
   function drawWave(t) {
     const f = fit(CV('wave')); if (!f) return;
@@ -819,6 +919,19 @@ html.jarvis-reduce-motion #jarvisLarp .lh-ticker div{animation:none;padding-left
     const model = T.model ? T.model.replace(/^.*\//, '') : '—';
     setK('llm', T.modelOk === false ? 'OFFLINE' : model); root.querySelector('[data-chip="llm"]').className = 'lh-chip' + (T.modelOk === false ? ' lh-bad' : '');
     root.querySelector('[data-chip="llm"]').title = T.model || '';
+    setK('mdlName', model); K('mdlName').title = T.model || '';
+    setK('mdlState', T.modelOk === false ? 'OFFLINE' : T.modelOk ? 'BEREIT' : '…'); K('mdlState').style.color = T.modelOk === false ? `rgb(${C.alert})` : '';
+    const gi = gpuInfo();
+    setK('mdlVram', gi && gi.mem_total ? `${fmtBytes(gi.mem_used, 1)} / ${fmtBytes(gi.mem_total, 0)}` : 'n/a');
+    setK('mdlConv', T.convCount != null ? String(T.convCount) : '—');
+    setK('mdlProv', T.model ? 'LM STUDIO' : '—');
+    const ml = K('mdlList'), loaded = T.loaded || [];
+    const sig = loaded.map((m) => m.id + m.size_bytes + m.is_current).join('|');
+    if (ml.dataset.sig !== sig) {
+      ml.dataset.sig = sig;
+      ml.innerHTML = loaded.length ? loaded.slice(0, 4).map((m) => `<li><div class="lh-pw"><span title="${m.id}">${m.id.replace(/^.*\//, '').slice(0, 22)}${m.is_current ? ' ●' : ''}</span><b>${m.size_bytes ? fmtBytes(m.size_bytes, 1) : ''}</b></div></li>`).join('')
+        : '<li><div class="lh-pw"><span>KEIN MODELL GELADEN</span></div></li>';
+    }
   }
 
   // ================================================================ JARVIS console
@@ -858,13 +971,13 @@ html.jarvis-reduce-motion #jarvisLarp .lh-ticker div{animation:none;padding-left
     sun: () => { if (!WX) return 'Dafür brauche ich erst die Wetterdaten, Sir.'; const d = WX.daily || {}; return `In ${WX.city} geht die Sonne um ${hhmm((d.sunrise || [])[0])} auf und um ${hhmm((d.sunset || [])[0])} unter. Sie steht gerade bei ${WX.elev.toFixed(0)} Grad.`; },
     time: () => `Es ist ${new Date().toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })} Uhr${WX ? ', in ' + WX.city + ' ' + cityLocalNow() : ''}.`,
     status: () => { const st = T.stats || {}; return `Systeme ${T.cpu > 90 ? 'unter hoher Last' : 'nominal'}. CPU ${pct(T.cpu)}${st.ram != null ? ', RAM ' + pct(st.ram) : ''}, ${T.online ? 'Uplink stabil' : 'kein Uplink'}${T.model ? ', Modell ' + T.model.replace(/^.*\//, '') + (T.modelOk === false ? ' nicht erreichbar' : ' bereit') : ''}.`; },
-    suit: () => 'Die Rüstung ist einsatzbereit, Sir. Der linke Handschuh meldet 82 Prozent, die Gegenmaßnahmen stehen bei 12 Prozent.',
+    model: () => { if (!T.model) return T.modelOk === false ? 'Ich erreiche das Sprachmodell gerade nicht, Sir.' : 'Das Modell wird noch ermittelt, Sir.'; const loaded = (T.loaded || []).map((m) => m.id.replace(/^.*\//, '')); return `Aktiv ist ${T.model.replace(/^.*\//, '')}, ${T.modelOk === false ? 'derzeit nicht erreichbar' : 'bereit'}. In LM Studio ${loaded.length ? 'geladen: ' + loaded.join(', ') : 'ist nichts geladen'}.`; },
   };
   const RULES = [
     [/\b(cpu|prozessor|kerne?|threads?)\b/, 'cpu'], [/\b(ram|arbeitsspeicher|memory|swap)\b/, 'ram'], [/\b(gpu|grafik\w*|vram|fps)\b/, 'gpu'],
     [/\b(netz\w*|internet|wlan|wifi|uplink|bandbreite)\b/, 'net'], [/\b(akku|batterie)\b/, 'bat'], [/\b(festplatte|laufwerk|disk|ssd|speicherplatz)\b/, 'disk'],
     [/sonnen(auf|unter)gang|\bsonne\b|dämmerung/, 'sun'], [/\b(wetter|temperatur|regen|wind)\b/, 'weather'],
-    [/^(uhrzeit|wie spät|zeit)\b|wie spät/, 'time'], [/\b(status|systembericht|diagnose)\b/, 'status'], [/\b(anzug|rüstung|suit)\b/, 'suit'],
+    [/^(uhrzeit|wie spät|zeit)\b|wie spät/, 'time'], [/\b(status|systembericht|diagnose)\b/, 'status'], [/\b(modell|llm|sprachmodell)\b/, 'model'],
   ];
   function localAnswer(q) {
     const s = q.toLowerCase().trim();
@@ -904,7 +1017,7 @@ html.jarvis-reduce-motion #jarvisLarp .lh-ticker div{animation:none;padding-left
   }
 
   // ================================================================ interaction
-  const NODE_PANEL = { cpu: 'cpu', gpu: 'gpu', weather: 'weather', net: 'net', suit: 'suit', comms: 'con' };
+  const NODE_PANEL = { cpu: 'cpu', gpu: 'gpu', weather: 'weather', net: 'net', model: 'model', comms: 'con' };
   function flash(panel) { const el = root.querySelector(`[data-panel="${panel}"]`); if (!el) return; el.classList.add('lh-flash'); setTimeout(() => el.classList.remove('lh-flash'), 900); }
   function onClick(e) {
     const node = e.target.closest('.lh-node');
@@ -962,9 +1075,11 @@ html.jarvis-reduce-motion #jarvisLarp .lh-ticker div{animation:none;padding-left
     fpsN++; if (!fpsT) fpsT = t; if (t - fpsT >= 500) { T.fps = (fpsN * 1000) / (t - fpsT); fpsN = 0; fpsT = t; }
     voiceLevel += ((typing ? 0.55 + Math.random() * 0.45 : 0) - voiceLevel) * 0.12;
     const st = T.stats || {};
-    drawCore(t); drawArmor(t); drawRadar(t); drawGlobe(t); drawWave(t); drawWxIcon(t); drawCompass(t);
+    drawCore(t); drawRadar(t); drawGlobe(t); drawWave(t); drawWxIcon(t); drawCompass(t);
     ring('cpuRing', T.cpu, 'LOAD'); ring('memRing', st.ram, 'RAM'); ring('gpuRing', gpuUtil(), gpuInfo() ? 'GPU' : 'GPU EST');
     ring('batRing', st.battery != null ? st.battery : 100, st.battery != null ? 'BATT' : 'ARC', st.battery != null && st.battery < 20 ? C.alert : C.ok);
+    const gi = gpuInfo();
+    ring('mdlRing', gi && gi.mem_total ? (gi.mem_used / gi.mem_total) * 100 : null, 'VRAM', gi && gi.mem_used / gi.mem_total > 0.97 ? C.amber : C.holo);
     drawCpuBars();
     spark('memSpark', HIST.mem, 0, 100, C.holo, { axis: [0, 50, 100], fmt: (v) => v + '%' });
     spark('gpuChart', HIST.gpu, 0, 100, C.amber, { axis: [0, 50, 100], fmt: (v) => v + '%' });
@@ -998,7 +1113,6 @@ html.jarvis-reduce-motion #jarvisLarp .lh-ticker div{animation:none;padding-left
       b.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true">${ICON[id]}</svg><span>${label}</span>`;
       wrap.appendChild(b);
     });
-    K('suitList').innerHTML = SUIT.map(([n, v, warn]) => `<li><div class="lh-pw"><span>${n}</span><b style="color:var(${warn ? '--amber' : '--holo-hi'})">${v}%</b></div><div class="lh-bar${warn ? ' lh-warnbar' : ''}"><b style="width:${v}%"></b></div></li>`).join('');
     K('wc').innerHTML = ZONES.map(([n]) => `<li><i></i><span>${n}</span><b>--:--</b></li>`).join('');
     setK('tzLocal', 'LOCAL · ' + (Intl.DateTimeFormat().resolvedOptions().timeZone || 'local').toUpperCase());
     const hex = () => Math.floor(Math.random() * 0xffff).toString(16).toUpperCase().padStart(4, '0');
@@ -1018,7 +1132,7 @@ html.jarvis-reduce-motion #jarvisLarp .lh-ticker div{animation:none;padding-left
     renderWeather(); loadWeather(); every(600000, loadWeather);
     every(60000, renderWeather);
     const EVENTS = ['Routine-Scan abgeschlossen. Keine Anomalien.', 'Satellitenverbindung neu ausgerichtet.', 'Werkstatt-Klima auf 21 Grad geregelt.',
-      'Backup des Rüstungsprotokolls gesichert.', 'Perimeter ruhig.', 'Fertigungsroboter im Standby.'];
+      'Gedächtnis-Index geprüft.', 'Perimeter ruhig.', 'Fertigungsroboter im Standby.'];
     let ev = 0; every(25000, () => { if (!typing && root) addLine('lh-sys', 'SYS', EVENTS[ev++ % EVENTS.length]); });
 
     addLine('lh-sys', 'SYS', 'MK-OS gebootet · Telemetrie verbunden.');

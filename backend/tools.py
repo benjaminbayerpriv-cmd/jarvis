@@ -467,7 +467,17 @@ def _get_time() -> str:
     return f"{_WEEKDAYS_DE[now.weekday()]}, {now:%d.%m.%Y %H:%M}"
 
 
+# A model asked about something it doesn't know ("was hab ich dir über
+# meinen Urlaub erzählt?") was observed saving a template instead of an
+# answer: "Urlaub: [Details aus dem Chatverlauf]". Such a note is pure
+# invention and, once indexed, gets fed back as "memory" on every turn.
+_NOTE_PLACEHOLDER = re.compile(r"\[[^\]]*\b(details?|platzhalter|inhalt|text|hier|einfügen|todo|xxx)\b[^\]]*\]|<[^>]*(details?|platzhalter|einfügen)[^>]*>", re.IGNORECASE)
+
+
 def _add_note(text: str) -> str:
+    if _NOTE_PLACEHOLDER.search(text or ""):
+        return ("Nicht gespeichert: Die Notiz enthält einen Platzhalter statt echtem Inhalt. "
+                "Nur speichern, was der Nutzer wirklich gesagt hat — sonst nachfragen.")
     return memory.add_note(text)
 
 
@@ -828,7 +838,17 @@ def _list_folder(description: str) -> str:
     listing = ", ".join(shown)
     if len(entries) > 40:
         listing += f", … und {len(entries) - 40} weitere"
-    return f"Inhalt von '{target.name}': {listing}"
+    # Small models miscount long listings ("19 Python-Dateien" for 22 —
+    # observed in the benchmark), so the counts come pre-computed.
+    folders = sum(1 for p in entries if p.is_dir())
+    by_ext: dict[str, int] = {}
+    for p in entries:
+        if p.is_file():
+            ext = p.suffix.lower() or "(ohne Endung)"
+            by_ext[ext] = by_ext.get(ext, 0) + 1
+    counts = ", ".join(f"{n}× {ext}" for ext, n in sorted(by_ext.items(), key=lambda kv: -kv[1]))
+    summary = f"{len(entries) - folders} Dateien ({counts}), {folders} Ordner" if counts else f"{folders} Ordner"
+    return f"Inhalt von '{target.name}' — {summary}: {listing}"
 
 
 def _run_shell(command: str) -> str:

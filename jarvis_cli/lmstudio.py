@@ -92,10 +92,10 @@ def health() -> tuple[bool, str]:
         return False, f"LM Studio antwortet nicht auf {base_url()} ({error}). Läuft der Server in LM Studio (Developer → Start Server)?"
     models = [m.get("id") for m in (payload or {}).get("data", []) if m.get("id")]
     if not models:
-        return True, "Erreichbar, aber es ist kein Modell geladen."
+        return True, "Erreichbar, aber kein Modell verfügbar."
     if model() not in models:
-        return True, f"Erreichbar, {len(models)} Modell(e) geladen — {model()} ist gerade nicht dabei."
-    return True, f"Erreichbar, {len(models)} Modell(e) geladen, aktiv: {model()}."
+        return True, f"Erreichbar, {len(models)} Modell(e) verfügbar — {model()} ist nicht dabei."
+    return True, f"Erreichbar, {len(models)} Modell(e) verfügbar, aktiv: {model()}."
 
 
 def requires_auth() -> bool:

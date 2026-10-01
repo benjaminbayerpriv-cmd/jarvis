@@ -1357,8 +1357,11 @@ def _native_round(messages: list, model: str, turn_id: str | None, previous_resp
                     yield {"kind": "text", "text": "\n\n"}
                 elif kind == "message.delta":
                     yield {"kind": "text", "text": data.get("content", "")}
-                elif kind == "tool_call.start":
-                    yield {"kind": "tool_started", "tool": data.get("tool", "")}
+                elif kind == "tool_call.name":
+                    # tool_call.start carries no name at all — LM Studio only
+                    # names the tool in the tool_call.name event that follows
+                    # (verified live), so the status is sent from here.
+                    yield {"kind": "tool_started", "tool": data.get("tool_name") or data.get("tool", "")}
                 elif kind == "tool_call.success":
                     yield {"kind": "tool_ran", "tool": data.get("tool", ""), "output": mcp_server.output_text(data.get("output", ""))}
                 elif kind == "tool_call.failure":
