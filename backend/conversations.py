@@ -19,7 +19,9 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import os
 import threading
+import time
 import uuid
 from pathlib import Path
 
@@ -51,9 +53,13 @@ def _load(conv_id: str, base_dir: Path | None = None) -> dict | None:
 
 def _save(conv: dict, base_dir: Path | None = None) -> None:
     (base_dir or DIR).mkdir(parents=True, exist_ok=True)
-    _path(conv["id"], base_dir).write_text(
-        json.dumps(conv, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    # Temp file + rename: a crash mid-write left truncated JSON, which _load
+    # reads as "no conversation" — and the next turn then overwrote the
+    # whole history with a fresh one-turn file.
+    path = _path(conv["id"], base_dir)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(conv, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(tmp, path)
 
 
 def file_path(conv_id: str, base_dir: Path | None = None) -> Path:
@@ -94,6 +100,11 @@ def append_turn(
     with _lock:
         conv = _load(conv_id, base_dir)
         now = dt.datetime.now().isoformat(timespec="seconds")
+        path = _path(conv_id, base_dir)
+        if conv is None and path.exists():
+            # Unreadable, not missing — keep it aside instead of silently
+            # replacing the whole history with this one turn.
+            path.replace(path.with_name(f"{path.stem}.corrupt-{int(time.time())}.json.bak"))
         if conv is None:
             conv = {"id": conv_id, "title": None, "created_at": now, "turns": [], "project_id": project_id}
         you_turn = {"role": "you", "text": user_text}

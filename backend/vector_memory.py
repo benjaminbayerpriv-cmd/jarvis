@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import threading
 import time
@@ -120,7 +121,11 @@ def _load() -> dict:
 
 def _save() -> None:
     INDEX_FILE.parent.mkdir(parents=True, exist_ok=True)
-    INDEX_FILE.write_text(json.dumps(_cache, ensure_ascii=False), encoding="utf-8")
+    # Temp file + rename: a truncated index loads as {} and every embedding
+    # had to be recomputed.
+    tmp = INDEX_FILE.with_name(INDEX_FILE.name + ".tmp")
+    tmp.write_text(json.dumps(_cache, ensure_ascii=False), encoding="utf-8")
+    os.replace(tmp, INDEX_FILE)
 
 
 def line_id(source: str, text: str) -> str:
@@ -229,8 +234,10 @@ def semantic_context_for(query: str, limit: int = 4) -> str | None:
     # Prompt-Cache des Chat-Modells verdrängen (gemessen: danach ~5-7s statt
     # ~0,2s bis zum ersten Text), bei jeder einzelnen Nachricht.
     with _lock:
-        cache = _load()
-    if not cache:
+        # A snapshot: index_entry() may add to the dict from another thread
+        # while the loop below iterates ("dictionary changed size").
+        entries = list(_load().values())
+    if not entries:
         # None, not "": an empty index also happens when the embedding model
         # was unavailable while notes were written — "" would tell
         # memory.context_for "searched, nothing relevant" and skip its
@@ -247,7 +254,7 @@ def semantic_context_for(query: str, limit: int = 4) -> str | None:
         return ""
 
     scored = []
-    for entry in cache.values():
+    for entry in entries:
         vec = np.array(entry["vector"])
         denom = query_norm * np.linalg.norm(vec)
         similarity = float(np.dot(query_arr, vec) / denom) if denom else 0.0

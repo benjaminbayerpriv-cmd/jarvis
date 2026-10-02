@@ -20,6 +20,8 @@ rather than risking it firing on some unrelated later "ja".
 from __future__ import annotations
 
 import re
+import threading
+import time
 from typing import Callable
 
 _YES_RE = re.compile(r"^(ja+|jup+|jep+|klar|genau|korrekt|okay|ok|mach'?s?|los|bitte|yes|yep|jo|sicher|gerne?)$")
@@ -53,6 +55,12 @@ def _classify(text: str) -> str | None:
     return None
 
 _pending: dict | None = None
+_lock = threading.Lock()
+
+# An offer nobody answered must not fire on a "ja" said much later about
+# something else — the window was unbounded: a delete asked about in the
+# evening still ran on the first "ja" the next morning.
+_TTL_SECONDS = 300
 
 
 def propose(question: str, run: Callable[[], str]) -> str:
@@ -62,13 +70,15 @@ def propose(question: str, run: Callable[[], str]) -> str:
     plain yes.
     """
     global _pending
-    _pending = {"run": run}
+    with _lock:
+        _pending = {"run": run, "at": time.monotonic()}
     return question
 
 
 def is_pending() -> bool:
     """Whether a confirmation was just registered and is awaiting a reply."""
-    return _pending is not None
+    with _lock:
+        return _pending is not None and time.monotonic() - _pending["at"] <= _TTL_SECONDS
 
 
 def resolve(user_message: str) -> str | None:
@@ -82,9 +92,12 @@ def resolve(user_message: str) -> str | None:
     message right after it was proposed.
     """
     global _pending
-    if _pending is None:
+    with _lock:
+        if _pending is None:
+            return None
+        pending, _pending = _pending, None
+    if time.monotonic() - pending["at"] > _TTL_SECONDS:
         return None
-    pending, _pending = _pending, None
 
     verdict = _classify(user_message)
     if verdict == "yes":

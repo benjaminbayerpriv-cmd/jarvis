@@ -57,14 +57,16 @@ _PATH = "/mcp"
 # Whether a tool call may run right now, and for whom — set by whichever
 # native chat round (backend/llm_client.py) is currently talking to LM
 # Studio, cleared the moment that round ends (normally, cancelled, or a
-# warm-up that must never let a tool actually run). A single slot, not a
-# per-request registry, is safe here because LM Studio itself only ever
-# processes one chat request at a time (its "single-slot" completion
-# queue — already relied on elsewhere in this codebase) and mcp.json's
-# static headers give a tool call no per-request identifier to key a
-# registry on in the first place.
+# warm-up that must never let a tool actually run). mcp.json's static
+# headers give a tool call no per-request identifier, so this can't tell
+# which open request a call belongs to — a call runs if ANY open scope
+# allows it. It used to be a single slot on the assumption that LM Studio
+# handles one chat at a time, but it runs several in parallel (n_slots=4,
+# verified live): a second chat overwrote the first one's slot, and when it
+# finished first, every later tool call of the still-running first chat was
+# refused with "Abgebrochen" and the model invented the answer instead.
 _active_lock = threading.Lock()
-_active_may_run: Callable[[], bool] | None = None
+_active_scopes: list[Callable[[], bool]] = []
 
 
 def _tool_list() -> list[types.Tool]:
@@ -84,8 +86,8 @@ async def _on_list_tools(ctx, params) -> types.ListToolsResult:
 
 async def _on_call_tool(ctx, params: types.CallToolRequestParams) -> types.CallToolResult:
     with _active_lock:
-        may_run = _active_may_run
-    if may_run is None or not may_run():
+        scopes = list(_active_scopes)
+    if not any(may_run() for may_run in scopes):
         print(f"[mcp] {params.name} abgelehnt: keine aktive Anfrage erlaubt das gerade.")
         text = "Abgebrochen — dieses Werkzeug wurde nicht ausgeführt."
     else:
@@ -188,9 +190,16 @@ def _address_seen_by_lm_studio() -> str:
     host = urlparse(hardware.lm_studio_root()).hostname or "127.0.0.1"
     if host in ("127.0.0.1", "localhost", "::1"):
         return "127.0.0.1"
-    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
-        probe.connect((host, 1))  # UDP connect sends nothing, it only picks the route
-        return probe.getsockname()[0]
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+            probe.connect((host, 1))  # UDP connect sends nothing, it only picks the route
+            return probe.getsockname()[0]
+    except OSError:
+        # No route / unresolvable host (network down, LM Studio's machine
+        # offline). Only the printed mcp.json hint uses this — raising here
+        # made ensure_started() fail AFTER the server was already up, and
+        # with it every chat request.
+        return "127.0.0.1"
 
 
 def server_url() -> str:
@@ -225,26 +234,24 @@ def request_scope(may_run: Callable[[], bool]) -> Iterator[dict]:
     that one is what's blocked — see module docstring). Tool calls arriving
     while this scope is open run only as long as `may_run()` holds."""
     ensure_started()
-    global _active_may_run
     with _active_lock:
-        _active_may_run = may_run
+        _active_scopes.append(may_run)
     try:
         yield {"type": "plugin", "id": INTEGRATION_ID}
     finally:
         with _active_lock:
-            if _active_may_run is may_run:
-                _active_may_run = None
+            if may_run in _active_scopes:
+                _active_scopes.remove(may_run)
 
 
 def warm_integration() -> dict:
-    """The plugin integration for a warm-up request, WITHOUT touching the
-    single "may a tool run right now" slot request_scope manages. A warm-up
-    that took the slot (with `lambda: False`) refused every tool call of a
-    real chat that happened to run meanwhile — observed live: a chat started
-    while the post-title re-warm was still running got "Abgebrochen" for its
-    tools and the model invented an answer. With no scope open the slot is
-    empty and tool calls are refused anyway, which is exactly what a warm-up
-    wants; a chat's own scope stays untouched."""
+    """The plugin integration for a warm-up request, WITHOUT opening a scope
+    of its own. A warm-up that took the (then single) slot with `lambda:
+    False` refused every tool call of a real chat that happened to run
+    meanwhile — observed live: a chat started while the post-title re-warm
+    was still running got "Abgebrochen" for its tools and the model invented
+    an answer. With no scope open, tool calls are refused anyway, which is
+    exactly what a warm-up wants; a chat's own scope stays untouched."""
     ensure_started()
     return {"type": "plugin", "id": INTEGRATION_ID}
 

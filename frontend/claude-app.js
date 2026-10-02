@@ -392,6 +392,9 @@
     // Echte Fortschrittswerte von LM Studio (model_load/prompt_processing).
     if (phase === 'loading') return `Lädt das Modell … ${progress} %`;
     if (phase === 'prompt') return `Liest die Anfrage … ${progress} %`;
+    // Backend wartet, bis eine abgebrochene Anfrage in LM Studio fertig ist
+    // (siehe llm_client._wait_for_abandoned_prefills).
+    if (phase === 'waiting') return 'Wartet auf LM Studio …';
     return 'Denkt nach …';
   }
   const ATTACH_MAX_CHARS = 20000;
@@ -3166,7 +3169,10 @@
     turnAborted = false;
     abortController = new AbortController();
     activeReader = null;
-    currentTurnId = String(++turnCounter);
+    // Eindeutig statt "1", "2", … ab jedem Seitenladen: ein Stopp, der kurz
+    // nach dem Ende einer Antwort ankam, blieb im Backend stehen und brach den
+    // nächsten Turn mit derselben Nummer sofort ab (auch nach einem Reload).
+    currentTurnId = 'turn-' + (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + '-' + (++turnCounter));
     streamStillGenerating = true;
     clearViz();
     // Kleine Miniaturen NACH dem Absenden erzeugen (Anzeige ist längst
@@ -3641,7 +3647,7 @@
           // chat (nor its own previous side questions). Read-only copy: the
           // main chat's history array itself is never touched.
           history: [...history.slice(-20), ...btwHistory],
-          turn_id: 'btw-' + (++btwTurnCounter),
+          turn_id: 'btw-' + (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + '-' + (++btwTurnCounter)),
           mode: 'chat',
           conversation_id: btwConversationId,
           images: [],

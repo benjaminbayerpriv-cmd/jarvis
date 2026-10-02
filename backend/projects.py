@@ -12,11 +12,19 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import os
 import threading
 import uuid
 from pathlib import Path
 
 DIR = Path(__file__).resolve().parent / "projects"
+
+
+def _write(path: Path, project: dict) -> None:
+    # Temp file + rename, so a crash mid-write can't truncate the record.
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(project, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(tmp, path)
 _lock = threading.Lock()
 
 # Conversations belonging to a project are stored under this subfolder of
@@ -67,9 +75,7 @@ def create(dir: str, name: str = "", description: str = "", tag: str = "") -> di
             "created_at": now,
             "updated_at": now,
         }
-        _path(project["id"]).write_text(
-            json.dumps(project, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
+        _write(_path(project["id"]), project)
         return project
 
 
@@ -93,7 +99,10 @@ def update(
         path = _path(project_id)
         if not path.exists():
             return None
-        project = json.loads(path.read_text(encoding="utf-8"))
+        try:
+            project = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None  # unreadable record: 404 instead of a 500
         if name is not None:
             project["name"] = name.strip()
         if description is not None:
@@ -101,7 +110,7 @@ def update(
         if pinned is not None:
             project["pinned"] = pinned
         project["updated_at"] = dt.datetime.now().isoformat(timespec="seconds")
-        path.write_text(json.dumps(project, ensure_ascii=False, indent=2), encoding="utf-8")
+        _write(path, project)
         return project
 
 

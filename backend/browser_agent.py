@@ -62,6 +62,14 @@ class BrowserAgent:
             request.done.set()
             return True
 
+    def _forget(self, request_id: str) -> None:
+        # Also from _pending: the extension talks over the WebSocket only and
+        # never polls, so ids queued for /browser/poll piled up forever.
+        with self._lock:
+            self._requests.pop(request_id, None)
+            if request_id in self._pending:
+                self._pending.remove(request_id)
+
     def heartbeat(self) -> None:
         """Keep the extension connection alive when no command is pending."""
         self._last_seen = time.monotonic()
@@ -79,17 +87,14 @@ class BrowserAgent:
             )
             future.result(timeout=3)
         except Exception as exc:
-            with self._lock:
-                self._requests.pop(request.id, None)
+            self._forget(request.id)
             return f"Browser-Aktion fehlgeschlagen: Verbindung verloren ({exc})"
         panel.push("action", id=request.id, action=action, status="läuft", target=payload)
         if not request.done.wait(timeout):
-            with self._lock:
-                self._requests.pop(request.id, None)
+            self._forget(request.id)
             panel.push("action", id=request.id, action=action, status="fehlgeschlagen", detail="Zeitüberschreitung")
             return "Browser-Aktion hat keine Antwort erhalten."
-        with self._lock:
-            self._requests.pop(request.id, None)
+        self._forget(request.id)
         result = request.result or {}
         if not result.get("ok"):
             detail = result.get("error", "Unbekannter Browserfehler")

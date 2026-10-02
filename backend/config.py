@@ -1,5 +1,6 @@
 import json
 import os
+import threading
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -21,6 +22,8 @@ SUPERTONIC_LANG = os.environ.get("SUPERTONIC_LANG", "de")
 # not — "medium" on CPU cost ~2.7s per utterance, which is why "small"
 # remains available via WHISPER_MODEL=small for a CPU-only machine.
 WHISPER_MODEL = os.environ.get("WHISPER_MODEL", "medium")
+# "auto" (GPU if it works, else CPU), "cpu" or "cuda" — see stt._get_model.
+WHISPER_DEVICE = os.environ.get("WHISPER_DEVICE", "auto").strip().lower()
 
 # "127.0.0.1", not "localhost": resolving "localhost" through Python's
 # requests/urllib3 on Windows was measured adding ~2s per single request
@@ -28,7 +31,10 @@ WHISPER_MODEL = os.environ.get("WHISPER_MODEL", "medium")
 # call in this app goes through here, so that 2s hit every chat message
 # and, doubled up, made the model picker (two sequential calls) take
 # 6+ seconds to open. 127.0.0.1 skips the resolution step entirely.
-LM_STUDIO_BASE_URL = os.environ.get("LM_STUDIO_BASE_URL", "http://127.0.0.1:1234/v1")
+# Trailing slash stripped: a hand-edited ".../v1/" made every f"{base}/models"
+# a "//models" and hid the "/v1" suffix from hardware.lm_studio_root(), so the
+# native /api/v1/* endpoints were looked up under ".../v1/api/v1/...".
+LM_STUDIO_BASE_URL = os.environ.get("LM_STUDIO_BASE_URL", "http://127.0.0.1:1234/v1").strip().rstrip("/")
 LM_STUDIO_MODEL = os.environ.get("LM_STUDIO_MODEL", "google/gemma-4-e4b")
 
 # API token LM Studio itself requires once its "Require Authentication"
@@ -118,22 +124,56 @@ NOTES_FILE = ROOT_DIR / "jarvis_notes.md"
 CONFIG_FILE = ROOT_DIR / "config.json"
 
 
+# Serializes every read-modify-write of .env and config.json — settings,
+# model switch, MCP token and the code agent all write from different
+# request threads, and two interleaved writes silently dropped one change.
+_write_lock = threading.Lock()
+
+
+def _atomic_write(path: Path, text: str) -> None:
+    """Write via a temp file + rename, so a crash mid-write can't leave a
+    truncated .env/config.json behind (an empty .env loses every key)."""
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, path)
+
+
 def load_config() -> dict:
+    """config.json as a dict — {} when it's missing or not valid JSON (a
+    hand-edit with a trailing comma used to 500 the Code tab and the HUD)."""
     if not CONFIG_FILE.exists():
         return {}
-    return json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+    try:
+        data = json.loads(CONFIG_FILE.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError) as exc:
+        print(f"[config] {CONFIG_FILE.name} nicht lesbar, nutze Standardwerte: {exc}")
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def update_config(**changes) -> dict:
+    """Set keys in config.json, keeping every other key, atomically."""
+    with _write_lock:
+        cfg = load_config()
+        cfg.update(changes)
+        _atomic_write(CONFIG_FILE, json.dumps(cfg, indent=2, ensure_ascii=False) + "\n")
+        return cfg
 
 
 def _persist_env(key: str, value: str) -> None:
+    # A value with a line break would smuggle a second KEY=VALUE line into
+    # .env (e.g. a pasted API key with a trailing newline plus more text).
+    value = str(value).replace("\r", "").replace("\n", "")
     env_path = ROOT_DIR / ".env"
-    lines = env_path.read_text(encoding="utf-8").splitlines() if env_path.exists() else []
-    for i, line in enumerate(lines):
-        if line.startswith(f"{key}="):
-            lines[i] = f"{key}={value}"
-            break
-    else:
-        lines.append(f"{key}={value}")
-    env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    with _write_lock:
+        lines = env_path.read_text(encoding="utf-8-sig").splitlines() if env_path.exists() else []
+        for i, line in enumerate(lines):
+            if line.startswith(f"{key}="):
+                lines[i] = f"{key}={value}"
+                break
+        else:
+            lines.append(f"{key}={value}")
+        _atomic_write(env_path, "\n".join(lines) + "\n")
 
 
 def set_lm_studio_base_url(url: str) -> None:
@@ -141,7 +181,7 @@ def set_lm_studio_base_url(url: str) -> None:
     listing all read config.LM_STUDIO_BASE_URL fresh on every call) and
     persist it to .env so it survives a restart."""
     global LM_STUDIO_BASE_URL
-    LM_STUDIO_BASE_URL = url.rstrip("/")
+    LM_STUDIO_BASE_URL = url.strip().rstrip("/")
     _persist_env("LM_STUDIO_BASE_URL", LM_STUDIO_BASE_URL)
 
 
@@ -190,17 +230,7 @@ def set_model(model: str) -> None:
     only for it to have already been the default on process start."""
     global LM_STUDIO_MODEL
     LM_STUDIO_MODEL = model
-    env_path = ROOT_DIR / ".env"
-    if not env_path.exists():
-        return
-    lines = env_path.read_text(encoding="utf-8").splitlines()
-    for i, line in enumerate(lines):
-        if line.startswith("LM_STUDIO_MODEL="):
-            lines[i] = f"LM_STUDIO_MODEL={model}"
-            break
-    else:
-        lines.append(f"LM_STUDIO_MODEL={model}")
-    env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    _persist_env("LM_STUDIO_MODEL", model)
 
 
 def set_provider(provider: str) -> None:
@@ -213,17 +243,7 @@ def set_provider(provider: str) -> None:
     if provider not in ("auto", "deepseek", "lmstudio"):
         raise ValueError(f"Unbekannter Provider: {provider!r}")
     ACTIVE_PROVIDER = provider
-    env_path = ROOT_DIR / ".env"
-    if not env_path.exists():
-        return
-    lines = env_path.read_text(encoding="utf-8").splitlines()
-    for i, line in enumerate(lines):
-        if line.startswith("ACTIVE_PROVIDER="):
-            lines[i] = f"ACTIVE_PROVIDER={provider}"
-            break
-    else:
-        lines.append(f"ACTIVE_PROVIDER={provider}")
-    env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    _persist_env("ACTIVE_PROVIDER", provider)
 
 
 def set_deepseek_enabled(enabled: bool) -> None:

@@ -205,7 +205,11 @@ def _note_active_target(base_url: str, model: str) -> None:
 # than VRAM. A 60 s limit aborted it, LM Studio threw the half-built prompt
 # cache away with the dropped connection, and every retry started cold
 # again: Jarvis could never answer until something else warmed the cache.
-_CHAT_TIMEOUT = (10, 300)
+# 300 s proved too short as well: a 22 GB model on a 16 GB card (driver
+# spilling ~10 GB into system RAM) sits >5 min at "0 %" without a single
+# progress event — Jarvis gave up ("abgebrochen"), the retry restarted the
+# prefill from zero, and it never finished. Slow is fine, a restart loop isn't.
+_CHAT_TIMEOUT = (10, 1800)
 
 
 # (Modell, System-Prompt) -> response_id einer gespeicherten "Basis"-Antwort:
@@ -778,7 +782,7 @@ def summarize_history(history: list) -> str:
             data = resp.json()
             if not data.get("choices"):
                 raise ModelError(data.get("error", {}).get("message", "Das Modell lieferte keine Antwort."))
-            return _strip_think_tags(data["choices"][0]["message"].get("content", ""))
+            return _strip_think_tags(data["choices"][0]["message"].get("content") or "")
         except (requests.RequestException, ModelError) as exc:
             print(f"[model] {base_url} nicht verfügbar, versuche nächstes Ziel: {exc}")
             last_exc = exc
@@ -814,7 +818,9 @@ def generate_title(user_text: str, assistant_text: str) -> str:
             data = resp.json()
             if not data.get("choices"):
                 continue
-            title = _strip_think_tags(data["choices"][0]["message"].get("content", ""))
+            # "content": null (a reasoning model that spent every token
+            # thinking) crashed the background title job with a TypeError.
+            title = _strip_think_tags(data["choices"][0]["message"].get("content") or "")
             return title.strip("\"'").strip()[:60]
         except (requests.RequestException, ModelError) as exc:
             print(f"[model] {base_url} nicht verfügbar, versuche nächstes Ziel: {exc}")
@@ -1025,7 +1031,9 @@ def model_health() -> tuple[bool, str]:
     except requests.RequestException as exc:
         return False, f"LM Studio nicht erreichbar: {exc}"
     if config.LM_STUDIO_MODEL not in models:
-        return False, f"{config.LM_STUDIO_MODEL} ist in LM Studio nicht geladen."
+        # /v1/models lists every model LM Studio can load (JIT), loaded or
+        # not — missing from it means not installed/known, not "not loaded".
+        return False, f"{config.LM_STUDIO_MODEL} ist in LM Studio nicht verfügbar."
     # Runs even with a DeepSeek key configured: this is the health check
     # actually confirming DeepSeek failed above, so the self-identification
     # must point at the model really answering, not the configured-but-dead one.
@@ -1207,6 +1215,7 @@ def _drain_prefill(resp: requests.Response, lines) -> None:
     half-built prompt cache away, so every retry (a second message, the stop
     button, a barge-in) restarted a minutes-long prefill from zero and Jarvis
     never answered. Finishing the prefill keeps the cache for the next turn."""
+    global _drains_active
     deadline = time.monotonic() + _PREFILL_DRAIN_SECONDS
     try:
         for line in lines:
@@ -1224,6 +1233,50 @@ def _drain_prefill(resp: requests.Response, lines) -> None:
         pass
     finally:
         resp.close()
+        with _drain_cond:
+            _drains_active -= 1
+            _drain_cond.notify_all()
+
+
+# Abandoned prefills still running (see _drain_prefill). The next turn waits
+# for them: while one is in progress its LM Studio slot is busy, so a new
+# request lands on a different, cold slot and prefills the whole system
+# prompt from scratch — observed live right after a Stop: 21 s instead of
+# 0.3 s on the 35B model (minutes on a slower setup), with both prefills
+# competing for the GPU on top. Once the drain is done the slot is free
+# again, and the new request reuses its cache.
+_drain_cond = threading.Condition()
+_drains_active = 0
+# Turns whose stream_reply is still running. A cancelled one among them is
+# about to become a drain (it notices the flag at LM Studio's next event,
+# up to a few seconds into a slow prefill) — a message sent right after
+# Stop must wait for it too, not race ahead onto a cold slot.
+_active_turns: set[str] = set()
+
+
+def _abandoned_work(turn_id: str | None) -> bool:
+    # Caller holds _drain_cond.
+    return bool(_drains_active) or any(t != turn_id and t in _cancelled_turns for t in _active_turns)
+
+
+def _wait_for_abandoned_prefills(turn_id: str | None):
+    """Yield status events while an abandoned prefill is still running."""
+    with _drain_cond:
+        if not _abandoned_work(turn_id):
+            return
+    deadline = time.monotonic() + _PREFILL_DRAIN_SECONDS
+    while True:
+        # Re-sent every few seconds so a client that hung up meanwhile is
+        # noticed at the next yield instead of after the whole wait.
+        yield {"type": "status", "phase": "waiting"}
+        with _drain_cond:
+            if not _abandoned_work(turn_id):
+                return
+            _drain_cond.wait(timeout=3.0)
+            if not _abandoned_work(turn_id):
+                return
+        if _turn_cancelled(turn_id) or time.monotonic() > deadline:
+            return
 
 
 def _sse_payloads(resp: requests.Response):
@@ -1242,6 +1295,9 @@ def _sse_payloads(resp: requests.Response):
             yield payload
     except GeneratorExit:
         if not answering:
+            global _drains_active
+            with _drain_cond:
+                _drains_active += 1
             threading.Thread(target=_drain_prefill, args=(resp, lines), daemon=True).start()
             resp = None
         raise
@@ -2116,12 +2172,24 @@ def _is_repetition_loop(text: str) -> bool:
 # hasn't yielded back to the ASGI layer yet. Checking this flag right
 # before each tools.call_tool() is the only place a cancellation can
 # actually still take effect.
-_cancelled_turns: set[str] = set()
+#
+# turn_id -> when the cancel arrived. A Stop that lands just after its turn
+# already ended is never removed by stream_reply's finally — and the
+# frontend used to number turns "1", "2", … from scratch on every page load,
+# so that stale entry killed the next turn with the same number instantly
+# (verified live: empty reply in 0.1 s, the UI showed "Es kam keine Antwort
+# zurück"). A cancel only counts for a turn that is running, or one that
+# starts right after it (Stop clicked before the request got going).
+_cancelled_turns: dict[str, float] = {}
+_EARLY_CANCEL_SECONDS = 5.0
 
 
 def cancel_turn(turn_id: str | None) -> None:
     if turn_id:
-        _cancelled_turns.add(turn_id)
+        now = time.monotonic()
+        for stale in [t for t, at in _cancelled_turns.items() if now - at > 600]:
+            _cancelled_turns.pop(stale, None)
+        _cancelled_turns[turn_id] = now
 
 
 def _turn_cancelled(turn_id: str | None) -> bool:
@@ -2133,11 +2201,20 @@ def stream_reply(user_message: str, history: list | None = None, turn_id: str | 
     dropped from _cancelled_turns once the turn ends, cancelled or not —
     otherwise every turn_id a client ever sends would sit in that set
     forever."""
+    if turn_id:
+        at = _cancelled_turns.get(turn_id)
+        if at is not None and time.monotonic() - at > _EARLY_CANCEL_SECONDS:
+            _cancelled_turns.pop(turn_id, None)  # left over from an earlier turn
+        with _drain_cond:
+            _active_turns.add(turn_id)
     try:
         yield from _stream_reply_impl(user_message, history, turn_id, mode, images, is_speech, conversation_id)
     finally:
         if turn_id:
-            _cancelled_turns.discard(turn_id)
+            with _drain_cond:
+                _active_turns.discard(turn_id)
+                _cancelled_turns.pop(turn_id, None)
+                _drain_cond.notify_all()
 
 
 def _stream_reply_impl(user_message: str, history: list | None = None, turn_id: str | None = None, mode: str | None = None, images: list[str] | None = None, is_speech: bool = False, conversation_id: str | None = None):
@@ -2287,6 +2364,13 @@ def _stream_reply_impl(user_message: str, history: list | None = None, turn_id: 
             # Tools LM Studio already ran within this round (native path) —
             # (name, output) in order, for the next round's context.
             round_tools: list[tuple[str, str]] = []
+            yield from _wait_for_abandoned_prefills(turn_id)
+            if _turn_cancelled(turn_id):
+                # Stopped before this round even started (during a tool call
+                # or the wait above): opening it now would only start — and
+                # immediately abandon — another LM Studio request.
+                yield {"type": "done", "full_text": " ".join(full_text_parts)}
+                return
             stream = _open_round(messages, turn_id)
 
             for event in stream:
@@ -2300,7 +2384,9 @@ def _stream_reply_impl(user_message: str, history: list | None = None, turn_id: 
                 # just abandoning the generator.
                 if _turn_cancelled(turn_id):
                     stream.close()
-                    yield {"type": "done", "full_text": "".join(full_text_parts)}
+                    # " ", not "": the spoken sentences were glued together
+                    # ("Ich schaue nach.Es ist 12 Uhr.") in what got saved.
+                    yield {"type": "done", "full_text": " ".join(full_text_parts)}
                     return
                 kind = event["kind"]
 
@@ -2495,7 +2581,7 @@ def _stream_reply_impl(user_message: str, history: list | None = None, turn_id: 
             )
             for c in ordered_calls:
                 if _turn_cancelled(turn_id):
-                    yield {"type": "done", "full_text": ""}
+                    yield {"type": "done", "full_text": " ".join(full_text_parts)}
                     return
                 try:
                     args = json.loads(c["arguments"] or "{}")
@@ -2529,7 +2615,7 @@ def _stream_reply_impl(user_message: str, history: list | None = None, turn_id: 
             recovered_trailing = _recover_leaked_call(trailing_suspect_text)
             if recovered_trailing:
                 if _turn_cancelled(turn_id):
-                    yield {"type": "done", "full_text": ""}
+                    yield {"type": "done", "full_text": " ".join(full_text_parts)}
                     return
                 name, args = recovered_trailing
                 yield {"type": "status", "phase": "tool", "tool": name}
@@ -2576,7 +2662,7 @@ def _stream_reply_impl(user_message: str, history: list | None = None, turn_id: 
         recovered = _recover_leaked_call(content_acc)
         if recovered:
             if _turn_cancelled(turn_id):
-                yield {"type": "done", "full_text": ""}
+                yield {"type": "done", "full_text": " ".join(full_text_parts)}
                 return
             name, args = recovered
             yield {"type": "status", "phase": "tool", "tool": name}

@@ -63,6 +63,10 @@ except ImportError:
 
 from . import config
 
+# Console programs started from the windowed Jarvis.exe would otherwise
+# flash up a console window for every call.
+_NO_WINDOW = 0x08000000 if WIN else 0
+
 # JARVIS Code: eigene opencode-Binary (Rebrand), gebaut aus dem
 # `opencode`-Submodule (siehe .gitmodules) unter releases/ im Repo-Root.
 # Per Env überschreibbar: OPENCODE_BIN=/pfad/zum/binary
@@ -181,9 +185,7 @@ def get_code_agent() -> str:
 def set_code_agent(agent_id: str) -> None:
     if agent_id not in CODE_AGENTS:
         raise ValueError(f"Unbekannter Coding-Agent: {agent_id!r}")
-    cfg = config.load_config()
-    cfg["code_agent"] = agent_id
-    config.CONFIG_FILE.write_text(json.dumps(cfg, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    config.update_config(code_agent=agent_id)
 
 
 def resolve_agent(name: str) -> str | None:
@@ -218,10 +220,17 @@ PROVIDER_ID = "lmstudio"
 # opencode's own SQLite session store (separate from JARVIS's own conversations
 # under backend/conversations/) - lets the Code-Tab sidebar show opencode's
 # real sessions instead of JARVIS chat conversations that were never meant for it.
+# opencode uses the XDG layout on Windows too (~/.local/share/opencode,
+# verified on a real install) — only looking under %LOCALAPPDATA% left the
+# Code-Tab session list permanently empty and every rename failing.
+_OPENCODE_DB_CANDIDATES = [
+    pathlib.Path(os.environ.get("XDG_DATA_HOME", str(pathlib.Path.home() / ".local" / "share"))) / "opencode" / "opencode.db",
+]
 if WIN:
-    OPENCODE_DB = pathlib.Path(os.environ.get("LOCALAPPDATA", str(pathlib.Path.home()))) / "opencode" / "opencode.db"
-else:
-    OPENCODE_DB = pathlib.Path.home() / ".local" / "share" / "opencode" / "opencode.db"
+    _OPENCODE_DB_CANDIDATES.append(
+        pathlib.Path(os.environ.get("LOCALAPPDATA", str(pathlib.Path.home()))) / "opencode" / "opencode.db"
+    )
+OPENCODE_DB = next((p for p in _OPENCODE_DB_CANDIDATES if p.exists()), _OPENCODE_DB_CANDIDATES[0])
 
 
 def list_recent_sessions(directory: str | None = None, limit: int = 40) -> list[dict]:
@@ -232,15 +241,20 @@ def list_recent_sessions(directory: str | None = None, limit: int = 40) -> list[
     if not OPENCODE_DB.exists():
         return []
     try:
-        uri = f"file:{OPENCODE_DB}?mode=ro"
+        # as_uri(): a raw Windows path ("file:C:\Users\...") isn't a valid
+        # SQLite URI.
+        uri = f"{OPENCODE_DB.as_uri()}?mode=ro"
         con = sqlite3.connect(uri, uri=True, timeout=2)
         try:
             con.row_factory = sqlite3.Row
             if directory:
+                # opencode stores Windows paths with forward slashes
+                # ("C:/Users/..."), get_code_dir() returns backslashes — an
+                # exact match never hit, so the folder filter never applied.
                 rows = con.execute(
                     "SELECT id, title, directory, time_created, time_updated FROM session "
-                    "WHERE directory = ? AND parent_id IS NULL ORDER BY time_updated DESC LIMIT ?",
-                    (directory, limit),
+                    "WHERE directory IN (?, ?) AND parent_id IS NULL ORDER BY time_updated DESC LIMIT ?",
+                    (directory, directory.replace("\\", "/"), limit),
                 ).fetchall()
                 if not rows:
                     rows = con.execute(
@@ -273,6 +287,9 @@ def delete_session(session_id: str) -> bool:
             capture_output=True,
             timeout=15,
             text=True,
+            encoding="utf-8",
+            errors="replace",
+            creationflags=_NO_WINDOW,
         )
         return result.returncode == 0
     except Exception:
@@ -495,7 +512,11 @@ def list_all_models() -> list[str]:
     try:
         out = subprocess.run(
             [OPENCODE_BIN, "models"],
-            capture_output=True, text=True, timeout=12,
+            # opencode prints UTF-8; text=True alone decodes with cp1252 on
+            # German Windows and raised UnicodeDecodeError (not caught below)
+            # on the first non-ASCII byte.
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=12,
+            creationflags=_NO_WINDOW,
         ).stdout
     except (OSError, subprocess.SubprocessError):
         return _LAST_MODEL_LIST
@@ -526,9 +547,7 @@ def get_selected_model(agent_id: str | None = None) -> str:
 
 
 def set_selected_model(model_id: str, agent_id: str | None = None) -> None:
-    cfg = config.load_config()
-    cfg[_model_config_key(agent_id)] = model_id
-    config.CONFIG_FILE.write_text(json.dumps(cfg, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    config.update_config(**{_model_config_key(agent_id): model_id})
 
 
 def resolve_model(name: str, available: list[str] | None = None) -> str | None:
@@ -543,7 +562,9 @@ def resolve_model(name: str, available: list[str] | None = None) -> str | None:
     # Die Liste kostet einen Prozessstart — wer sie schon hat, reicht sie
     # durch, statt die Binary ein zweites Mal zu befragen.
     for full_id in (available if available is not None else list_all_models()):
-        hay = re.split(r"[^a-z0-9]+", full_id.lower())
+        # Empty parts (an id ending in "/" or "-") matched EVERY word, since
+        # "" is a substring of anything.
+        hay = [part for part in re.split(r"[^a-z0-9]+", full_id.lower()) if len(part) > 1]
         score = sum(1 for w in wanted if any(w in part or part in w for part in hay))
         if score > best_score:
             best, best_score = full_id, score
@@ -639,9 +660,7 @@ def get_code_dir() -> str:
 
 
 def set_code_dir(dir_path: str) -> None:
-    cfg = config.load_config()
-    cfg["code_dir"] = dir_path
-    config.CONFIG_FILE.write_text(json.dumps(cfg, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    config.update_config(code_dir=dir_path)
 
 
 def ensure_provider_config(models: list[dict], model_id: str) -> dict:

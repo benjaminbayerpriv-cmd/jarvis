@@ -26,6 +26,8 @@ def log_turn(user_text: str, assistant_text: str, mode: str = "chat") -> None:
 # Optionaler [mode]-Tag zwischen Zeitstempel und Rolle: [ts][code] DU: ... — alte
 # Zeilen ohne Tag werden als "chat" gelesen.
 _TURN_RE = re.compile(r"^\[[^\]]+\](?:\[([a-z]+)\])? (DU|JARVIS): (.*)$")
+_STAMP_RE = re.compile(r"^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\]")
+_TAIL_BYTES = 512 * 1024
 
 
 def read_recent_turns(limit: int = 40) -> list[dict]:
@@ -35,14 +37,31 @@ def read_recent_turns(limit: int = 40) -> list[dict]:
     conversation, so they're skipped here rather than shown as turns."""
     if not LOG_FILE.exists():
         return []
-    with _lock:
-        lines = LOG_FILE.read_text(encoding="utf-8").splitlines()
+    # Only the tail: the log is never rotated, and this used to read the whole
+    # file on every panel open.
+    with _lock, LOG_FILE.open("rb") as f:
+        f.seek(0, 2)
+        size = f.tell()
+        f.seek(max(0, size - _TAIL_BYTES))
+        lines = f.read().decode("utf-8", errors="replace").splitlines()
+    if size > _TAIL_BYTES:
+        lines = lines[1:]  # the first line is most likely cut in half
     turns = []
+    current: dict | None = None
     for line in lines:
         m = _TURN_RE.match(line)
         if m:
             mode, role, text = m.group(1) or "chat", m.group(2), m.group(3)
-            turns.append({"role": "you" if role == "DU" else "jarvis", "text": text, "mode": mode})
+            current = {"role": "you" if role == "DU" else "jarvis", "text": text, "mode": mode}
+            turns.append(current)
+        elif _STAMP_RE.match(line):
+            current = None  # a PANEL[...] line ends the previous turn
+        elif current is not None:
+            # A multi-line reply (lists, code, paragraphs) continues on the
+            # following lines — only its first line used to be shown.
+            current["text"] += "\n" + line
+    for turn in turns:
+        turn["text"] = turn["text"].rstrip()
     return turns[-limit:]
 
 
