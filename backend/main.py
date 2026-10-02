@@ -16,6 +16,7 @@ import time
 import traceback
 from pathlib import Path
 
+import anyio
 import requests
 from fastapi import FastAPI, File, HTTPException, Response, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -34,10 +35,37 @@ app = FastAPI(title="Jarvis")
 _EXTENSION_ORIGIN_RE = r"^chrome-extension://[a-z]{32}$"
 
 
+def _host_allowed(host: str | None) -> bool:
+    """DNS-rebinding guard: a page on attacker.example whose DNS later
+    points at 127.0.0.1 is "same-origin" with itself, so the Origin check
+    alone let it read /settings (API keys) or drive /chat/stream. Its
+    requests still carry its own name in the Host header, though — only an
+    IP address, localhost or this machine's own name may appear there."""
+    if not host:
+        return True  # HTTP/1.0 clients; browsers always send Host
+    name = host.strip().lower()
+    if name.startswith("["):  # [::1]:8000
+        name = name[1:].split("]", 1)[0]
+    else:
+        name = name.rsplit(":", 1)[0] if name.count(":") == 1 else name
+    try:
+        ipaddress.ip_address(name)
+        return True
+    except ValueError:
+        pass
+    if name == "localhost" or name.endswith(".localhost"):
+        return True
+    machine = socket.gethostname().lower()
+    extra = {h.strip().lower() for h in os.environ.get("JARVIS_ALLOWED_HOSTS", "").split(",") if h.strip()}
+    return name == machine or name.startswith(machine + ".") or name in extra
+
+
 def _origin_allowed(origin: str | None, host: str | None) -> bool:
     """No Origin header = not a cross-site browser request (curl, the hotkey
     listener, the launcher) — allowed. Otherwise only same-origin pages and
     the Chrome extension."""
+    if not _host_allowed(host):
+        return False
     if not origin:
         return True
     if re.match(_EXTENSION_ORIGIN_RE, origin):
@@ -174,7 +202,6 @@ async def _pump_panel():
 async def on_startup():
     """Warm the filler clips (ElevenLabs is only hit for ones not already
     cached on disk) and start the panel pump."""
-    global filler_urls, thinking_filler_url
     memory.initialize()
     healthy, detail = llm_client.model_health()
     print(f"[model] {detail}")
@@ -206,7 +233,13 @@ async def on_startup():
     # Jarvis) — see backend/vector_memory.py. Already-indexed lines are
     # skipped, so this is cheap on every startup after the first.
     loop.run_in_executor(None, vector_memory.reindex_all)
-    loop.create_task(_pump_panel())
+    # asyncio only keeps a weak reference to tasks — without this one the
+    # panel pump could be garbage-collected mid-run and every tool status,
+    # notice and opencode event would silently stop reaching the interface.
+    _background_tasks.add(loop.create_task(_pump_panel()))
+
+
+_background_tasks: set[asyncio.Task] = set()
 
 
 class ChatRequest(BaseModel):
@@ -431,6 +464,48 @@ def favicon():
     return Response(_JARVIS_FAVICON_PATH.read_bytes(), media_type="image/x-icon")
 
 
+class _ClosingStreamingResponse(StreamingResponse):
+    """StreamingResponse that closes its sync generator the moment the
+    response ends — normally or because the client went away.
+
+    Starlette iterates a sync generator in a thread pool and never closes it
+    when the client disconnects; that only happened whenever Python's cycle
+    GC got around to it. Measured live: after a closed window / reload,
+    LM Studio kept generating for 34 s, holding the warm slot (the next
+    message landed on a cold one and prefilled everything again), and the
+    partial turn was only saved then. Closing it here runs the generator's
+    cleanup right away: the LM Studio connection drops (or drains, during a
+    prefill), the tool scope closes, the partial turn is saved."""
+
+    def __init__(self, content, *args, on_disconnect=None, **kwargs):
+        super().__init__(content, *args, **kwargs)
+        self._sync_gen = content
+        self._on_disconnect = on_disconnect
+
+    async def listen_for_disconnect(self, receive) -> None:
+        await super().listen_for_disconnect(receive)
+        # Reached only on a real client disconnect (a finished stream cancels
+        # this listener instead). Flag the turn right away: the generator
+        # itself may sit in its thread until LM Studio's next event, and a
+        # new message in the meantime must already see this turn as dead.
+        if self._on_disconnect is not None:
+            self._on_disconnect()
+
+    async def __call__(self, scope, receive, send):
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            close = getattr(self._sync_gen, "close", None)
+            if close is not None:
+                # Shielded: this runs while the request is being cancelled.
+                # In a thread: closing does blocking I/O (HTTP close, saving).
+                with anyio.CancelScope(shield=True):
+                    try:
+                        await anyio.to_thread.run_sync(close)
+                    except Exception as exc:  # noqa: BLE001 - cleanup must not raise into the server
+                        print(f"[chat] Aufräumen nach Verbindungsende fehlgeschlagen: {exc}")
+
+
 class NoCacheStatic(StaticFiles):
     def file_response(self, *args, **kwargs):
         resp = super().file_response(*args, **kwargs)
@@ -445,6 +520,10 @@ if FRONTEND_BACKUP_DIR.exists():
 
 @app.post("/chat", response_model=ChatResponse)
 def chat(req: ChatRequest):
+    if not (req.message or "").strip():
+        # Same guard as /chat/stream: LM Studio answers "" with a raw
+        # English error ("input must not be an empty string").
+        return ChatResponse(reply="Ich habe nichts verstanden — sag oder schreib es bitte nochmal.")
     try:
         reply = llm_client.get_reply(req.message, req.history, req.mode)
     except (llm_client.ModelTooLargeError, llm_client.LmStudioError, mcp_server.ToolServerError) as exc:
@@ -514,7 +593,7 @@ def speak_stream(req: TtsStreamRequest):
             yield json.dumps({"type": "error", "message": str(exc)}) + "\n"
         yield json.dumps({"type": "done", "elapsed_ms": int((time.time() - start) * 1000)}) + "\n"
 
-    return StreamingResponse(generate(), media_type="application/x-ndjson")
+    return _ClosingStreamingResponse(generate(), media_type="application/x-ndjson")
 
 
 @app.post("/stt")
@@ -586,8 +665,28 @@ def chat_stream(req: ChatRequest):
 
         threading.Thread(target=_job, daemon=True).start()
 
+    saved = False
+
+    def _save_turn(text: str) -> None:
+        nonlocal saved
+        if saved or not text or req.ephemeral:
+            return
+        saved = True
+        try:
+            transcript_log.log_turn(req.message, text, req.mode)
+            conv = conversations.append_turn(
+                conv_id, req.message, text, req.project_id, chats_base_dir,
+                images=req.image_thumbnails,
+            )
+        except OSError as exc:
+            print(f"[chat] Konnte den Turn nicht speichern: {exc}")
+            return
+        if conv.get("title") is None and len(conv.get("turns", [])) == 2:
+            _generate_title_in_background(req.message, text)
+
     def generate():
         full_text = ""
+        spoken: list[str] = []
         if not (req.message or "").strip() and not req.images:
             # LM Studio rejects an empty input with a raw English error
             # ("input must not be an empty string") that was shown verbatim.
@@ -616,6 +715,7 @@ def chat_stream(req: ChatRequest):
                     # "audio"-Event, sobald er fertig ist. Schlägt die
                     # Synthese fehl, ist trotzdem der Text da (nie den Satz
                     # verschlucken, nur den Ton).
+                    spoken.append(text)
                     yield json.dumps({"type": "sentence", "text": text, "audio": ""}) + "\n"
                     # Outside speech mode the frontend throws audio away — and
                     # synthesizing it here holds up the next sentence by the
@@ -647,17 +747,21 @@ def chat_stream(req: ChatRequest):
                     yield json.dumps({"type": "status", "phase": event["phase"], "tool": event.get("tool"), "progress": event.get("progress")}) + "\n"
                 elif event["type"] == "done":
                     full_text = _strip_emojis(event["full_text"])
+                    # Saved BEFORE "done" goes out: a client hanging up right
+                    # after receiving it (Stop at the last second, closing the
+                    # window) ended the generator at that yield, and the turn
+                    # the frontend already shows was never stored.
+                    _save_turn(full_text)
                     yield json.dumps(
                         {"type": "done", "full_text": full_text, "conversation_id": conv_id}
                     ) + "\n"
-            if full_text and not req.ephemeral:
-                transcript_log.log_turn(req.message, full_text, req.mode)
-                conv = conversations.append_turn(
-                    conv_id, req.message, full_text, req.project_id, chats_base_dir,
-                    images=req.image_thumbnails,
-                )
-                if conv.get("title") is None and len(conv.get("turns", [])) == 2:
-                    _generate_title_in_background(req.message, full_text)
+        except GeneratorExit:
+            # The client hung up mid-reply (Stop button, barge-in, closed
+            # window). The frontend keeps what was said so far in its history
+            # — store the same partial turn, or reopening the chat later
+            # silently drops it and the two histories disagree.
+            _save_turn(" ".join(spoken))
+            raise
         except Exception as exc:  # noqa: BLE001 - the frontend must always get a "done"
             # Any exception escaping here used to end the HTTP stream without
             # a "done" event, leaving the chat bubble on "Denkt nach…" forever.
@@ -686,7 +790,10 @@ def chat_stream(req: ChatRequest):
             yield json.dumps({"type": "sentence", "text": fallback, "audio": audio_b64}) + "\n"
             yield json.dumps({"type": "done", "full_text": fallback, "conversation_id": conv_id}) + "\n"
 
-    return StreamingResponse(generate(), media_type="application/x-ndjson")
+    return _ClosingStreamingResponse(
+        generate(), media_type="application/x-ndjson",
+        on_disconnect=lambda: llm_client.cancel_turn(req.turn_id),
+    )
 
 
 @app.post("/chat/cancel")
@@ -1102,12 +1209,15 @@ def _validate_lm_studio(ip: str, port: int) -> dict | None:
     model list — run via asyncio.to_thread since `requests` is synchronous
     and this only ever runs for the handful of hosts whose port answered."""
     try:
-        # Nur der bereits konfigurierte LM-Studio-Token wird hier probiert
-        # (nicht irgendein anderswo gescannter Host bekäme ihn zu sehen,
-        # er geht ja nur an genau die IP, die gerade geprüft wird) — ohne
-        # ihn würde der Scan LM Studio selbst als "kein Treffer" verwerfen,
-        # sobald "Require Authentication" an ist.
-        resp = requests.get(f"http://{ip}:{port}/v1/models", headers=config.lm_studio_headers(), timeout=2.5)
+        url = f"http://{ip}:{port}/v1/models"
+        # Erst OHNE Token: der Scan fragt jedes Gerät im /24 an, das auf dem
+        # Port antwortet (bei der erweiterten Suche auch 8000/8080/5000) —
+        # vorher bekam jedes davon den LM-Studio-Token mitgeschickt. Nur ein
+        # Host, der mit LM Studios eigener "Token nötig"-401 antwortet, bekommt
+        # ihn (gleiche Regel wie jarvis_cli/scan.py).
+        resp = requests.get(url, timeout=2.5)
+        if resp.status_code == 401 and config.LM_STUDIO_API_TOKEN and "LM Studio API token" in resp.text[:4096]:
+            resp = requests.get(url, headers=config.lm_studio_headers(), timeout=2.5)
         resp.raise_for_status()
         models = [m.get("id") for m in resp.json().get("data", []) if m.get("id")]
     except (requests.RequestException, ValueError):
@@ -1245,14 +1355,23 @@ def model_unload(req: UnloadModelRequest):
     return {"ok": True}
 
 
+_REQUIRED_SETTINGS = {"whisper_model", "supertonic_voice", "supertonic_lang", "embedding_model", "deepseek_base_url", "deepseek_model"}
+
+
 @app.post("/settings")
 def update_settings(req: UpdateSettingsRequest):
     if req.lm_studio_base_url is not None and req.lm_studio_base_url.strip():
         config.set_lm_studio_base_url(req.lm_studio_base_url.strip())
     for name in config.get_simple_settings():
         value = getattr(req, name)
-        if value is not None:
-            config.set_simple_setting(name, value.strip())
+        if value is None:
+            continue
+        if name in _REQUIRED_SETTINGS and not value.strip():
+            # Clearing an API key is legitimate; an empty Whisper model,
+            # voice or embedding model only breaks the next load
+            # (WhisperModel("") / an unknown voice) — keep the old value.
+            continue
+        config.set_simple_setting(name, value.strip())
     if req.whisper_model is not None and req.whisper_model.strip():
         stt.reset_model()
     if req.supertonic_voice is not None and req.supertonic_voice.strip():
@@ -1575,9 +1694,14 @@ async def code_tty_ws(websocket: WebSocket):
                     data = json.loads(msg["text"])
                 except ValueError:
                     continue
-                if data.get("type") == "resize":
-                    cols = int(data.get("cols") or 80)
-                    rows = int(data.get("rows") or 24)
+                if isinstance(data, dict) and data.get("type") == "resize":
+                    # A non-number or 0 x 0 (a hidden xterm reports that) used
+                    # to raise out of this loop and kill the terminal.
+                    try:
+                        cols = max(2, min(1000, int(data.get("cols") or 80)))
+                        rows = max(2, min(500, int(data.get("rows") or 24)))
+                    except (TypeError, ValueError):
+                        continue
                     tty_state["cols"] = cols
                     tty_state["rows"] = rows
                     opencode_agent.resize_tty(tty, cols, rows)
@@ -1600,7 +1724,10 @@ async def ws_endpoint(websocket: WebSocket):
     try:
         while True:
             await websocket.receive_text()
-    except WebSocketDisconnect:
+    except (WebSocketDisconnect, RuntimeError, KeyError):
+        pass  # KeyError/RuntimeError: a binary frame or an already-closed socket
+    finally:
+        # In finally: any other exit used to leave a dead socket in the list.
         if websocket in active_sockets:
             active_sockets.remove(websocket)
 
@@ -1613,12 +1740,21 @@ async def browser_ws(websocket: WebSocket):
     browser_agent.agent.connect(websocket, asyncio.get_running_loop())
     try:
         while True:
-            result = await websocket.receive_json()
+            try:
+                result = json.loads(await websocket.receive_text())
+            except ValueError:
+                continue  # one malformed frame must not drop the connection
+            if not isinstance(result, dict):
+                continue
             if result.get("type") == "heartbeat":
                 browser_agent.agent.heartbeat()
                 continue
-            browser_agent.agent.resolve(result.get("id", ""), result)
-    except WebSocketDisconnect:
+            browser_agent.agent.resolve(str(result.get("id", "")), result)
+    except (WebSocketDisconnect, RuntimeError, KeyError):
+        pass
+    finally:
+        # Any exit, not just a clean disconnect — otherwise a dead socket
+        # stayed "connected" and browser commands went into the void.
         browser_agent.agent.disconnect(websocket)
 
 

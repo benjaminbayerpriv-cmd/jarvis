@@ -116,7 +116,10 @@ def _get_model() -> WhisperModel:
     if _model is None:
         with _lock:
             if _model is None:
-                if _gpu_broken:
+                # WHISPER_DEVICE=cpu frees the ~2 GB of VRAM Whisper "medium"
+                # takes on the GPU — on a 16 GB card that decides whether a
+                # big chat model still fits next to it.
+                if _gpu_broken or config.WHISPER_DEVICE == "cpu":
                     _model = _build_model("cpu")
                 else:
                     try:
@@ -219,13 +222,18 @@ def transcribe(audio_bytes: bytes) -> str:
             # by the user as "voice input doesn't work". Recover instead:
             # fall back to CPU permanently and actually finish this
             # utterance rather than dropping it.
-            if _gpu_broken:
+            if _gpu_broken or getattr(getattr(model, "model", None), "device", "cuda") != "cuda":
                 raise
+            # Only blame the GPU once the same clip works on the CPU — an
+            # unreadable upload (empty body, not a WAV) fails on both, and
+            # used to switch Whisper to the slow CPU path for good.
+            cpu_model = _build_model("cpu")
+            with _lock:
+                text = _run_transcribe(cpu_model, path)
             print(f"[stt] GPU-Transkription fehlgeschlagen, wechsle dauerhaft auf CPU: {exc}")
             _gpu_broken = True
             with _lock:
-                _model = _build_model("cpu")
-                text = _run_transcribe(_model, path)
+                _model = cpu_model
     finally:
         os.remove(path)
 

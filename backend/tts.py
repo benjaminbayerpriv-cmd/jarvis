@@ -177,24 +177,37 @@ _MONTH_NAMES = {
 # straight through to the plain cardinal-number pass below, which drops
 # the trailing dot's ordinal meaning entirely — observed live, exactly
 # this: "einundzwanzig. Januar" instead of "einundzwanzigste Januar".
+# The optional leading preposition decides the ending: "am 3. Oktober" is
+# "am dritten Oktober" — without it this read "am dritte Oktober".
 _DATE_WORDS_RE = re.compile(
-    r"\b(\d{1,2})\.\s*("
+    r"\b(?:((?i:am|an|den|dem|vom|zum|ab|seit))\s+)?(\d{1,2})\.\s*("
     + "|".join(_MONTH_NAMES.values())
     + r")\b(?:\s+(\d{4}))?"
 )
 
 
 def _spell_date_words(match: re.Match) -> str:
-    day = int(match.group(1))
-    month_name = match.group(2)
-    year = match.group(3)
+    lead = match.group(1)
+    day = int(match.group(2))
+    month_name = match.group(3)
+    year = match.group(4)
     if not 1 <= day <= 31:
         return match.group(0)
     day_words = num2words(day, lang="de", to="ordinal")
+    if lead:
+        day_words = f"{lead} {day_words}n"
     result = f"{day_words} {month_name}"
     if year:
         result += f" {num2words(int(year), lang='de')}"
     return result
+
+_UNIT_PATTERNS = [
+    (re.compile(r"(?<=\d)\s*°\s*C\b"), " Grad"),
+    (re.compile(r"(?<=\d)\s*°\s*F\b"), " Grad Fahrenheit"),
+    (re.compile(r"(?<=\d)\s*°"), " Grad"),
+    (re.compile(r"(?<=\d)\s*km/h\b"), " Kilometer pro Stunde"),
+    (re.compile(r"(?<=\d)\s*€"), " Euro"),
+]
 
 _MATH_SYMBOL_PATTERNS = [
     (re.compile(r"(?<=\d)\s*\+\s*(?=\d)"), " plus "),
@@ -362,6 +375,11 @@ def _expand_numbers_for_speech(text: str) -> str:
     expanded = _ISO_DATE_RE.sub(_spell_iso_date, expanded)
     expanded = _DATE_NO_YEAR_RE.sub(_spell_date_no_year, expanded)
     expanded = _DATE_WORDS_RE.sub(_spell_date_words, expanded)
+    # Units right after a number: every weather reply ("16,3°C bei 7,0 km/h
+    # Wind") was read as "sechzehn Komma drei°C" — Supertonic drops "°C"
+    # and spells "km/h" letter by letter.
+    for pattern, replacement in _UNIT_PATTERNS:
+        expanded = pattern.sub(replacement, expanded)
     # Phone-number-shaped runs before the math pass — after conversion the
     # result is words, not digits, so it can't be re-matched by _NUMBER_RE
     # below either way.

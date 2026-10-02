@@ -57,6 +57,12 @@ def _index_new_line(source: str, line: str) -> None:
 def add_note(text: str) -> str:
     initialize()
     stamp = dt.datetime.now().strftime("%Y-%m-%d %H:%M")
+    # One note = one bullet line: a line break in the text used to start
+    # loose, undated lines in Notizen.md that the index treats as separate
+    # notes.
+    text = " ".join(str(text or "").split())
+    if not text:
+        return "Leere Notiz — nichts gespeichert."
     line = f"- [{stamp}] {text}"
     with _lock, NOTES.open("a", encoding="utf-8") as handle:
         handle.write(line + "\n")

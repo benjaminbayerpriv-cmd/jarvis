@@ -24,11 +24,10 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "get_weather",
-            "description": "Aktuelles Wetter für eine Stadt abrufen.",
+            "description": "Aktuelles Wetter abrufen. Ohne genannte Stadt sofort ohne city aufrufen — dann gilt der Wohnort des Nutzers, nicht nachfragen.",
             "parameters": {
                 "type": "object",
-                "properties": {"city": {"type": "string", "description": "Stadtname, z.B. Hamburg"}},
-                "required": ["city"],
+                "properties": {"city": {"type": "string", "description": "Stadtname, z.B. Hamburg; weglassen, wenn keine Stadt genannt wurde"}},
             },
         },
     },
@@ -426,6 +425,11 @@ def _is_blocked(command: str) -> bool:
 
 
 def _get_weather(city: str) -> str:
+    # "Wie ist das Wetter?" without a place: the model passes "" and the
+    # geocoder found nothing — the configured home city is what was meant.
+    city = (city or "").strip() or str(config.load_config().get("default_city") or "").strip()
+    if not city:
+        return "Für welche Stadt soll ich das Wetter abfragen?"
     try:
         geo = requests.get(
             "https://geocoding-api.open-meteo.com/v1/search",
@@ -769,6 +773,11 @@ def _resolve_fs_path(description: str, *, require_dir: bool) -> tuple[Path | Non
             if candidate.exists() and (not require_dir or candidate.is_dir()):
                 last_target.remember(candidate)
                 return candidate, candidate.name
+        if raw.is_absolute():
+            # A full path that doesn't exist IS the answer — the word lookup
+            # below only shredded it ("Konnte den Ordner 'C Users mimet
+            # gibtsnicht' nicht finden").
+            return None, str(raw)
 
     lowered = text.lower()
     base = Path.home() / "Desktop"
@@ -831,7 +840,10 @@ def _list_folder(description: str) -> str:
     if target is None:
         return f"Konnte den Ordner '{name}' nicht finden."
 
-    entries = sorted(target.iterdir(), key=lambda p: p.name.lower())
+    try:
+        entries = sorted(target.iterdir(), key=lambda p: p.name.lower())
+    except OSError as exc:
+        return f"Konnte '{target.name or target}' nicht lesen: {exc.strerror or exc}"
     if not entries:
         return f"'{target.name}' ist leer."
     shown = [f"{p.name}/" if p.is_dir() else p.name for p in entries[:40]]
@@ -900,13 +912,34 @@ def _build_project(location: str, description: str) -> str:
     return _opencode(task)
 
 
+def _spoken_location(raw: str) -> Path:
+    """A destination as the model passes it: an absolute path, a known place
+    ("Dokumente", "Desktop") or a name relative to the Desktop — never
+    relative to the server's working directory, which is the Jarvis repo."""
+    path = Path(os.path.expanduser(raw))
+    if path.is_absolute():
+        return path
+    alias = _LOCATION_ALIASES.get(raw.strip().lower())
+    if alias:
+        return Path(os.path.expanduser(alias))
+    return platform_utils.desktop_dir() / path
+
+
 def _move_file(source: str, destination: str) -> str:
     """Move a file or folder; safer than a raw `mv` via run_shell."""
-    src = Path(os.path.expanduser((source or "").strip().strip("\"'")))
-    dst = Path(os.path.expanduser((destination or "").strip().strip("\"'")))
-
-    if not src.exists():
+    source = (source or "").strip().strip("\"'")
+    destination = (destination or "").strip().strip("\"'")
+    if not source:
+        return "Was soll ich verschieben?"
+    if not destination:
+        # Path("") is "." — the Jarvis repo the server runs in.
+        return "Wohin soll ich es verschieben?"
+    src, _name = _resolve_fs_path(source, require_dir=False)
+    if src is None:
         return f"Konnte '{source}' nicht finden."
+    if _is_protected_location(src):
+        return f"'{src}' ist ein ganzer Hauptordner — den verschiebe ich nicht."
+    dst = _spoken_location(destination)
 
     # "in die Dokumente" → move into the folder, keeping the filename.
     if dst.is_dir():
@@ -995,6 +1028,12 @@ def _write_file(path: str, content: str) -> str:
         # A bare "einkauf.txt" used to land in the backend's working
         # directory — the Jarvis repo itself.
         target = platform_utils.desktop_dir() / target
+    if target.suffix.lower() not in _CODE_SUFFIXES and target.exists():
+        # write_text replaced an existing file without a word — one misheard
+        # "schreib eine Datei notizen.txt" wiped the real notes. move_file
+        # refuses to overwrite for the same reason.
+        return (f"'{target.name}' gibt es schon ({target.parent}) — ich überschreibe keine bestehende "
+                "Datei. Nenn mir einen anderen Namen oder lösch die alte zuerst.")
     if target.suffix.lower() in _CODE_SUFFIXES:
         # Ein bloßes Verweigern reichte nicht: das Modell meldete danach
         # trotzdem Vollzug und rief opencode NICHT auf — die Datei entstand

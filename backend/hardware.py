@@ -4,7 +4,6 @@ pushes Windows into heavy swapping or takes LM Studio (and sometimes the
 whole machine) down with it."""
 from __future__ import annotations
 
-import ctypes
 import json
 import re
 import shutil
@@ -46,8 +45,8 @@ def lm_studio_root() -> str:
     the OpenAI-compatible base URL Jarvis already talks to
     (http://.../v1) — the native /api/v1/* and legacy /api/v0/* endpoints
     live one level up from that."""
-    base = config.LM_STUDIO_BASE_URL
-    return base[: base.rfind("/v1")].rstrip("/") if base.endswith("/v1") else base.rstrip("/")
+    base = config.LM_STUDIO_BASE_URL.rstrip("/")
+    return base[: base.rfind("/v1")].rstrip("/") if base.endswith("/v1") else base
 
 
 _LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1", "0.0.0.0"}
