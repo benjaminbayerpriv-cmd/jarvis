@@ -14,6 +14,7 @@ import sys
 import threading
 import time
 import traceback
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import anyio
@@ -26,7 +27,56 @@ from pydantic import BaseModel
 
 from . import browser_agent, config, conversations, fillers, hardware, llm_client, mcp_server, memory, opencode_agent, panel, projects, stt, transcript_log, tts, vector_memory
 
-app = FastAPI(title="Jarvis")
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    """Startup: warm the model, the filler clips, Whisper and the vector
+    index — every one of those is blocking I/O, so all of it runs in the
+    thread pool. The health check used to run inline here and held the
+    event loop (and with it the first page load) for up to ten seconds of
+    DeepSeek + LM Studio timeouts."""
+    memory.initialize()
+    loop = asyncio.get_running_loop()
+
+    def _check_and_warm():
+        healthy, detail = llm_client.model_health()
+        print(f"[model] {detail}")
+        # Modell-Detailinfos gehören in die Statuszeile ("da wo denke nach
+        # steht"), nicht in ein Popup — das Rendering macht das Frontend.
+        panel.push("notice", text=detail)
+        if healthy:
+            # Siehe llm_client.warm_system_prompt: sonst zahlt die erste echte
+            # Nachricht nach jedem Programmstart das Prefill des ganzen
+            # System-Prompts, nicht nur nach einem Modellwechsel im laufenden
+            # Betrieb (dort schon über /models/select abgedeckt).
+            _warm_with_load_progress(config.LM_STUDIO_MODEL)
+
+    def _generate():
+        global filler_urls, thinking_filler_url
+        filler_urls = fillers.ensure_fillers()
+        thinking_filler_url = fillers.ensure_thinking_filler()
+
+    loop.run_in_executor(None, _check_and_warm)
+    loop.run_in_executor(None, _generate)
+    # Whisper's first load takes ~15s — do it now instead of on the user's
+    # first spoken sentence. selftest() (not just _get_model()) also runs a
+    # real transcription so a broken GPU setup (e.g. a missing cuBLAS DLL)
+    # surfaces here, in the log, rather than on the user's first sentence —
+    # model construction alone never touches cuBLAS/cuDNN.
+    loop.run_in_executor(None, stt.selftest)
+    # Backfills the semantic-search index for any vault content written
+    # before this feature existed (or added directly in Obsidian, outside
+    # Jarvis) — see backend/vector_memory.py. Already-indexed lines are
+    # skipped, so this is cheap on every startup after the first.
+    loop.run_in_executor(None, vector_memory.reindex_all)
+    # asyncio only keeps a weak reference to tasks — without this one the
+    # panel pump could be garbage-collected mid-run and every tool status,
+    # notice and opencode event would silently stop reaching the interface.
+    _background_tasks.add(loop.create_task(_pump_panel()))
+    yield
+
+
+app = FastAPI(title="Jarvis", lifespan=_lifespan)
 
 # Only Jarvis's own pages and the local Chrome extension may talk to this
 # server from a browser. With allow_origins=["*"] any website the user
@@ -198,47 +248,6 @@ async def _pump_panel():
         await asyncio.sleep(0.2)
 
 
-@app.on_event("startup")
-async def on_startup():
-    """Warm the filler clips (ElevenLabs is only hit for ones not already
-    cached on disk) and start the panel pump."""
-    memory.initialize()
-    healthy, detail = llm_client.model_health()
-    print(f"[model] {detail}")
-    # Modell-Detailinfos gehören in die Statuszeile ("da wo denke nach
-    # steht"), nicht in ein Popup — das Rendering macht das Frontend.
-    panel.push("notice", text=detail)
-
-    def _generate():
-        global filler_urls, thinking_filler_url
-        filler_urls = fillers.ensure_fillers()
-        thinking_filler_url = fillers.ensure_thinking_filler()
-
-    loop = asyncio.get_event_loop()
-    if healthy:
-        # Siehe llm_client.warm_system_prompt: sonst zahlt die erste echte
-        # Nachricht nach jedem Programmstart das Prefill des ganzen
-        # System-Prompts, nicht nur nach einem Modellwechsel im laufenden
-        # Betrieb (dort schon über /models/select abgedeckt).
-        loop.run_in_executor(None, _warm_with_load_progress, config.LM_STUDIO_MODEL)
-    loop.run_in_executor(None, _generate)
-    # Whisper's first load takes ~15s — do it now instead of on the user's
-    # first spoken sentence. selftest() (not just _get_model()) also runs a
-    # real transcription so a broken GPU setup (e.g. a missing cuBLAS DLL)
-    # surfaces here, in the log, rather than on the user's first sentence —
-    # model construction alone never touches cuBLAS/cuDNN.
-    loop.run_in_executor(None, stt.selftest)
-    # Backfills the semantic-search index for any vault content written
-    # before this feature existed (or added directly in Obsidian, outside
-    # Jarvis) — see backend/vector_memory.py. Already-indexed lines are
-    # skipped, so this is cheap on every startup after the first.
-    loop.run_in_executor(None, vector_memory.reindex_all)
-    # asyncio only keeps a weak reference to tasks — without this one the
-    # panel pump could be garbage-collected mid-run and every tool status,
-    # notice and opencode event would silently stop reaching the interface.
-    _background_tasks.add(loop.create_task(_pump_panel()))
-
-
 _background_tasks: set[asyncio.Task] = set()
 
 
@@ -277,10 +286,6 @@ class CancelRequest(BaseModel):
 
 class SelectModelRequest(BaseModel):
     model: str
-    # "Trotzdem laden" im Modell-Auswahlmenü — bleibt im Request-Modell,
-    # damit das alte Frontend (schickt force bei jedem Wechsel) weiterhin
-    # valide bleibt, nachdem der Größen-/Speicher-Check entfernt wurde.
-    force: bool = False
 
 
 class UpdateSettingsRequest(BaseModel):
@@ -375,7 +380,23 @@ def _freeze_snapshot(html: str) -> str:
     return html
 
 
+# (frontend_dir, static_prefix) -> (mtime of claude.html, rendered shell).
+# The snapshot is 350 KB and goes through five regexes — once per edit of the
+# file, not once per page load.
+_shell_cache: dict[tuple[Path, str], tuple[float, str]] = {}
+
+
 def _render_app_shell(frontend_dir: Path, static_prefix: str) -> str:
+    key = (frontend_dir, static_prefix)
+    mtime = (frontend_dir / "claude.html").stat().st_mtime
+    hit = _shell_cache.get(key)
+    if hit is None or hit[0] != mtime:
+        hit = (mtime, _build_app_shell(frontend_dir, static_prefix))
+        _shell_cache[key] = hit
+    return hit[1]
+
+
+def _build_app_shell(frontend_dir: Path, static_prefix: str) -> str:
     """Build the claude.html-based app shell from the given frontend
     directory, with the functional JS layer injected against the given
     /static-style URL prefix. Shared by / (the live, constantly-redesigned
@@ -526,7 +547,7 @@ def chat(req: ChatRequest):
         return ChatResponse(reply="Ich habe nichts verstanden — sag oder schreib es bitte nochmal.")
     try:
         reply = llm_client.get_reply(req.message, req.history, req.mode)
-    except (llm_client.ModelTooLargeError, llm_client.LmStudioError, mcp_server.ToolServerError) as exc:
+    except (llm_client.LmStudioError, mcp_server.ToolServerError) as exc:
         reply = str(exc)
     except (requests.RequestException, llm_client.ModelError):
         reply = _MODEL_UNREACHABLE
@@ -700,7 +721,7 @@ def chat_stream(req: ChatRequest):
             # against it would just leak one dead entry into
             # llm_client's response-chain store per question, forever.
             chain_conv_id = None if req.ephemeral else conv_id
-            for event in llm_client.stream_reply(req.message, req.history, turn_id=req.turn_id, mode=req.mode, images=req.images, is_speech=req.is_speech, conversation_id=chain_conv_id):
+            for event in llm_client.stream_reply(req.message, req.history, turn_id=req.turn_id, mode=req.mode, images=req.images, is_speech=req.is_speech, conversation_id=chain_conv_id, ephemeral=req.ephemeral):
                 if event["type"] == "sentence":
                     text = _strip_emojis(event["text"])
                     # Leere Sätze (löst ein Reasoning-Modell manchmal am Ende aus)
@@ -765,7 +786,7 @@ def chat_stream(req: ChatRequest):
         except Exception as exc:  # noqa: BLE001 - the frontend must always get a "done"
             # Any exception escaping here used to end the HTTP stream without
             # a "done" event, leaving the chat bubble on "Denkt nach…" forever.
-            if isinstance(exc, (llm_client.ModelTooLargeError, llm_client.LmStudioError, mcp_server.ToolServerError)):
+            if isinstance(exc, (llm_client.LmStudioError, mcp_server.ToolServerError)):
                 # These say what's wrong and what to do about it.
                 fallback = str(exc)
                 print(f"[model] Anfrage fehlgeschlagen: {exc}")
@@ -775,12 +796,6 @@ def chat_stream(req: ChatRequest):
             else:
                 fallback = "Da ist bei mir intern etwas schiefgelaufen, frag bitte nochmal."
                 print(f"[chat] Unerwarteter Fehler: {exc}\n{traceback.format_exc()}")
-            if isinstance(exc, llm_client.ModelTooLargeError):
-                # Structured event alongside the plain text, so the frontend
-                # can attach real "Trotzdem laden" / "Modell entladen"
-                # buttons instead of the user being stuck with an inert
-                # message every single turn until they dig into Settings.
-                yield json.dumps({"type": "hardware_block", "model": config.LM_STUDIO_MODEL}) + "\n"
             audio_b64 = ""
             if req.is_speech:
                 try:
@@ -992,7 +1007,9 @@ def hud_weather(city: str = ""):
             },
             timeout=8,
         ).json()
-    except requests.RequestException as exc:
+    except (requests.RequestException, ValueError, KeyError) as exc:
+        # ValueError: no JSON came back; KeyError: a result without
+        # coordinates — both used to surface as a bare 500.
         raise HTTPException(status_code=502, detail=f"Wetterdienst nicht erreichbar: {exc}")
     data = {
         "city": place.get("name", city), "country": place.get("country_code", ""),
@@ -1314,30 +1331,6 @@ class UnloadModelRequest(BaseModel):
     model: str
 
 
-@app.post("/model/force-load")
-def model_force_load():
-    """"Trotzdem laden" — the user overrides hardware.py's memory guard for
-    the currently configured model. Used from the chat's inline warning card
-    when the check turns out to be wrong for this machine (e.g. the model
-    actually fits fine in practice) or the user accepts the risk anyway.
-
-    Best-effort actively loads the model right now via LM Studio's own v1
-    REST API (POST /api/v1/models/load — works over the network just like
-    every other LM Studio call this app makes), instead of only clearing the
-    guard and hoping the next chat request's just-in-time load succeeds.
-    Failing that call is not fatal: unblock_all() always runs, so the normal
-    JIT-on-next-request path still gets a chance."""
-    try:
-        requests.post(
-            f"{hardware.lm_studio_root()}/api/v1/models/load",
-            json={"model": config.LM_STUDIO_MODEL}, headers=config.lm_studio_headers(), timeout=600,
-        )
-    except requests.RequestException as exc:
-        print(f"[model] /api/v1/models/load für {config.LM_STUDIO_MODEL} fehlgeschlagen ({exc}), JIT-Laden bleibt als Fallback.")
-    hardware.unblock_all()
-    return {"ok": True}
-
-
 @app.get("/model/loaded")
 def model_loaded():
     """Every model LM Studio currently has resident in memory, for the
@@ -1347,11 +1340,8 @@ def model_loaded():
 
 @app.post("/model/unload")
 def model_unload(req: UnloadModelRequest):
-    """Ejects one loaded model to free memory (see hardware.loaded_models_info)
-    and re-opens the hardware guard afterwards, in case freeing it is now
-    enough for the model Jarvis actually wants to load."""
+    """Ejects one loaded model to free memory (see hardware.loaded_models_info)."""
     llm_client.eject_model(req.model)
-    hardware.unblock_all()
     return {"ok": True}
 
 
@@ -1376,6 +1366,10 @@ def update_settings(req: UpdateSettingsRequest):
         stt.reset_model()
     if req.supertonic_voice is not None and req.supertonic_voice.strip():
         tts.reset_supertonic_voice()
+    if req.elevenlabs_api_key is not None:
+        tts.reset_elevenlabs()
+    if req.embedding_model is not None and req.embedding_model.strip():
+        vector_memory.reset_index()
     if req.deepseek_enabled is not None:
         config.set_deepseek_enabled(req.deepseek_enabled)
     return {
@@ -1398,27 +1392,11 @@ def list_models():
     try:
         model_ids = llm_client.list_models()
         caps = llm_client.list_model_capabilities()
-        fit = hardware.check_models(
-            list(dict.fromkeys([*model_ids, config.LM_STUDIO_MODEL])),
-            freeable_ids=[config.LM_STUDIO_MODEL],
-        )
-        # DeepSeek ist eine Cloud-API, kein lokales Modell - hardware.py's
-        # Speicher-Check hat dazu nichts zu sagen, immer "passt".
-        if active_is_deepseek:
-            fit.setdefault(current, {"fits": True, "fits_now": True, "needed_bytes": 0})
         return {
             "models": model_ids,
             "current": current,
             "model_caps": caps,
             "current_caps": caps.get(current, []),
-            "model_fit": fit,
-            "current_fit": (
-                {"fits": True, "message": None} if active_is_deepseek else
-                {
-                    "fits": not hardware.blocked_reason(config.LM_STUDIO_MODEL),
-                    "message": hardware.blocked_reason(config.LM_STUDIO_MODEL),
-                }
-            ),
             # Letzte Status-Meldung ("Modell bereit …") für die Statuszeile
             # im Frontend — der Startup-Hinweis wird über den WebSocket
             # gebroadcastet, bevor der Browser lädt; nachgeliefert wird er
@@ -1449,10 +1427,14 @@ def select_model(req: SelectModelRequest):
     # sonst würde ein weiterhin konfigurierter DeepSeek-Key diese Wahl im
     # nächsten Request wieder überstimmen (siehe _request_targets).
     previous_model = config.LM_STUDIO_MODEL
+    previous_provider = config.ACTIVE_PROVIDER
     if llm_client.is_embedding_model_id(req.model):
         return {"ok": False, "error": "Das ist ein Embedding-Modell, damit kann Jarvis nicht chatten.", "current": previous_model, "model": req.model}
+    # Checked before anything is persisted: a name LM Studio doesn't know
+    # used to land in the .env regardless, and Jarvis then started dead.
+    if req.model not in llm_client.list_models():
+        return {"ok": False, "error": f"{req.model} ist in LM Studio nicht verfügbar.", "current": previous_model, "model": req.model}
     config.set_provider("lmstudio")
-    hardware.unblock_all()
     config.set_model(req.model)
     llm_client._note_active_target(config.LM_STUDIO_BASE_URL, req.model)
 
@@ -1470,6 +1452,12 @@ def select_model(req: SelectModelRequest):
         # background thread so this route returns immediately instead of
         # blocking on however long the model takes to load.
         if not _warm_with_load_progress(req.model):
+            # The new model doesn't load — go back to the one that worked
+            # instead of leaving a dead model persisted for the next start.
+            config.set_model(previous_model)
+            config.set_provider(previous_provider)
+            llm_client._note_active_target(config.LM_STUDIO_BASE_URL, previous_model)
+            panel.push("notice", text=f"{req.model} konnte nicht geladen werden — {previous_model} bleibt aktiv.")
             return
         if previous_model and previous_model != req.model:
             llm_client.eject_model(previous_model)

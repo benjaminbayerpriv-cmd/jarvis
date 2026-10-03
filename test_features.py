@@ -1,10 +1,24 @@
-"""Offline regression checks for Jarvis reliability features."""
+"""Regression checks for Jarvis reliability features.
 
+Not offline: test_youtube_routing sends a real turn through LM Studio and
+every stream_reply call starts the MCP tool server on JARVIS_MCP_PORT — so
+this needs a reachable LM Studio with the configured model and no running
+Jarvis server (`jarvis test` handles the latter). Checked up front, so a
+missing model fails with one clear line instead of a traceback deep inside
+the stream.
+"""
+
+import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from unittest.mock import patch
 
 from backend import browser_agent, llm_client, memory, tools, vector_memory
+
+
+def require_model() -> None:
+    healthy, detail = llm_client.model_health()
+    if not healthy:
+        sys.exit(f"Feature-Tests brauchen ein erreichbares Modell: {detail}")
 
 
 def test_memory_vault():
@@ -69,6 +83,7 @@ def test_browser_without_extension_is_honest():
 
 
 if __name__ == "__main__":
+    require_model()
     test_memory_vault()
     test_invalid_model_stream_is_safe()
     test_youtube_routing()

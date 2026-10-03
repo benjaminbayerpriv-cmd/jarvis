@@ -397,7 +397,13 @@ TOOL_SCHEMAS = [
 # not be able to turn into a destructive command. Everything else is allowed
 # — this is the user's own machine and the point is to be useful.
 _BLOCKED = [
-    r"\brm\s+(-[a-z]*\s+)*-?[a-z]*[rf][a-z]*\s+/(\s|$)",
+    # rm on the root, root/*, a top-level directory, ~ or $HOME — with any
+    # flags in between (the old pattern needed whitespace right after the
+    # "/" and so let "rm -rf /*", "rm -rf ~" and "--no-preserve-root /"
+    # straight through).
+    r"\brm\s+(?:-\S+\s+)*[\"']?(?:/|/\*|/[a-z]+/?\*?|~|~/|~/\*|\$home|\$\{home\}|\$home/\*?)[\"']?(?:\s|$)",
+    r"--no-preserve-root",
+    r"\bfind\s+/\s.*-delete\b",
     r"\bmkfs\b",
     r"\bdd\s+.*of=/dev/",
     r":\(\)\s*\{.*\}\s*;\s*:",          # fork bomb

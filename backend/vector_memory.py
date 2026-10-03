@@ -37,6 +37,10 @@ _lock = threading.Lock()
 # Populated lazily from the index file's own entries — avoids re-embedding
 # unchanged lines every time reindex_all() runs (e.g. on every startup).
 _cache: dict | None = None
+# Bumped on every change to _cache, so the similarity matrix below is only
+# rebuilt when the entries actually changed.
+_version = 0
+_matrix: tuple[int, list[dict], np.ndarray] | None = None
 
 
 _load_checked_at = 0.0
@@ -106,26 +110,49 @@ def embed(text: str, task: str = "document") -> list[float] | None:
 
 
 def _load() -> dict:
-    global _cache
+    """The entries, keyed by line id. The file records which embedding
+    model produced the vectors; an index from a different model (or the
+    old, unversioned format) is dropped and rebuilt — vectors of two
+    models can't be compared, and mixing them made every search raise a
+    shape error that silently turned semantic search off for good."""
+    global _cache, _version
     if _cache is not None:
         return _cache
+    entries: dict = {}
     if INDEX_FILE.exists():
         try:
-            _cache = json.loads(INDEX_FILE.read_text(encoding="utf-8"))
+            data = json.loads(INDEX_FILE.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
-            _cache = {}
-    else:
-        _cache = {}
+            data = {}
+        if data.get("model") == config.EMBEDDING_MODEL:
+            entries = data.get("entries") or {}
+        else:
+            print(f"[memory] Suchindex stammt nicht von {config.EMBEDDING_MODEL}, wird neu aufgebaut.")
+    _cache = entries
+    _version += 1
     return _cache
 
 
 def _save() -> None:
+    global _version
+    _version += 1
     INDEX_FILE.parent.mkdir(parents=True, exist_ok=True)
     # Temp file + rename: a truncated index loads as {} and every embedding
     # had to be recomputed.
     tmp = INDEX_FILE.with_name(INDEX_FILE.name + ".tmp")
-    tmp.write_text(json.dumps(_cache, ensure_ascii=False), encoding="utf-8")
+    tmp.write_text(json.dumps({"model": config.EMBEDDING_MODEL, "entries": _cache}, ensure_ascii=False), encoding="utf-8")
     os.replace(tmp, INDEX_FILE)
+
+
+def reset_index() -> None:
+    """After the embedding model changed in Settings: forget the loaded
+    index (the next _load() sees the model mismatch and starts empty) and
+    rebuild it in the background with the new model."""
+    global _cache, _load_checked_at
+    with _lock:
+        _cache = None
+        _load_checked_at = 0.0
+    threading.Thread(target=reindex_all, daemon=True).start()
 
 
 def line_id(source: str, text: str) -> str:
@@ -224,6 +251,18 @@ def reindex_all() -> None:
             print(f"[memory] {len(stale)} veraltete Zeile(n) aus dem Suchindex entfernt.")
 
 
+def _similarity_matrix() -> tuple[list[dict], np.ndarray]:
+    """All vectors stacked once per index version — building a fresh array
+    per entry on every chat turn was the cost that grew with the vault."""
+    global _matrix
+    with _lock:
+        cache = _load()
+        if _matrix is None or _matrix[0] != _version:
+            entries = list(cache.values())
+            _matrix = (_version, entries, np.array([e["vector"] for e in entries], dtype=float))
+        return _matrix[1], _matrix[2]
+
+
 def semantic_context_for(query: str, limit: int = 4) -> str | None:
     """Top `limit` semantically similar vault lines for `query`, formatted
     like memory.context_for()'s keyword matches. Returns None (not "") when
@@ -234,10 +273,8 @@ def semantic_context_for(query: str, limit: int = 4) -> str | None:
     # Prompt-Cache des Chat-Modells verdrängen (gemessen: danach ~5-7s statt
     # ~0,2s bis zum ersten Text), bei jeder einzelnen Nachricht.
     with _lock:
-        # A snapshot: index_entry() may add to the dict from another thread
-        # while the loop below iterates ("dictionary changed size").
-        entries = list(_load().values())
-    if not entries:
+        has_entries = bool(_load())
+    if not has_entries:
         # None, not "": an empty index also happens when the embedding model
         # was unavailable while notes were written — "" would tell
         # memory.context_for "searched, nothing relevant" and skip its
@@ -253,12 +290,15 @@ def semantic_context_for(query: str, limit: int = 4) -> str | None:
     if query_norm == 0:
         return ""
 
-    scored = []
-    for entry in entries:
-        vec = np.array(entry["vector"])
-        denom = query_norm * np.linalg.norm(vec)
-        similarity = float(np.dot(query_arr, vec) / denom) if denom else 0.0
-        scored.append((similarity, entry))
+    ordered, matrix = _similarity_matrix()
+    if not ordered:
+        return None
+    if matrix.shape[1] != query_arr.shape[0]:
+        raise ValueError(f"Embedding-Dimension {query_arr.shape[0]} passt nicht zum Index ({matrix.shape[1]})")
+    norms = np.linalg.norm(matrix, axis=1) * query_norm
+    with np.errstate(divide="ignore", invalid="ignore"):
+        similarities = np.where(norms > 0, matrix @ query_arr / norms, 0.0)
+    scored = list(zip(similarities.tolist(), ordered))
 
     # No absolute cutoff: measured live, this (small, local) embedding
     # model puts even unrelated German sentences around 0.55-0.65 cosine
