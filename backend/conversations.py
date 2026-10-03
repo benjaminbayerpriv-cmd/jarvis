@@ -144,6 +144,37 @@ def delete(conv_id: str, base_dir: Path | None = None) -> bool:
         return True
 
 
+# path -> (mtime, sidebar entry or None for an unreadable/empty file). The
+# sidebar refreshes twice per turn and used to parse every conversation's
+# full turn list each time; only files that changed are re-read now.
+_meta_cache: dict[Path, tuple[float, dict | None]] = {}
+
+
+def _meta(path: Path) -> dict | None:
+    try:
+        mtime = path.stat().st_mtime
+    except OSError:
+        return None
+    hit = _meta_cache.get(path)
+    if hit is not None and hit[0] == mtime:
+        return hit[1]
+    entry: dict | None = None
+    try:
+        conv = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        conv = None
+    if conv and conv.get("turns"):
+        entry = {
+            "id": conv.get("id", path.stem),
+            "title": conv.get("title"),
+            "updated_at": conv.get("updated_at", conv.get("created_at", "")),
+            "project_id": conv.get("project_id"),
+            "pinned": bool(conv.get("pinned", False)),
+        }
+    _meta_cache[path] = (mtime, entry)
+    return entry
+
+
 def list_conversations(base_dir: Path | None = None) -> list[dict]:
     """Metadata only (id/title/updated_at), newest first — the sidebar
     never needs the full turn list just to render its entries. Pass a
@@ -152,22 +183,6 @@ def list_conversations(base_dir: Path | None = None) -> list[dict]:
     d = base_dir or DIR
     if not d.exists():
         return []
-    out = []
-    for path in d.glob("*.json"):
-        try:
-            conv = json.loads(path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            continue
-        if not conv.get("turns"):
-            continue
-        out.append(
-            {
-                "id": conv.get("id", path.stem),
-                "title": conv.get("title"),
-                "updated_at": conv.get("updated_at", conv.get("created_at", "")),
-                "project_id": conv.get("project_id"),
-                "pinned": bool(conv.get("pinned", False)),
-            }
-        )
+    out = [entry for path in d.glob("*.json") if (entry := _meta(path)) is not None]
     out.sort(key=lambda c: c["updated_at"], reverse=True)
     return out

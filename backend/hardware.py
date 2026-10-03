@@ -1,7 +1,5 @@
-"""Whether an LM Studio model fits into this PC's memory — checked before
-loading it, because a model bigger than RAM + VRAM doesn't fail cleanly: it
-pushes Windows into heavy swapping or takes LM Studio (and sometimes the
-whole machine) down with it."""
+"""LM Studio model inventory: sizes and loaded instances via its REST API,
+plus the `lms` CLI lookup used as the unload fallback."""
 from __future__ import annotations
 
 import json
@@ -20,8 +18,6 @@ _NO_WINDOW = 0x08000000 if sys.platform.startswith("win") else 0
 
 _sizes_cache: tuple[float, dict[str, int]] = (0.0, {})
 _SIZES_TTL = 60.0
-
-_blocked: dict[str, str] = {}
 
 
 def find_lms_cli() -> str | None:
@@ -49,20 +45,6 @@ def lm_studio_root() -> str:
     return base[: base.rfind("/v1")].rstrip("/") if base.endswith("/v1") else base
 
 
-_LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1", "0.0.0.0"}
-
-
-def is_remote_lm_studio() -> bool:
-    """Whether LM Studio's configured endpoint points at a different machine
-    than the one Jarvis's own backend runs on. The model-size API works
-    remotely; RAM-/VRAM-based checking was removed entirely, so this flag is
-    informational only nowadays."""
-    try:
-        from urllib.parse import urlparse
-        host = urlparse(lm_studio_root()).hostname or ""
-    except ValueError:
-        return False
-    return host.lower() not in _LOCAL_HOSTS
 
 
 def _v1_models() -> list[dict] | None:
@@ -175,44 +157,3 @@ def loaded_models_info() -> list[dict]:
         }
         for e in _loaded_models_raw()
     ]
-
-
-def check_models(model_ids: list[str], freeable_ids: list[str] | tuple = ()) -> dict[str, dict]:
-    """Per model: does it fit into memory right now?
-
-    `freeable_ids` are models that would be unloaded to make room (the one
-    being switched away from) — their memory counts as available.
-
-    Each verdict carries fits, fits_now, needed_bytes and a message — but
-    since RAM-/VRAM-based blocking was removed by request, fits and
-    fits_now are always True: LM Studio pages excess model memory into
-    system RAM instead of failing, and it manages unloading the previous
-    model itself. needed_bytes is the raw file size, purely informational
-    (machines could be remote, so it's never compared against anything).
-    """
-    sizes = _model_sizes()
-    _ = freeable_ids
-    return {
-        model_id: {
-            "fits": True,
-            "fits_now": True,
-            "needed_bytes": sizes.get(_model_key(model_id), 0),
-        }
-        for model_id in model_ids
-    }
-
-
-def check_model(model_id: str, freeable_ids: list[str] | tuple = ()) -> dict:
-    return check_models([model_id], freeable_ids)[model_id]
-
-
-def block(model_id: str, message: str) -> None:
-    _blocked[model_id] = message
-
-
-def unblock_all() -> None:
-    _blocked.clear()
-
-
-def blocked_reason(model_id: str) -> str | None:
-    return _blocked.get(model_id)

@@ -425,6 +425,13 @@ def _elevenlabs(text: str) -> bytes:
     return resp.content
 
 
+def reset_elevenlabs() -> None:
+    """Lifts the quota/auth block when the key changes in Settings — it used
+    to stay set until the next restart, so a fresh key never got tried."""
+    global _elevenlabs_blocked
+    _elevenlabs_blocked = False
+
+
 def reset_supertonic_voice() -> None:
     """Verwirft den geladenen Voice-Style, damit _get_supertonic() beim
     nächsten Aufruf config.SUPERTONIC_VOICE frisch einliest — für die

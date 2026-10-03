@@ -635,7 +635,8 @@
   }
 
   function playClip(blob) {
-    const audio = new Audio(URL.createObjectURL(blob));
+    const url = URL.createObjectURL(blob);
+    const audio = new Audio(url);
     return new Promise((resolve) => {
       let done = false;
       let src = null;
@@ -646,7 +647,7 @@
       // ein nach einer bestimmten Wortzahl "abgehackter" Sprachmodus klingt.
       // War vorher ein fixer 4s-Timer — jeder Satz mit spürbar mehr als
       // ~15 Wörtern braucht bei normalem Sprechtempo schon länger als das.
-      const finish = () => { if (done) return; done = true; clearTimeout(timer); try { audio.pause(); } catch (e) {} teardownMeter(audio, src); resolve(); };
+      const finish = () => { if (done) return; done = true; clearTimeout(timer); try { audio.pause(); } catch (e) {} teardownMeter(audio, src); URL.revokeObjectURL(url); resolve(); };
       let timer = setTimeout(finish, 4000);
       // Sobald die echte Länge bekannt ist, den Timer daran ausrichten statt
       // an einer geratenen Konstante — großzügiger Puffer für Lade-/
@@ -878,7 +879,6 @@
   // Sprachmodus + VAD + Diktat + Web-Speech-Erkennung
   let speechMode = false, dictating = false, micReady = false, micStream = null, muted = false;
   let vadAnalyser = null, vadData = null, vadNoiseFloor = 0.01, vadAbove = 0;
-  const SpeechRecognitionImpl = window.SpeechRecognition || window.webkitSpeechRecognition;
   // IMMER lokales Whisper (Backend /stt, siehe backend/stt.py), nie Chromes
   // eingebaute Web-Speech-Erkennung — die schickt Audio an Googles Server
   // und ist für Deutsch gerade bei technischen/englischen Begriffen
@@ -886,11 +886,6 @@
   // Live beobachtet: "Qwen3.8 27B" wurde als "Günstigste GPU für Gewinn
   // 3.8.27b" erkannt — kein Einzelfall, sondern genau das Muster aus der
   // Beschwerde (falsche Wörter, neu zusammengesetzte Wörter, Unsinn).
-  // backend/stt.py wurde ursprünglich exakt gegen dieses Problem gebaut,
-  // aber vorher nur als Rückfallebene genutzt, wenn SpeechRecognitionImpl
-  // fehlte (gepacktes Desktop-Fenster, Safari, Firefox) — in Chrome selbst
-  // lief also weiterhin die unzuverlässige Variante.
-  const useLocalWhisper = true;
   let pcmNode = null, pcmSampleRate = 48000, pcmRing = [], utterancePCM = null, utteranceStartedAt = 0, fallbackSilenceStreak = 0;
   // Getrennt von RECORD_SILENCE_SUSTAIN (Sprachmodus, siehe unten): Diktieren
   // landet nur im Textfeld, wo eine zu früh abgeschnittene Äußerung bloß ein
@@ -904,7 +899,6 @@
   // (~0,8s) ist ein gängiger Wert für Sprachassistenten.
   const DICTATE_SILENCE_SUSTAIN = 10;
   const PCM_BUFFER_SIZE = 4096, PREROLL_MS = 1500, RECORD_SILENCE_SUSTAIN = 28, RECORD_MIN_MS = 300;
-  let recognition = null, recognizing = false;
 
   // Graues Punktnetz (Sprachmodus)
   let orbCtx = null, orbCanvas = null, orbLevel = 0, orbRaf = 0, orbVisible = false;
@@ -1775,6 +1769,7 @@
     if (!el) return;
     el.innerHTML = '';
     history = [];
+    historyEpoch++;
     let turns = [];
     if (id) {
       try {
@@ -2002,6 +1997,7 @@
     currentConversationId = activeMode + '-' + (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2));
     localStorage.setItem(modeKey(activeMode), currentConversationId);
     history = [];
+    historyEpoch++;
     clearThreadUI();
     restoreComposerDraft(currentConversationId);
     loadConversationList();
@@ -3056,87 +3052,6 @@
     }
   }
 
-  // Karte mit "Trotzdem laden" + "anderes Modell entladen" unter einer
-  // hardware_block-Antwort (siehe /chat/stream) - der Speicher-Check kann
-  // sich irren (Live beobachtet: Modell war längst geladen, der Block war
-  // nur ein Startzeit-Artefakt) oder der Nutzer nimmt das Risiko bewusst in
-  // Kauf. Ein Klick behebt die Ursache und wiederholt automatisch dieselbe
-  // Nachricht, statt sie erneut eintippen zu müssen.
-  async function renderHardwareBlockActions(container, modelId, retryText) {
-    if (!container || container.querySelector('.js-hwblock')) return;
-    const box = document.createElement('div');
-    box.className = 'js-hwblock';
-    box.style.cssText = `margin-top:10px;padding:10px 12px;border:1px solid ${C.border};border-radius:10px;background:${C.bgSurface3};display:flex;flex-direction:column;gap:8px;`;
-
-    const retry = () => { box.remove(); if (retryText) sendMessage(retryText); };
-
-    const topRow = document.createElement('div');
-    topRow.style.cssText = 'display:flex;gap:8px;flex-wrap:wrap;';
-    const forceBtn = document.createElement('button');
-    forceBtn.type = 'button';
-    forceBtn.textContent = 'Trotzdem laden';
-    forceBtn.style.cssText = `padding:7px 12px;border:none;border-radius:8px;background:${C.accent};color:#fff;font-size:12px;font-weight:600;cursor:pointer;font-family:${C.font};`;
-    forceBtn.addEventListener('click', async () => {
-      forceBtn.disabled = true;
-      forceBtn.textContent = 'Lade…';
-      try {
-        await fetch('/model/force-load', { method: 'POST' });
-        retry();
-      } catch (e) {
-        forceBtn.disabled = false;
-        forceBtn.textContent = 'Trotzdem laden';
-      }
-    });
-    topRow.appendChild(forceBtn);
-    box.appendChild(topRow);
-
-    const listEl = document.createElement('div');
-    listEl.style.cssText = 'display:flex;flex-direction:column;gap:6px;';
-    box.appendChild(listEl);
-    container.appendChild(box);
-
-    try {
-      const r = await fetch('/model/loaded');
-      const j = await r.json();
-      const others = (j.models || []).filter((m) => !m.is_current);
-      if (others.length) {
-        const label = document.createElement('div');
-        label.style.cssText = `font-size:12px;color:${C.textSoft};`;
-        label.textContent = 'Oder ein anderes geladenes Modell entladen, um Platz zu schaffen:';
-        listEl.appendChild(label);
-        others.forEach((m) => {
-          const modelRow = document.createElement('div');
-          modelRow.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:8px;';
-          const sizeGb = m.size_bytes ? (m.size_bytes / (1024 ** 3)).toFixed(1).replace('.', ',') + ' GB' : '';
-          const lbl = document.createElement('span');
-          lbl.style.cssText = `font-size:12px;color:${C.text};`;
-          lbl.textContent = m.id + (sizeGb ? ` (${sizeGb})` : '');
-          const unloadBtn = document.createElement('button');
-          unloadBtn.type = 'button';
-          unloadBtn.textContent = 'Entladen';
-          unloadBtn.style.cssText = `padding:5px 10px;border:1px solid ${C.border};border-radius:7px;background:none;color:${C.textSoft};font-size:11px;cursor:pointer;font-family:${C.font};`;
-          unloadBtn.addEventListener('click', async () => {
-            unloadBtn.disabled = true;
-            unloadBtn.textContent = 'Entlade…';
-            try {
-              await fetch('/model/unload', {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ model: m.id }),
-              });
-              retry();
-            } catch (e) {
-              unloadBtn.disabled = false;
-              unloadBtn.textContent = 'Entladen';
-            }
-          });
-          modelRow.appendChild(lbl);
-          modelRow.appendChild(unloadBtn);
-          listEl.appendChild(modelRow);
-        });
-      }
-    } catch (e) {}
-  }
-
   async function sendMessage(text) {
     text = (text || '').trim();
     if ((!text && !pendingImages.length) || busy || !modelHealthy) return;
@@ -3218,8 +3133,6 @@
             if (speechMode) enqueueClip(base64ToBlob(evt.audio, evt.mime || 'audio/mpeg'));
           } else if (evt.type === 'done') {
             fullText = evt.full_text || '';
-          } else if (evt.type === 'hardware_block') {
-            renderHardwareBlockActions(said.parentElement, evt.model, outgoingText);
           } else if (evt.type === 'status') {
             // Live-Status statt starrem "Denkt nach…" (siehe backend/
             // llm_client._stream_reply_impl für die Sendestellen). Nur
@@ -3317,10 +3230,19 @@
   // bei Fehlschlag/zu wenig Verlauf), damit Aufrufer (z.B. der /compact-
   // Befehl) dem Nutzer sichtbar Bescheid geben können.
   const COMPACT_KEEP_VERBATIM = 6; // letzte 3 Turns bleiben wörtlich erhalten
+  // Während /summarize läuft, darf sich die Historie ändern: ein weiterer Turn
+  // wird angehängt (sendMessage) oder eine andere Unterhaltung geladen
+  // (renderConversation/startNewConversation). Früher wurde am Ende ein
+  // vorher kopierter "rest" zurückgeschrieben — ein inzwischen angehängter
+  // Turn war damit weg. Jetzt: nur die alten Einträge aus der AKTUELLEN
+  // Historie ersetzen, und bei einem Wechsel der Unterhaltung gar nichts.
+  let historyEpoch = 0;
+  let compacting = false;
   async function compactHistory() {
-    if (history.length <= COMPACT_KEEP_VERBATIM) return '';
+    if (compacting || history.length <= COMPACT_KEEP_VERBATIM) return '';
+    compacting = true;
+    const epoch = historyEpoch;
     const stale = history.slice(0, history.length - COMPACT_KEEP_VERBATIM);
-    const rest = history.slice(stale.length);
     let summary = '';
     try {
       const r = await fetch('/summarize', {
@@ -3329,6 +3251,9 @@
       });
       if (r.ok) summary = ((await r.json()).summary || '').trim();
     } catch (e) {}
+    compacting = false;
+    if (epoch !== historyEpoch) return '';
+    const rest = history.slice(stale.length);
     history = summary
       ? [{ role: 'system', content: `Zusammenfassung des bisherigen Gesprächs: ${summary}` }, ...rest]
       : rest;  // Zusammenfassen fehlgeschlagen — lieber die alten Turns verlieren als den Chat daran blockieren
@@ -3754,27 +3679,24 @@
     while ((n = walker.nextNode())) textNodes.push(n);
     let idx = 0;
     for (const node of textNodes) {
+      const chars = Array.from(node.nodeValue);
+      // Schon gezeigte Zeichen bleiben ein einziger Text-Knoten — vorher
+      // bekam jedes davon bei JEDEM Stream-Update einen eigenen Knoten, bei
+      // einer langen Antwort quadratisch viel DOM-Arbeit pro Token.
+      if (idx + chars.length <= prevLen) { idx += chars.length; continue; }
       const frag = document.createDocumentFragment();
-      for (const ch of node.nodeValue) {
-        if (idx >= prevLen) {
-          const span = document.createElement('span');
-          span.className = 'js-char-new';
-          // KEINE Staffelung mehr — alle neu hinzugekommenen Zeichen eines
-          // Updates blenden gleichzeitig ein, nicht nacheinander (Nutzer-
-          // Feedback: "soll auf mehrere Buchstaben gleichzeitig sein
-          // können"). Nebeneffekt, der auch den eigentlichen Bug behebt:
-          // jedes Stream-Update baut das komplette innerHTML neu auf (siehe
-          // setAssistantText), was jede noch laufende Animation sofort
-          // abwürgt — eine Verzögerung ließ spätere Zeichen eines Batches
-          // regelmäßig gar nicht erst zum Start kommen, bevor der nächste
-          // Rebuild sie schon wieder ersetzt hatte.
-          span.textContent = ch;
-          frag.appendChild(span);
-        } else {
-          frag.appendChild(document.createTextNode(ch));
-        }
-        idx++;
+      const keep = Math.max(0, prevLen - idx);
+      if (keep) frag.appendChild(document.createTextNode(chars.slice(0, keep).join('')));
+      for (const ch of chars.slice(keep)) {
+        const span = document.createElement('span');
+        span.className = 'js-char-new';
+        // KEINE Staffelung — alle neu hinzugekommenen Zeichen eines Updates
+        // blenden gleichzeitig ein (Nutzer-Feedback: "soll auf mehrere
+        // Buchstaben gleichzeitig sein können").
+        span.textContent = ch;
+        frag.appendChild(span);
       }
+      idx += chars.length;
       node.parentNode.replaceChild(frag, node);
     }
     return idx;
@@ -3787,17 +3709,26 @@
     el.dataset.revealedLen = String(wrapCharsForReveal(el, prevLen));
   }
 
+  // Nach einem Abbruch (Backend-Neustart, Netzwerkruckler) neu verbinden —
+  // vorher blieb der Kanal für immer tot, und ein opencode-Auftrag, der
+  // genau über diesen Kanal ins Terminal geht, kam dann still nie an.
+  let panelReconnectTimer = null;
   function openPanelSocket() {
     if (panelSock) return;
+    if (panelReconnectTimer) { clearTimeout(panelReconnectTimer); panelReconnectTimer = null; }
     try {
       panelSock = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws');
-    } catch (e) { return; }
+    } catch (e) { panelSock = null; schedulePanelReconnect(); return; }
     panelSock.onmessage = (ev) => {
       let msg; try { msg = JSON.parse(ev.data); } catch (e) { return; }
       if (msg && msg.type === 'panel' && msg.item) renderPanelItem(msg.item);
     };
-    panelSock.onclose = () => { panelSock = null; };
+    panelSock.onclose = () => { panelSock = null; schedulePanelReconnect(); };
     panelSock.onerror = () => { try { panelSock.close(); } catch (e) {} };
+  }
+  function schedulePanelReconnect() {
+    if (panelReconnectTimer) return;
+    panelReconnectTimer = setTimeout(() => { panelReconnectTimer = null; openPanelSocket(); }, 2000);
   }
 
   function progressHost() {
@@ -4031,12 +3962,9 @@
   // llm_client.list_model_capabilities) — modelCapsMap merkt sich das pro
   // Modell-Id, currentModelSupportsVision spiegelt das gerade aktive.
   let modelCapsMap = {};
-  let modelFitMap = {};
   let currentModelSupportsVision = false;
-  let startupFitWarningShown = false;
   function applyModelCaps(j) {
     modelCapsMap = j.model_caps || {};
-    modelFitMap = j.model_fit || {};
     currentModelSupportsVision = (j.current_caps || []).includes('vision');
     if (j.notice) {
       // Backend-Statusmeldung (z. B. "Modell bereit") in die Statuszeile
@@ -4046,20 +3974,12 @@
         noticeStripEl.style.display = 'flex';
       }
     }
-    if (!startupFitWarningShown && j.current_fit && j.current_fit.fits === false && j.current_fit.message) {
-      startupFitWarningShown = true;
-      showNotice(j.current_fit.message);
-    }
   }
-  function modelTooLarge(id) {
-    const f = modelFitMap[id];
-    return f && f.fits === false ? (f.message || 'Dieses Modell ist zu groß für deinen PC.') : '';
-  }
-  async function requestModelSwitch(id, force) {
+  async function requestModelSwitch(id) {
     setModelLabel(id);
     selectModelCaps(id);
     try {
-      const r = await fetch('/models/select', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: id, force: !!force }) });
+      const r = await fetch('/models/select', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: id }) });
       const j = await r.json();
       if (j && j.ok === false) {
         showModelFitBlockedNotice(j.model || id, j.error || 'Das Modell konnte nicht geladen werden.');
@@ -4070,21 +3990,17 @@
     } catch (e) {}
   }
 
-  // Wie renderHardwareBlockActions (siehe sendMessage) für den Fall, dass die
-  // Blockade nicht mitten im Chat, sondern beim Umschalten im Modell-Menü
-  // auftritt — showNotice() allein war nur ein nach 12s verschwindender
-  // Hinweistext ohne jede Handlungsmöglichkeit. Bleibt stehen, bis der
-  // Nutzer sie schließt oder eine der Aktionen erfolgreich war.
+  // Ablehnung aus /models/select (Embedding-Modell, kein DeepSeek-Key,
+  // Modell in LM Studio unbekannt): showNotice() allein war nur ein nach 12s
+  // verschwindender Hinweistext — diese Karte bleibt stehen, bis der Nutzer
+  // sie schließt.
   let modelFitNoticeEl = null;
-  async function showModelFitBlockedNotice(modelId, message) {
+  function showModelFitBlockedNotice(modelId, message) {
     if (modelFitNoticeEl) modelFitNoticeEl.remove();
     const box = document.createElement('div');
     modelFitNoticeEl = box;
     box.id = 'jsModelFitNotice';
-    box.style.cssText = `position:fixed;top:16px;left:50%;transform:translateX(-50%);z-index:10000;max-width:min(520px,calc(100vw - 32px));padding:12px 14px;border:1px solid ${C.border};border-left:3px solid #e5534b;border-radius:10px;background:${C.bgSurface3};color:${C.text};font-size:13.5px;line-height:1.45;box-shadow:0 6px 24px rgba(0,0,0,.25);display:flex;flex-direction:column;gap:8px;`;
-
-    const msgRow = document.createElement('div');
-    msgRow.style.cssText = 'display:flex;gap:10px;align-items:flex-start;';
+    box.style.cssText = `position:fixed;top:16px;left:50%;transform:translateX(-50%);z-index:10000;max-width:min(520px,calc(100vw - 32px));padding:12px 14px;border:1px solid ${C.border};border-left:3px solid #e5534b;border-radius:10px;background:${C.bgSurface3};color:${C.text};font-size:13.5px;line-height:1.45;box-shadow:0 6px 24px rgba(0,0,0,.25);display:flex;gap:10px;align-items:flex-start;`;
     const msgText = document.createElement('div');
     msgText.style.cssText = 'flex:1;';
     msgText.textContent = message;
@@ -4093,74 +4009,10 @@
     closeBtn.textContent = '×';
     closeBtn.title = 'Schließen';
     closeBtn.style.cssText = `flex:0 0 auto;background:none;border:none;color:${C.textSoft};font-size:16px;line-height:1;cursor:pointer;padding:0;`;
-    closeBtn.addEventListener('click', () => box.remove());
-    msgRow.appendChild(msgText);
-    msgRow.appendChild(closeBtn);
-    box.appendChild(msgRow);
-
-    const remove = () => { if (modelFitNoticeEl === box) modelFitNoticeEl = null; box.remove(); };
-
-    const topRow = document.createElement('div');
-    topRow.style.cssText = 'display:flex;gap:8px;flex-wrap:wrap;';
-    const forceBtn = document.createElement('button');
-    forceBtn.type = 'button';
-    forceBtn.textContent = 'Trotzdem laden';
-    forceBtn.style.cssText = `padding:7px 12px;border:none;border-radius:8px;background:${C.accent};color:#fff;font-size:12px;font-weight:600;cursor:pointer;font-family:${C.font};`;
-    forceBtn.addEventListener('click', async () => {
-      forceBtn.disabled = true;
-      forceBtn.textContent = 'Lade…';
-      remove();
-      await requestModelSwitch(modelId, true);
-    });
-    topRow.appendChild(forceBtn);
-    box.appendChild(topRow);
-
-    const listEl = document.createElement('div');
-    listEl.style.cssText = 'display:flex;flex-direction:column;gap:6px;';
-    box.appendChild(listEl);
+    closeBtn.addEventListener('click', () => { if (modelFitNoticeEl === box) modelFitNoticeEl = null; box.remove(); });
+    box.appendChild(msgText);
+    box.appendChild(closeBtn);
     document.body.appendChild(box);
-
-    try {
-      const r = await fetch('/model/loaded');
-      const j = await r.json();
-      const others = (j.models || []).filter((m) => !m.is_current);
-      if (others.length) {
-        const label = document.createElement('div');
-        label.style.cssText = `font-size:12px;color:${C.textSoft};`;
-        label.textContent = 'Oder ein anderes geladenes Modell entladen, um Platz zu schaffen:';
-        listEl.appendChild(label);
-        others.forEach((m) => {
-          const modelRow = document.createElement('div');
-          modelRow.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:8px;';
-          const sizeGb = m.size_bytes ? (m.size_bytes / (1024 ** 3)).toFixed(1).replace('.', ',') + ' GB' : '';
-          const lbl = document.createElement('span');
-          lbl.style.cssText = `font-size:12px;color:${C.text};`;
-          lbl.textContent = m.id + (sizeGb ? ` (${sizeGb})` : '');
-          const unloadBtn = document.createElement('button');
-          unloadBtn.type = 'button';
-          unloadBtn.textContent = 'Entladen';
-          unloadBtn.style.cssText = `padding:5px 10px;border:1px solid ${C.border};border-radius:7px;background:none;color:${C.textSoft};font-size:11px;cursor:pointer;font-family:${C.font};`;
-          unloadBtn.addEventListener('click', async () => {
-            unloadBtn.disabled = true;
-            unloadBtn.textContent = 'Entlade…';
-            try {
-              await fetch('/model/unload', {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ model: m.id }),
-              });
-              remove();
-              await requestModelSwitch(modelId, false);
-            } catch (e) {
-              unloadBtn.disabled = false;
-              unloadBtn.textContent = 'Entladen';
-            }
-          });
-          modelRow.appendChild(lbl);
-          modelRow.appendChild(unloadBtn);
-          listEl.appendChild(modelRow);
-        });
-      }
-    } catch (e) {}
   }
   let noticeEl = null;
   let noticeTimer = null;
@@ -4228,13 +4080,6 @@
     clearTimeout(noticeTimer);
     noticeTimer = setTimeout(() => { if (noticeEl) noticeEl.style.display = 'none'; }, 12000);
   }
-  function markTooLarge(btn, subText) {
-    btn.style.opacity = '0.5';
-    const warnEl = document.createElement('span');
-    warnEl.textContent = subText;
-    warnEl.style.cssText = `font-size:11.5px;font-weight:400;color:#e5534b;`;
-    btn.appendChild(warnEl);
-  }
   function selectModelCaps(id) {
     currentModelSupportsVision = (modelCapsMap[id] || []).includes('vision');
   }
@@ -4284,14 +4129,11 @@
         subEl.style.cssText = `font-size:11.5px;font-weight:400;color:${C.textDim};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;`;
         b.appendChild(subEl);
       }
-      const tooLarge = modelTooLarge(m.id);
-      if (tooLarge) markTooLarge(b, 'Zu groß für diesen PC');
       row.onmouseenter = () => { row.style.background = C.bgHover; };
       row.onmouseleave = () => { row.style.background = 'none'; };
       b.addEventListener('click', async (e) => {
         e.stopPropagation();
         modelMenuEl.style.display = 'none';
-        if (tooLarge) { showNotice(tooLarge); return; }
         await requestModelSwitch(m.id);
       });
       row.appendChild(b);
@@ -4682,14 +4524,9 @@
             checkWrap.innerHTML = SETTINGS_CHECK_SVG;
             b.appendChild(checkWrap);
           }
-          const tooLarge = modelTooLarge(m);
-          if (tooLarge) markTooLarge(b, 'Zu groß für diesen PC');
           b.onmouseenter = () => { b.style.background = C.bgHover; };
           b.onmouseleave = () => { b.style.background = baseBg; };
-          b.addEventListener('click', () => {
-            if (tooLarge) { showNotice(tooLarge); return; }
-            requestModelSwitch(m);
-          });
+          b.addEventListener('click', () => { requestModelSwitch(m); });
           settingsModelsEl.appendChild(b);
         }
       };
@@ -4723,7 +4560,7 @@
     micStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
     micReady = true;
     setupVad(micStream);
-    if (useLocalWhisper) startContinuousRecording();
+    startContinuousRecording();
     return micStream;
   }
   function setupVad(stream) {
@@ -4976,95 +4813,12 @@
     }
   }
 
-  // ------------------------------------------- Web-Speech-Erkennung
-  // Zurück zur alten, eingebauten Browser-Erkennung statt lokalem Whisper:
-  // Chrome transkribiert selbst (de-DE, kontinuierlich, Zwischenergebnisse),
-  // das Backend /stt wird nicht mehr angerufen. Chrome stoppt die Erkennung
-  // nach Stille von selbst — onend startet sie neu, solange wir noch zuhören
-  // sollen (Sprachmodus/Diktat aktiv, nicht stumm, nicht mitten in einer
-  // Antwort).
-  function initRecognition() {
-    // Kein Chrome/Chromium: startListening()/stopListening() unten fallen in
-    // diesem Fall auf lokales Whisper zurück (siehe fallbackVadTick/
-    // sendUtterance oben) statt hier einfach nichts zu tun.
-    if (!SpeechRecognitionImpl) return null;
-    const rec = new SpeechRecognitionImpl();
-    rec.lang = 'de-DE';
-    rec.continuous = true;
-    rec.interimResults = true;
-
-    rec.onstart = () => { recognizing = true; if (speechMode && !busy) setSpeechStatus('Hören'); };
-
-    rec.onresult = (event) => {
-      let text = '';
-      for (let i = event.resultIndex; i < event.results.length; i++) text += event.results[i][0].transcript;
-      text = text.trim();
-      if (!text) return;
-      const final = event.results[event.results.length - 1].isFinal;
-
-      if (speechMode) {
-        noteSpeechWords(text);
-        if (final) {
-          if (handleSpeechUtterance(text)) return;
-          setSpeechStatus('Denke');
-          sendMessage(text);
-        }
-      } else if (dictating && composerInput) {
-        // Diktat: Zwischenergebnisse live ins Eingabefeld, aufbauend auf dem
-        // gesicherten Stand (dictBase); abgeschlossene Segmente rücken auf.
-        if (dictBase === null) dictBase = composerInput ? composerInput.innerText.trim() : '';
-        // Chrome feuert bei kurzen Äußerungen manchmal ein finales Ergebnis
-        // zweimal (beobachtet live: "öffne Spotify" landete doppelt im
-        // Textfeld) — z.B. einmal regulär und nochmal beim automatischen
-        // Neustart nach onend (s.u.). Ein finaler Satz, der schon am Ende
-        // von dictBase steht, wird deshalb nicht nochmal angehängt.
-        if (final && dictBase && dictBase.toLowerCase().endsWith(text.toLowerCase())) return;
-        const composed = dictBase ? dictBase + ' ' + text : text;
-        composerInput.innerText = composed;
-        composerInput.classList.remove('is-empty');
-        updateSendSlot();
-        if (final) dictBase = composed;
-      }
-    };
-
-    rec.onerror = (event) => {
-      if (event.error === 'not-allowed') { recognizing = false; micReady = false; return; }
-      if (event.error === 'no-speech' || event.error === 'aborted') return;
-    };
-
-    // Chrome beendet die Erkennung nach Stille auch bei continuous=true —
-    // wiederholen, außer es ist gerade nicht gewünscht. recognizing muss VOR
-    // dem Neustart-Check zurückgesetzt werden, sonst hält startListening()
-    // (das jetzt einen bereits laufenden Erkenner nicht doppelt startet) den
-    // Neustart fälschlich für überflüssig.
-    rec.onend = () => {
-      recognizing = false;
-      if (!muted && !busy && (speechMode || dictating) && micReady) setTimeout(startListening, 250);
-    };
-
-    return rec;
-  }
-
-  function startListening() {
-    if (muted || busy || !(speechMode || dictating)) return;
-    // Lokales Whisper hört über fallbackVadTick() dauerhaft (pegelgesteuert)
-    // zu — kein Web-Speech-Objekt, das hier explizit gestartet werden müsste.
-    if (useLocalWhisper) return;
-    if (!recognition || recognizing) return;
-    // Ein Start direkt nach einem noch nicht abgeschlossenen stop() (z.B.
-    // Diktat aus/an in schneller Folge) wirft in Chrome einen stillen
-    // InvalidStateError und lässt die Erkennung hängen, ohne dass onend
-    // je wieder feuert — daher der recognizing-Guard oben statt hier blind
-    // zu starten.
-    try { recognition.start(); } catch (_) {}
-  }
-  function stopListening() {
-    if (useLocalWhisper) { cancelRecording(); return; }
-    if (recognition) { try { recognition.stop(); } catch (_) {} }
-  }
-  function resumeListening() {
-    if (!muted && micReady && (speechMode || dictating)) startListening();
-  }
+  // Zuhören läuft dauerhaft pegelgesteuert über fallbackVadTick() (lokales
+  // Whisper, siehe sendUtterance) — "starten" heißt nur: nichts blockiert,
+  // "stoppen" heißt: eine angefangene Äußerung verwerfen.
+  function startListening() {}
+  function stopListening() { cancelRecording(); }
+  function resumeListening() { startListening(); }
 
   function vadTick() {
     if (!vadAnalyser || !vadData || muted) return;
@@ -5091,7 +4845,7 @@
         vadNoiseFloor = vadNoiseFloor * 0.999 + rms * 0.001;
       }
       vadAbove = 0;
-      if (useLocalWhisper) fallbackVadTick(rms);
+      fallbackVadTick(rms);
       return;
     }
 
@@ -6143,7 +5897,6 @@
     // localStorage wiederherstellen.
     isInitialBoot = false;
     if (indicator) requestAnimationFrame(() => { indicator.style.transition = indicatorTransition; });
-    recognition = initRecognition();
     document.title = 'Jarvis';
     orbCanvas = document.createElement('canvas');
     orbCanvas.id = 'jarvisOrb';

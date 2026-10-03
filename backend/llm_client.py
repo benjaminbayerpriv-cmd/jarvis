@@ -18,11 +18,6 @@ class ModelError(RuntimeError):
     """A local-model failure that must become a user-facing response."""
 
 
-class ModelTooLargeError(ModelError):
-    """The configured model doesn't fit into this PC's memory; the message
-    is meant to be shown/spoken to the user as-is."""
-
-
 class LmStudioError(ModelError):
     """LM Studio refused or aborted a native chat request (too old, per-request
     MCPs switched off, tool server unreachable, …); the message says why and
@@ -705,27 +700,7 @@ def _request_targets() -> list[tuple[str, str, dict, dict]]:
         headers = {"Authorization": f"Bearer {config.DEEPSEEK_API_KEY}"}
         deepseek_target = (config.DEEPSEEK_BASE_URL, config.DEEPSEEK_MODEL, headers, {})
 
-    # LM Studio loads a model just-in-time on the first request for it — so
-    # a model too big for this PC must never be requested at all, or that
-    # request is what triggers the crash.
-    too_large = hardware.blocked_reason(config.LM_STUDIO_MODEL)
-    if too_large:
-        # A block set once (typically at startup, before LM Studio had even
-        # finished reporting its own state) must never stick around forever
-        # — re-verify right now instead of trusting a stale verdict. Live
-        # observed: the model was already loaded seconds later (LM Studio's
-        # /api/v0/models just hadn't answered yet at boot), but every
-        # request kept getting the boot-time "not enough memory" message
-        # since nothing ever re-checked or cleared it.
-        fit = hardware.check_model(config.LM_STUDIO_MODEL)
-        if fit["fits"]:
-            hardware.unblock_all()
-            too_large = None
-        else:
-            too_large = fit.get("message", too_large)
-    lmstudio_target = None
-    if not too_large:
-        lmstudio_target = (config.LM_STUDIO_BASE_URL, config.LM_STUDIO_MODEL, config.lm_studio_headers(), {"reasoning_effort": "none"})
+    lmstudio_target = (config.LM_STUDIO_BASE_URL, config.LM_STUDIO_MODEL, config.lm_studio_headers(), {"reasoning_effort": "none"})
 
     if config.ACTIVE_PROVIDER == "lmstudio":
         ordered = [lmstudio_target, deepseek_target]
@@ -733,10 +708,7 @@ def _request_targets() -> list[tuple[str, str, dict, dict]]:
         # "deepseek" (explicit) and "auto" (legacy default) both prefer
         # DeepSeek first when it's available.
         ordered = [deepseek_target, lmstudio_target]
-    targets = [t for t in ordered if t is not None]
-    if not targets:
-        raise ModelTooLargeError(too_large or "Kein Modell verfügbar.")
-    return targets
+    return [t for t in ordered if t is not None]
 
 
 _SUMMARIZE_PROMPT = (
@@ -1120,14 +1092,16 @@ def _reasoning_options(model: str) -> list[str]:
         resp = requests.get(f"{hardware.lm_studio_root()}/api/v1/models", headers=config.lm_studio_headers(), timeout=5)
         if resp.status_code >= 400:
             raise _native_rejection(resp)
+        # A model LM Studio doesn't list is cached as "no options" too —
+        # otherwise every round and every warm-up repeated this request.
+        options: list[str] = []
         for entry in resp.json().get("models", []):
             ids = {entry.get("key")} | {inst.get("id") for inst in entry.get("loaded_instances") or []}
             if model in ids:
                 reasoning = (entry.get("capabilities") or {}).get("reasoning") or {}
-                _reasoning_options_cache[model] = list(reasoning.get("allowed_options") or [])
+                options = list(reasoning.get("allowed_options") or [])
                 break
-        else:
-            return []
+        _reasoning_options_cache[model] = options
     return _reasoning_options_cache[model]
 
 
@@ -2196,11 +2170,12 @@ def _turn_cancelled(turn_id: str | None) -> bool:
     return bool(turn_id) and turn_id in _cancelled_turns
 
 
-def stream_reply(user_message: str, history: list | None = None, turn_id: str | None = None, mode: str | None = None, images: list[str] | None = None, is_speech: bool = False, conversation_id: str | None = None):
+def stream_reply(user_message: str, history: list | None = None, turn_id: str | None = None, mode: str | None = None, images: list[str] | None = None, is_speech: bool = False, conversation_id: str | None = None, ephemeral: bool = False):
     """Thin wrapper around _stream_reply_impl that guarantees turn_id gets
     dropped from _cancelled_turns once the turn ends, cancelled or not —
     otherwise every turn_id a client ever sends would sit in that set
-    forever."""
+    forever. `ephemeral` marks a side question (the /btw window) that must
+    not touch the main chat's state — see confirm.resolve below."""
     if turn_id:
         at = _cancelled_turns.get(turn_id)
         if at is not None and time.monotonic() - at > _EARLY_CANCEL_SECONDS:
@@ -2208,7 +2183,7 @@ def stream_reply(user_message: str, history: list | None = None, turn_id: str | 
         with _drain_cond:
             _active_turns.add(turn_id)
     try:
-        yield from _stream_reply_impl(user_message, history, turn_id, mode, images, is_speech, conversation_id)
+        yield from _stream_reply_impl(user_message, history, turn_id, mode, images, is_speech, conversation_id, ephemeral)
     finally:
         if turn_id:
             with _drain_cond:
@@ -2217,7 +2192,7 @@ def stream_reply(user_message: str, history: list | None = None, turn_id: str | 
                 _drain_cond.notify_all()
 
 
-def _stream_reply_impl(user_message: str, history: list | None = None, turn_id: str | None = None, mode: str | None = None, images: list[str] | None = None, is_speech: bool = False, conversation_id: str | None = None):
+def _stream_reply_impl(user_message: str, history: list | None = None, turn_id: str | None = None, mode: str | None = None, images: list[str] | None = None, is_speech: bool = False, conversation_id: str | None = None, ephemeral: bool = False):
     """Generator yielding {"type": "sentence", "text": ...} as soon as each
     sentence of the reply is complete, then a final {"type": "done"}.
 
@@ -2239,12 +2214,16 @@ def _stream_reply_impl(user_message: str, history: list | None = None, turn_id: 
     pending confirmation (see backend/confirm.py) — not a routing shortcut
     like the ones above, since it only ever fires against a question Jarvis
     itself just asked via confirm.propose, never a guess at general intent.
+    A side question from the /btw window never touches that pending
+    confirmation: a "ja" there must not run the main chat's delete, and an
+    unrelated question there must not silently discard the offer either.
     """
-    resolved = confirm.resolve(user_message)
-    if resolved is not None:
-        yield {"type": "sentence", "text": resolved}
-        yield {"type": "done", "full_text": resolved}
-        return
+    if not ephemeral:
+        resolved = confirm.resolve(user_message)
+        if resolved is not None:
+            yield {"type": "sentence", "text": resolved}
+            yield {"type": "done", "full_text": resolved}
+            return
 
     messages = _build_messages(user_message, history, mode, images, is_speech)
     # Chaining per LM Studios previous_response_id ist deaktiviert: ein
@@ -2292,16 +2271,26 @@ def _stream_reply_impl(user_message: str, history: list | None = None, turn_id: 
     native_tool_calls = 0
     tool_budget_exhausted = False
 
+    # Set by _vet once the reply so far is a repetition loop — the event
+    # loop below then closes the stream instead of letting the model keep
+    # going (and every later sentence re-tripping the same guard).
+    loop_detected = False
+
     def _vet(text: str) -> str:
         """Swap a sentence for an honest one if it fails the same checks
         the old end-of-turn gate used to run on the whole reply at once —
         now run per sentence so a lone false claim doesn't hold up (or
         taint) everything spoken around it."""
+        nonlocal loop_detected
         if _looks_like_tool_text(text) or _unbacked_claim(text, tools_used, recent_action_confirmed):
             print(f"[vet] Ersetze mutmaßlich falsche Aktionsbehauptung: {text!r}")
             return "Das habe ich nicht ausgeführt."
-        if _is_repetition_loop(text):
-            print(f"[vet] Ersetze erkannte Wiederholungsschleife: {text!r}")
+        # Judged on the whole reply so far, not this one sentence: a loop
+        # made of many short sentences ("Ja. Ja. Ja. …") never reached the
+        # length cutoff per sentence, so the guard never fired.
+        if _is_repetition_loop(" ".join([*full_text_parts, text])):
+            loop_detected = True
+            print(f"[vet] Wiederholungsschleife erkannt, breche die Antwort ab: {text!r}")
             return "Da ist mir gerade etwas verrutscht, frag bitte nochmal."
         return text
 
@@ -2382,7 +2371,7 @@ def _stream_reply_impl(user_message: str, history: list | None = None, turn_id: 
                 # LM Studio's own generation. Checked on every event now, and
                 # stream.close() really closes that connection instead of
                 # just abandoning the generator.
-                if _turn_cancelled(turn_id):
+                if _turn_cancelled(turn_id) or loop_detected:
                     stream.close()
                     # " ", not "": the spoken sentences were glued together
                     # ("Ich schaue nach.Es ist 12 Uhr.") in what got saved.
@@ -2477,11 +2466,15 @@ def _stream_reply_impl(user_message: str, history: list | None = None, turn_id: 
                             trailing_suspect_text += visible
                         else:
                             sentences, buffer = _pop_complete_sentences(buffer)
-                            for s in sentences:
+                            for i, s in enumerate(sentences):
                                 verdict = _call_prefix_verdict(s)
                                 if verdict in (True, "corrupt"):
                                     trailing_suspect = verdict
-                                    trailing_suspect_text = s
+                                    # Everything after the suspect sentence in
+                                    # this same batch is held with it, exactly
+                                    # like the chunks that arrive afterwards —
+                                    # it used to be dropped silently here.
+                                    trailing_suspect_text = " ".join(sentences[i:])
                                     break
                                 clean = _strip_think_tags(s)
                                 # Once a sentence is held, everything after it

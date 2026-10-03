@@ -34,6 +34,7 @@ would make it go stale immediately.
 from __future__ import annotations
 
 import hmac
+import ipaddress
 import json
 import socket
 import threading
@@ -120,11 +121,33 @@ def _build_app():
     # still present it.
     _LOOPBACK_HOSTS = {"127.0.0.1", "::1", "::ffff:127.0.0.1"}
 
+    def _loopback_host_header_ok(headers: dict) -> bool:
+        # The SDK's own DNS-rebinding check is off (see above), so the
+        # token-free loopback path needs its own: a browser page whose DNS
+        # was re-pointed at 127.0.0.1 arrives from loopback too, but still
+        # carries its own domain in the Host header. Only an IP address or
+        # localhost may appear there.
+        host = headers.get(b"host", b"").decode("latin-1").strip().lower()
+        if not host:
+            return False
+        name = host[1:].split("]", 1)[0] if host.startswith("[") else host.rsplit(":", 1)[0]
+        if name == "localhost":
+            return True
+        try:
+            ipaddress.ip_address(name)
+        except ValueError:
+            return False
+        return True
+
     async def app(scope, receive, send):
         if scope["type"] == "http":
             client_host = (scope.get("client") or ("", 0))[0]
-            auth = dict(scope["headers"]).get(b"authorization", b"")
-            authorized = client_host in _LOOPBACK_HOSTS or hmac.compare_digest(auth, expected)
+            headers = dict(scope["headers"])
+            auth = headers.get(b"authorization", b"")
+            authorized = (
+                (client_host in _LOOPBACK_HOSTS and _loopback_host_header_ok(headers))
+                or hmac.compare_digest(auth, expected)
+            )
             if not authorized:
                 # LM Studio's MCP bridge expects the 401 body to be a JSON
                 # OAuth-style error (it parses it before deciding how to
