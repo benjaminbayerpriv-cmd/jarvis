@@ -86,6 +86,40 @@ _HALLUCINATION_PHRASES = {
 # stock phrase" hallucination, not just the specific ones listed above.
 _NO_SPEECH_THRESHOLD = 0.6
 
+# Hinweistext für Denglisch: Mit language="de" schreibt Whisper englische
+# Wörter sonst lautmalerisch deutsch ("Kemet" statt Commit, "Visual Studio
+# Co.") — daraus werden falsche Befehle. Der Text geht als hotwords in den
+# Prompt jedes 30-s-Fensters und zeigt die englische Schreibweise im
+# deutschen Satz. Gemessen an 20 Denglisch-Sätzen: 50/50 statt 45/50
+# Begriffe richtig, Wortfehler 8,2 % -> 2,5 %. Eine reine Wortliste traf die
+# Begriffe auch, verdoppelte aber die Fehler im restlichen Satz (Whisper
+# übernahm den Listenstil: "SpielDi, Playlist, Auf, Spotify"). Bewusst nur
+# Fragen und Aussagen, keine Befehle: Gibt Whisper den Prompt doch einmal
+# als Transkript aus, soll Jarvis daraus nichts ausführen. Limit 223 Tokens
+# (aktuell 215), den Rest schneidet faster-whisper ab — neue Begriffe also
+# gegen bestehende tauschen, nicht anhängen.
+_DENGLISH_PROMPT = (
+    'Jarvis, kurze Frage zum Pull Request auf GitHub: Ist der Commit gepusht, läuft das '
+    'Review, und kommt danach der Merge vom Branch ins Repository? Wie weit sind der '
+    'Download und das Backup auf dem Server, und was bringt das Update vom Python Script '
+    'im Terminal? Die Playlist auf Spotify läuft im Stream, die Volume ist leiser, '
+    'Discord steht auf Mute. Der Prompt für ChatGPT, Claude und LM Studio braucht ein '
+    'neues Template, das Feature hat noch einen Bug, der Fix kommt in die Cloud. Das '
+    'Meeting mit der Deadline und das Feedback stehen im Dashboard, der Workflow im Setup'
+    ' und die Settings im Account. In Visual Studio Code, OpenCode und Obsidian liegt der'
+    ' JavaScript Code, im Chrome Browser ist ein Tab mit dem Login Link für YouTube '
+    'offen. Der Shortcut kopiert den Token ins Clipboard, der Screenshot liegt auf dem '
+    'Desktop, und Timer, Reminder, Shuffle und Bluetooth laufen unter Windows.'
+)
+_PROMPT_WORDS = " " + " ".join(re.findall(r"\w+", _DENGLISH_PROMPT.lower())) + " "
+
+
+def _echoes_prompt(text: str) -> bool:
+    """Whisper gibt bei Stille/Rauschen gelegentlich den Prompt als
+    Transkript aus — ein langes wörtliches Stück davon wurde nicht gesagt."""
+    words = re.findall(r"\w+", text.lower())
+    return len(words) >= 6 and f" {' '.join(words)} " in _PROMPT_WORDS
+
 
 # Once a real GPU failure is seen (as opposed to WhisperModel(cuda) simply
 # never having been asked to compute anything yet — model construction
@@ -143,9 +177,11 @@ def _run_transcribe(model: WhisperModel, path: str) -> str:
         # same invented text otherwise — this stops each segment
         # from being conditioned on a previous hallucination.
         condition_on_previous_text=False,
+        hotwords=_DENGLISH_PROMPT,
     )
     kept = [seg.text.strip() for seg in segments if seg.no_speech_prob < _NO_SPEECH_THRESHOLD]
-    return " ".join(kept).strip()
+    text = " ".join(kept).strip()
+    return "" if _echoes_prompt(text) else text
 
 
 def selftest() -> None:

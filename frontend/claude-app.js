@@ -659,7 +659,7 @@
       });
       // Ausgabe-Pegel nur im Sprachmodus messen (dort ist die Orb sichtbar).
       try {
-        if (speechMode) {
+        if (speechMode || larpOpen()) {
           if (!ttsAudioCtx) ttsAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
           if (ttsAudioCtx.state === 'suspended') ttsAudioCtx.resume().catch(() => {});
           src = ttsAudioCtx.createMediaElementSource(audio);
@@ -878,6 +878,7 @@
 
   // Sprachmodus + VAD + Diktat + Web-Speech-Erkennung
   let speechMode = false, dictating = false, micReady = false, micStream = null, muted = false;
+  let larpDictSink = null; // Diktat-Ziel, solange das LARP-HUD diktiert (siehe openLarpHud)
   let vadAnalyser = null, vadData = null, vadNoiseFloor = 0.01, vadAbove = 0;
   // IMMER lokales Whisper (Backend /stt, siehe backend/stt.py), nie Chromes
   // eingebaute Web-Speech-Erkennung — die schickt Audio an Googles Server
@@ -3344,9 +3345,41 @@
     if (!window.JarvisLarp) { showNotice('LARP-Modus nicht verfügbar (larp-hud.js fehlt).'); return; }
     closeSlashMenu();
     window.JarvisLarp.open({
-      voice: () => { if (!speechMode) enterSpeech(); },
+      // Sprachmodus läuft unter dem HUD weiter; Beschriftung und Antworten
+      // kommen über larpEmit() in die HUD-Konsole.
+      voice: (on) => {
+        if (on === false) { if (speechMode) exitSpeech(); return; }
+        if (dictating) { larpDictSink = null; setDictating(false); }
+        if (!speechMode) enterSpeech();
+      },
+      isVoice: () => speechMode,
+      // Diktat in die HUD-Konsole: sink(text, final) bekommt Zwischenstände
+      // und das fertige Ergebnis jeder Äußerung.
+      dictate: (on, sink) => {
+        if (on) {
+          if (speechMode) exitSpeech();
+          larpDictSink = sink;
+          if (!dictating) setDictating(true);
+        } else {
+          larpDictSink = null;
+          if (dictating) setDictating(false);
+        }
+      },
+      // Echter Audiopegel 0..1: Jarvis' Stimme beim Sprechen, sonst das Mikrofon.
+      level: () => {
+        if (speaking) return speechLevel();
+        if (!micReady || !(speechMode || dictating) || muted || !vadAnalyser || !vadData) return 0;
+        // Relativ zur selben adaptiven Schwelle wie der VAD: Rauschen bleibt
+        // ruhig, normale Sprache landet etwa bei 0,4–1.
+        const gate = Math.max(vadNoiseFloor * 2.4, 0.025);
+        return Math.max(0, Math.min(1, (rmsFrom(vadAnalyser, vadData) - gate * 0.6) / (gate * 3)));
+      },
+      state: () => ({ speaking, busy, voice: speechMode, dictating, muted }),
       speak: (text) => speakNotice(text),
-      onClose: () => { if (composerInput && !speechMode) composerInput.focus(); },
+      onClose: () => {
+        if (larpDictSink) { larpDictSink = null; if (dictating) setDictating(false); }
+        if (composerInput && !speechMode) composerInput.focus();
+      },
     });
   }
   function showSlashHelp() {
@@ -4581,12 +4614,22 @@
   }
   function setSpeechStatus(s) {
     if (spcStatusEl) spcStatusEl.textContent = s;
+    larpEmit('status', s);
   }
   function noteSpeechWords(t) {
     if (spcUserEl) spcUserEl.textContent = t || '…';
+    larpEmit('words', t);
   }
   function noteSpeechReply(t) {
     if (spcReplyEl) { spcReplyEl.textContent = t || ''; spcReplyEl.style.minHeight = t ? '' : '0'; }
+    larpEmit('reply', t);
+  }
+  // Das LARP-HUD liegt im Sprachmodus über der Orb und zeigt dieselbe
+  // Unterhaltung in seiner Konsole — siehe openLarpHud().
+  function larpOpen() { return !!(window.JarvisLarp && window.JarvisLarp.isOpen()); }
+  function larpEmit(type, text) {
+    if (!larpOpen() || !window.JarvisLarp.speechEvent) return;
+    try { window.JarvisLarp.speechEvent(type, String(text || '')); } catch (e) {}
   }
 
   // ------------------------------------- lokales Whisper (Fallback ohne Chrome)
@@ -4658,11 +4701,12 @@
       const resp = await fetch('/stt', { method: 'POST', body: form });
       // Zwischenzeitlich abgebrochen/neu gestartet/schon final abgeschickt —
       // dieses Ergebnis gehört nicht mehr zur aktuellen Äußerung.
-      if (epoch !== recordingEpoch || !dictating || !composerInput) return;
+      if (epoch !== recordingEpoch || !dictating || !(composerInput || larpDictSink)) return;
       if (!resp.ok) return;
       const data = await resp.json();
       const text = (data.text || '').trim();
       if (!text) return;
+      if (larpDictSink) { larpDictSink(text, false); return; }
       if (!dictInterimSpan || !dictInterimSpan.isConnected) {
         // Erster Zwischenstand dieser Äußerung: die feste Basis (falls vorhanden,
         // mit trennendem Leerzeichen) bleibt als reiner Textknoten stehen, das
@@ -4773,6 +4817,8 @@
         if (handleSpeechUtterance(text)) return;
         setSpeechStatus('Denke');
         sendMessage(text);
+      } else if (dictating && larpDictSink) {
+        larpDictSink(text, true);
       } else if (dictating && composerInput) {
         // dictBase ist die alleinige Quelle des bestätigten Texts (siehe
         // setDictating) — NICHT mehr composerInput.innerText nachlesen: das

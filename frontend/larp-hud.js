@@ -11,8 +11,12 @@
 // Die Konsole beantwortet Hardware-Fragen direkt aus diesen Werten und
 // schickt alles andere über POST /chat an das echte Modell. Radar und Reaktor
 // sind Kulisse und als SIM markiert; Weltkarte und Hauptstädte stimmen.
-// hooks (aus claude-app.js): voice() = Sprachmodus, speak(text) = Jarvis-
-// Stimme, onClose(). Geschlossen wird über das Kreuz oben rechts oder Esc.
+// hooks (aus claude-app.js): voice(on) = Sprachmodus unter dem offenen HUD,
+// dictate(on, sink) = Diktat in die Konsole, level() = echter Audiopegel
+// (Mikrofon bzw. Jarvis' Stimme) für den Reaktor, state(), speak(text) =
+// Jarvis-Stimme, onClose(). Was im Sprachmodus gesagt und geantwortet wird,
+// kommt über JarvisLarp.speechEvent() in die Konsole. Geschlossen wird über
+// das Kreuz oben rechts oder Esc.
 (() => {
   'use strict';
 
@@ -132,11 +136,17 @@
 .lh-wc b{font-weight:400;color:var(--holo-hi);font-variant-numeric:tabular-nums}
 
 .lh-core{grid-area:core;position:relative;min-height:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px}
-.lh-core-wrap{position:relative;height:calc(100% - 44px);aspect-ratio:1;max-width:100%}
+.lh-core-wrap{position:relative;height:calc(100% - 62px);aspect-ratio:1;max-width:100%}
 .lh-core-wrap canvas{position:absolute;inset:0;width:100%;height:100%;cursor:pointer}
 .lh-core-cap{text-align:center}
 .lh-core-cap b{display:block;font-family:var(--f-display);font-weight:400;font-size:22px;letter-spacing:.5em;margin-right:-.5em;color:var(--holo-hi);text-shadow:0 0 14px rgba(104,220,255,.9)}
 .lh-core-cap span{font-family:var(--f-data);font-size:11.5px;letter-spacing:.26em;color:var(--holo-dim)}
+.lh-core-state{display:block;margin-top:5px;font-family:var(--f-data);font-style:normal;font-size:12.5px;letter-spacing:.42em;margin-right:-.42em;color:var(--holo-dim);transition:color .3s,text-shadow .3s}
+.lh-core-state[data-s="LISTENING"]{color:var(--holo);text-shadow:0 0 10px rgba(104,220,255,.6)}
+.lh-core-state[data-s="THINKING"]{color:var(--amber);text-shadow:0 0 10px rgba(255,178,74,.6)}
+.lh-core-state[data-s="SPEAKING"],.lh-core-state[data-s="RESPONDING"]{color:var(--holo-hi);text-shadow:0 0 12px rgba(104,220,255,.9)}
+.lh-core-state[data-s="DICTATION"]{color:var(--ok);text-shadow:0 0 10px rgba(125,255,196,.6)}
+.lh-core-state[data-s="MUTED"]{color:var(--alert)}
 .lh-node{position:absolute;width:92px;height:92px;margin:-46px 0 0 -46px;border-radius:50%;border:1px solid var(--line);padding:0;cursor:pointer;
   background:radial-gradient(circle,rgba(104,220,255,.14),rgba(2,6,12,.65) 70%);display:grid;place-items:center;align-content:center;gap:3px;
   transition:background .2s,border-color .2s,box-shadow .2s;color:var(--holo)}
@@ -167,6 +177,11 @@
 .lh-ask button:hover{background:rgba(104,220,255,.3)}
 .lh-ask .lh-mic{padding:0 12px;display:grid;place-items:center}
 .lh-ask .lh-mic svg{width:18px;height:18px;stroke:currentColor;fill:none;stroke-width:1.6;stroke-linecap:round}
+.lh-ask .lh-mic.lh-on{border-color:var(--ok);background:rgba(125,255,196,.2);color:var(--ok);animation:lh-pulse-ok 1.4s ease-in-out infinite}
+.lh-ask .lh-mic.lh-talk.lh-on{border-color:var(--holo-hi);background:rgba(104,220,255,.34);color:var(--holo-hi);animation:lh-pulse 1.4s ease-in-out infinite}
+.lh-ask input.lh-dictating{border-color:var(--ok);color:var(--ok)}
+@keyframes lh-pulse{0%,100%{box-shadow:0 0 18px rgba(104,220,255,.65)}50%{box-shadow:0 0 4px rgba(104,220,255,.15)}}
+@keyframes lh-pulse-ok{0%,100%{box-shadow:0 0 16px rgba(125,255,196,.55)}50%{box-shadow:0 0 4px rgba(125,255,196,.12)}}
 .lh-bar{height:4px;background:rgba(104,220,255,.14);overflow:hidden}
 .lh-bar b{display:block;height:100%;background:var(--holo);box-shadow:0 0 6px var(--holo);transition:width .6s}
 .lh-bar.lh-warnbar b{background:var(--amber);box-shadow:0 0 6px var(--amber)}
@@ -177,7 +192,8 @@
 .lh-ticker div{display:inline-block;padding-left:100%;animation:lh-tick 70s linear infinite}
 @keyframes lh-tick{to{transform:translateX(-100%)}}
 html.jarvis-reduce-motion #jarvisLarp .lh-ticker div{animation:none;padding-left:0}
-@media (prefers-reduced-motion:reduce){#jarvisLarp .lh-ticker div{animation:none;padding-left:0}}
+html.jarvis-reduce-motion #jarvisLarp .lh-mic.lh-on{animation:none}
+@media (prefers-reduced-motion:reduce){#jarvisLarp .lh-ticker div{animation:none;padding-left:0}#jarvisLarp .lh-mic.lh-on{animation:none}}
 `;
 
   // ================================================================ Markup
@@ -190,6 +206,7 @@ html.jarvis-reduce-motion #jarvisLarp .lh-ticker div{animation:none;padding-left
     comms: '<path d="M4 6h16v10H9l-5 4z"/>',
   };
   const NODES = [['cpu', 'CPU'], ['gpu', 'GPU'], ['weather', 'WETTER'], ['net', 'NETZ'], ['model', 'MODELL'], ['comms', 'COMMS']];
+  const PLACEHOLDER = 'Sprich mit JARVIS … z. B. „Wie ist die CPU-Last?“';
   const kv = (rows) => `<dl class="lh-kv">${rows.map(([k, id]) => `<dt>${k}</dt><dd data-k="${id}">—</dd>`).join('')}</dl>`;
   const src = (id, cls, txt, title) => `<span class="lh-src lh-${cls}" data-src="${id}" title="${title}">${txt}</span>`;
 
@@ -229,7 +246,7 @@ html.jarvis-reduce-motion #jarvisLarp .lh-ticker div{animation:none;padding-left
 
   <section class="lh-core">
     <div class="lh-core-wrap" data-k="coreWrap"><canvas data-c="core" aria-label="Arc-Reaktor-Kern. Klicken für einen Statusbericht"></canvas></div>
-    <div class="lh-core-cap"><b>J.A.R.V.I.S.</b><span>JUST A RATHER VERY INTELLIGENT SYSTEM</span></div>
+    <div class="lh-core-cap"><b>J.A.R.V.I.S.</b><span>JUST A RATHER VERY INTELLIGENT SYSTEM</span><em class="lh-core-state" data-k="coreState" data-s="STANDBY">STANDBY</em></div>
   </section>
 
   <section class="lh-wing lh-right">
@@ -275,15 +292,16 @@ html.jarvis-reduce-motion #jarvisLarp .lh-ticker div{animation:none;padding-left
       <ul class="lh-list lh-contacts"><li><span>CIV-AIR · Cessna 172</span><span class="lh-r">12.4 km</span></li><li class="lh-unk"><span>UNIDENTIFIED · low alt.</span><span class="lh-r">27.9 km</span></li></ul>
     </article>
     <article class="lh-panel" data-panel="con">
-      <div class="lh-ph"><h2>JARVIS CONSOLE</h2><span class="lh-sub">cpu · ram · gpu · netz · akku · wetter · sonne · zeit · status — alles andere geht ans Modell</span></div>
+      <div class="lh-ph"><h2>JARVIS CONSOLE</h2><span class="lh-sub">Hardware-Fragen direkt, alles andere ans Modell · T = sprechen · D = diktieren</span></div>
       <div class="lh-con-body">
         <div class="lh-wave"><canvas data-c="wave" aria-hidden="true"></canvas><small data-k="waveLbl">AUDIO · STANDBY</small></div>
         <div class="lh-talk">
           <div class="lh-log" data-k="log" aria-live="polite"></div>
           <form class="lh-ask" data-k="ask" autocomplete="off">
-            <input data-k="askInput" type="text" placeholder="Sprich mit JARVIS … z. B. „Wie ist die CPU-Last?“" aria-label="Nachricht an JARVIS">
+            <input data-k="askInput" type="text" placeholder="${PLACEHOLDER}" aria-label="Nachricht an JARVIS">
             <button type="submit">SEND</button>
-            <button type="button" class="lh-mic" data-act="voice" title="HUD schließen und Sprachmodus starten" aria-label="Sprachmodus"><svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></button>
+            <button type="button" class="lh-mic" data-act="dictate" data-k="dictBtn" aria-pressed="false" title="Diktieren: was du sagst, landet hier im Eingabefeld (D)" aria-label="Diktieren"><svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></button>
+            <button type="button" class="lh-mic lh-talk" data-act="talk" data-k="talkBtn" aria-pressed="false" title="Sprachmodus: einfach mit JARVIS reden, er antwortet mit Stimme (T)" aria-label="Sprachmodus"><svg viewBox="0 0 24 24"><path d="M3 10v4M7 7v10M11 4v16M15 7v10M19 10v4"/></svg></button>
           </form>
         </div>
       </div>
@@ -318,6 +336,10 @@ html.jarvis-reduce-motion #jarvisLarp .lh-ticker div{animation:none;padding-left
   const HIST = {};
   let WX = null, wxCity = '', wxError = null;
   let voiceLevel = 0, typing = false, voiceOn = false, chatBusy = false;
+  // Sprachmodus/Diktat: mode 'idle' | 'talk' | 'dictate'; SI = Zustand für Reaktor und Beschriftung.
+  let mode = 'idle', modeSince = 0, modeSeen = false, talkStatus = '', liveReply = null, dictBase = '', shownState = '';
+  let SI = { key: 'STANDBY', col: C.holo }, lastRipple = 0;
+  const RIPPLES = [], PARTS = [];
   let chatHistory = [];
   const queue = [];
 
@@ -328,6 +350,12 @@ html.jarvis-reduce-motion #jarvisLarp .lh-ticker div{animation:none;padding-left
     });
     Object.assign(HIST, { cpu: Array(120).fill(0), mem: Array(120).fill(0), gpu: Array(120).fill(0), down: Array(80).fill(0), up: Array(80).fill(0), pow: Array(80).fill(3.2) });
     chatHistory = []; queue.length = 0; typing = false; chatBusy = false; voiceLevel = 0;
+    mode = 'idle'; modeSince = 0; modeSeen = false; talkStatus = ''; liveReply = null; dictBase = ''; shownState = '';
+    SI = { key: 'STANDBY', col: C.holo }; RIPPLES.length = 0; lastRipple = 0; PARTS.length = 0;
+    for (let i = 0; i < 70; i++) {
+      PARTS.push({ a: Math.random() * Math.PI * 2, r: 0.43 + Math.random() * 0.06, s: (0.0015 + Math.random() * 0.004) * (Math.random() < 0.5 ? 1 : -1),
+        z: 0.8 + Math.random() * 1.6, o: 0.25 + Math.random() * 0.5, hi: Math.random() < 0.15 });
+    }
   }
   const push = (a, v) => { a.push(v); a.shift(); };
 
@@ -650,17 +678,26 @@ html.jarvis-reduce-motion #jarvisLarp .lh-ticker div{animation:none;padding-left
     for (let i = 0; i < 96; i++) {
       const a = (i / 96) * Math.PI * 2 + tt * 0.0001;
       const n = Math.abs(Math.sin(i * 1.7 + tt * 0.004) * 0.6 + Math.sin(i * 0.37 - tt * 0.006) * 0.4);
-      const len = Sz * (0.008 + n * (0.012 + v * 0.05 + cpuP * 0.02));
+      const len = Sz * (0.008 + n * (0.012 + v * 0.09 + cpuP * 0.02));
       ctx.strokeStyle = rgba(v > 0.2 && n > 0.6 ? C.hi : C.holo, 0.35 + n * 0.5); ctx.lineWidth = 2;
       ctx.beginPath(); ctx.moveTo(Math.cos(a) * r4, Math.sin(a) * r4); ctx.lineTo(Math.cos(a) * (r4 + len), Math.sin(a) * (r4 + len)); ctx.stroke();
     }
-    const r5 = Sz * 0.205;
-    ctx.save(); ctx.rotate(tt * 0.0009); ctx.lineWidth = 2; ctx.shadowColor = rgba(C.holo, 1); ctx.shadowBlur = 14;
-    for (let i = 0; i < 3; i++) { ctx.strokeStyle = rgba(C.hi, 0.85); ctx.beginPath(); ctx.arc(0, 0, r5, i * 2.094, i * 2.094 + 0.9); ctx.stroke(); }
+    const r5 = Sz * 0.205, thinking = SI.key === 'THINKING';
+    const tint = thinking ? C.amber : SI.key === 'DICTATION' ? C.ok : C.hi;
+    ctx.save(); ctx.rotate(tt * (thinking ? 0.0035 : 0.0009 + v * 0.004)); ctx.lineWidth = 2; ctx.shadowColor = rgba(thinking ? C.amber : C.holo, 1); ctx.shadowBlur = 14;
+    for (let i = 0; i < 3; i++) { ctx.strokeStyle = rgba(tint, 0.85); ctx.beginPath(); ctx.arc(0, 0, r5, i * 2.094, i * 2.094 + 0.9); ctx.stroke(); }
     ctx.restore();
-    const r6 = Sz * 0.165, pulse = 0.85 + Math.sin(tt * 0.003) * 0.08 + v * 0.25;
+    if (thinking) {
+      // Denkt: zwei bernsteinfarbene Bögen, die gegenläufig um den Kern jagen
+      ctx.save(); ctx.lineWidth = Sz * 0.007; ctx.shadowColor = rgba(C.amber, 1); ctx.shadowBlur = 12; ctx.strokeStyle = rgba(C.amber, 0.9);
+      ctx.rotate(tt * 0.005); ctx.beginPath(); ctx.arc(0, 0, Sz * 0.226, 0, Math.PI * 0.55); ctx.stroke();
+      ctx.rotate(-tt * 0.0085); ctx.beginPath(); ctx.arc(0, 0, Sz * 0.214, Math.PI, Math.PI * 1.4); ctx.stroke();
+      ctx.restore();
+    }
+    ctx.save(); const zoom = 1 + v * 0.09; ctx.scale(zoom, zoom); // der Kern atmet mit der Stimme
+    const r6 = Sz * 0.165, pulse = 0.85 + Math.sin(tt * 0.003) * 0.08 + v * 0.35;
     g = ctx.createRadialGradient(0, 0, 0, 0, 0, r6 * 1.25);
-    g.addColorStop(0, 'rgba(255,255,255,.95)'); g.addColorStop(0.35, rgba(C.hi, 0.75 * pulse)); g.addColorStop(0.7, rgba(C.holo, 0.35 * pulse)); g.addColorStop(1, rgba(C.holo, 0));
+    g.addColorStop(0, 'rgba(255,255,255,.95)'); g.addColorStop(0.35, rgba(tint, 0.75 * pulse)); g.addColorStop(0.7, rgba(C.holo, 0.35 * pulse)); g.addColorStop(1, rgba(C.holo, 0));
     ctx.fillStyle = g; ctx.beginPath(); ctx.arc(0, 0, r6 * 1.25, 0, Math.PI * 2); ctx.fill();
     ctx.fillStyle = 'rgba(2,10,20,.55)'; ctx.beginPath(); ctx.arc(0, 0, r6 * 0.98, 0, Math.PI * 2); ctx.arc(0, 0, r6 * 0.55, 0, Math.PI * 2, true); ctx.fill();
     for (let i = 0; i < 10; i++) {
@@ -672,6 +709,22 @@ html.jarvis-reduce-motion #jarvisLarp .lh-ticker div{animation:none;padding-left
     ctx.beginPath(); ctx.arc(0, 0, r6, 0, Math.PI * 2); ctx.stroke(); ctx.beginPath(); ctx.arc(0, 0, r6 * 0.55, 0, Math.PI * 2); ctx.stroke();
     g = ctx.createRadialGradient(0, 0, 0, 0, 0, r6 * 0.5); g.addColorStop(0, '#fff'); g.addColorStop(1, rgba(C.hi, 0.2 + v * 0.4));
     ctx.fillStyle = g; ctx.beginPath(); ctx.arc(0, 0, r6 * 0.5, 0, Math.PI * 2); ctx.fill(); ctx.shadowBlur = 0;
+    ctx.restore();
+    // Stimme/Mikrofon: Wellenringe, die vom Kern nach außen laufen
+    const now = performance.now();
+    if (v > 0.12 && now - lastRipple > 560 - v * 320 && RIPPLES.length < 8) { RIPPLES.push({ t0: now, k: v }); lastRipple = now; }
+    for (let i = RIPPLES.length - 1; i >= 0; i--) {
+      const q = (now - RIPPLES[i].t0) / 1700; if (q >= 1) { RIPPLES.splice(i, 1); continue; }
+      ctx.strokeStyle = rgba(SI.col, (1 - q) * 0.6 * Math.min(1, RIPPLES[i].k * 2.2)); ctx.lineWidth = 1 + (1 - q) * 3;
+      ctx.beginPath(); ctx.arc(0, 0, r6 + (Sz * 0.5 - r6) * q, 0, Math.PI * 2); ctx.stroke();
+    }
+    // Partikel auf der Umlaufbahn: schneller und unruhiger, sobald gesprochen wird
+    for (const pt of PARTS) {
+      pt.a += pt.s * (1 + v * 6) * SPEED;
+      const rr = Sz * (pt.r + v * 0.025 * Math.sin(pt.a * 3 + tt * 0.002));
+      ctx.fillStyle = rgba(pt.hi ? C.hi : SI.col, Math.min(1, pt.o * (0.5 + v * 1.2)));
+      ctx.beginPath(); ctx.arc(Math.cos(pt.a) * rr, Math.sin(pt.a) * rr, pt.z * (1 + v * 0.8), 0, Math.PI * 2); ctx.fill();
+    }
     const st = T.stats || {};
     ctx.font = `${Math.max(11, Sz * 0.019)}px ${MONO}`; ctx.fillStyle = rgba(C.holo, 0.8); ctx.textBaseline = 'middle';
     ctx.textAlign = 'left';
@@ -846,7 +899,7 @@ html.jarvis-reduce-motion #jarvisLarp .lh-ticker div{animation:none;padding-left
     for (let l = 0; l < 3; l++) {
       ctx.beginPath();
       for (let x = 0; x <= w; x += 2) { const k = x / w, env = Math.sin(k * Math.PI); const y = mid + env * amp * (Math.sin(k * (22 + l * 7) + t * 0.008 * SPEED + l) * 0.6 + Math.sin(k * 57 - t * 0.012 * SPEED) * 0.4); x ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }
-      ctx.strokeStyle = rgba(l ? C.holo : C.hi, l ? 0.35 : 0.9); ctx.lineWidth = l ? 1 : 1.5; ctx.stroke();
+      ctx.strokeStyle = rgba(l ? SI.col : C.hi, l ? 0.35 + voiceLevel * 0.4 : 0.9); ctx.lineWidth = l ? 1 : 1.5 + voiceLevel; ctx.stroke();
     }
   }
 
@@ -944,12 +997,11 @@ html.jarvis-reduce-motion #jarvisLarp .lh-ticker div{animation:none;padding-left
   function nextLine() {
     if (!root) return;
     const it = queue.shift();
-    if (!it) { typing = false; setK('waveLbl', 'AUDIO · STANDBY'); return; }
+    if (!it) { typing = false; return; }
     const [text, opts] = it; typing = true;
     const span = addLine('lh-j', 'JARVIS', '');
     if (voiceOn && !opts.silent && hooks.speak) { try { hooks.speak(text); } catch (e) {} }
     if (opts.instant || reduce()) { span.textContent = text; K('log').scrollTop = K('log').scrollHeight; setTimeout(nextLine, 60); return; }
-    setK('waveLbl', 'AUDIO · TRANSMITTING');
     let i = 0;
     const step = () => {
       if (!root) return;
@@ -1007,13 +1059,88 @@ html.jarvis-reduce-motion #jarvisLarp .lh-ticker div{animation:none;padding-left
   }
   function onAsk(e) {
     e.preventDefault();
+    if (mode === 'dictate') stopDictation();
     const inp = K('askInput'), q = inp.value.trim(); if (!q) return;
-    inp.value = '';
+    inp.value = ''; dictBase = '';
     addLine('lh-me', 'SIR', q);
     const local = localAnswer(q);
     if (local) { setTimeout(() => say(local), 200); return; }
     if (chatBusy) { say('Einen Moment, Sir, ich bin noch bei der letzten Frage.'); return; }
     askModel(q);
+  }
+
+  // ================================================================ Sprachmodus + Diktat
+  const WAVE_LBL = { STANDBY: 'AUDIO · STANDBY', LISTENING: 'MIC · LISTENING', THINKING: 'CORE · THINKING', SPEAKING: 'VOICE · SPEAKING',
+    RESPONDING: 'AUDIO · TRANSMITTING', DICTATION: 'MIC · DICTATION', MUTED: 'MIC · MUTED' };
+  function setMode(m) {
+    mode = m; modeSince = performance.now(); if (m === 'talk') modeSeen = false;
+    const talk = K('talkBtn'), dict = K('dictBtn'), inp = K('askInput');
+    talk.classList.toggle('lh-on', m === 'talk'); talk.setAttribute('aria-pressed', String(m === 'talk'));
+    dict.classList.toggle('lh-on', m === 'dictate'); dict.setAttribute('aria-pressed', String(m === 'dictate'));
+    inp.classList.toggle('lh-dictating', m === 'dictate');
+    inp.placeholder = m === 'dictate' ? 'Diktat läuft … sprich jetzt, Enter schickt ab' : m === 'talk' ? 'Sprachmodus aktiv … sprich einfach, oder tippe hier' : PLACEHOLDER;
+  }
+  function toggleTalk() {
+    if (!hooks.voice) { say('Der Sprachmodus ist hier nicht verfügbar, Sir.', { silent: true }); return; }
+    if (mode === 'talk') { hooks.voice(false); setMode('idle'); addLine('lh-sys', 'SYS', 'Sprachmodus beendet.'); return; }
+    if (mode === 'dictate') stopDictation();
+    liveReply = null; talkStatus = '';
+    hooks.voice(true); setMode('talk'); flash('con');
+    addLine('lh-sys', 'SYS', 'Sprachmodus aktiv · ich höre zu, Sir.');
+  }
+  function startDictation() {
+    if (!hooks.dictate) { say('Diktieren ist hier nicht verfügbar, Sir.', { silent: true }); return; }
+    if (mode === 'talk') hooks.voice(false);
+    const inp = K('askInput'); dictBase = inp.value.trim();
+    hooks.dictate(true, onDictation); setMode('dictate'); inp.focus();
+  }
+  function stopDictation() { if (hooks.dictate) hooks.dictate(false); if (mode === 'dictate') setMode('idle'); }
+  function onDictation(text, final) {
+    if (!root || mode !== 'dictate') return;
+    const inp = K('askInput'), val = (dictBase ? dictBase + ' ' : '') + text;
+    inp.value = val; if (final) dictBase = val;
+  }
+  // Ereignisse aus dem Sprachmodus von claude-app.js (dieselbe Beschriftung wie an der Orb).
+  function speechEvent(type, text) {
+    if (!root || mode !== 'talk') return;
+    if (type === 'status') { talkStatus = text; if (text === 'Denke') liveReply = null; return; }
+    if (type === 'words') { if (text && text !== '…') { addLine('lh-me', 'SIR', text); liveReply = null; } return; }
+    if (type === 'reply') {
+      if (!text) { liveReply = null; return; }
+      if (!liveReply || !liveReply.isConnected) liveReply = addLine('lh-j', 'JARVIS', '');
+      liveReply.textContent = text; const log = K('log'); log.scrollTop = log.scrollHeight;
+    }
+  }
+  function stateInfo(a) {
+    if (mode === 'dictate') return { key: 'DICTATION', col: C.ok };
+    if (a.speaking) return { key: 'SPEAKING', col: C.hi };
+    if (mode === 'talk') {
+      if (a.busy || talkStatus === 'Denke') return { key: 'THINKING', col: C.amber };
+      return a.muted ? { key: 'MUTED', col: C.alert } : { key: 'LISTENING', col: C.holo };
+    }
+    if (chatBusy) return { key: 'THINKING', col: C.amber };
+    if (typing) return { key: 'RESPONDING', col: C.hi };
+    return { key: 'STANDBY', col: C.holo };
+  }
+  // Pegel, Zustand und Abgleich mit claude-app.js, einmal pro Frame.
+  function updateVoice() {
+    const a = hooks.state ? hooks.state() : null, now = performance.now();
+    if (a) {
+      if (mode === 'talk' && a.voice) modeSeen = true;
+      if (mode === 'talk' && !a.voice && now - modeSince > 2500) {
+        setMode('idle'); addLine('lh-sys', 'SYS', modeSeen ? 'Sprachmodus beendet.' : 'Kein Mikrofon-Zugriff, Sir · Sprachmodus aus.');
+      }
+      if (mode === 'dictate' && !a.dictating && now - modeSince > 2500) setMode('idle');
+    }
+    const real = hooks.level ? clamp(+hooks.level() || 0, 0, 1) : 0;
+    const target = Math.max(real, typing ? 0.3 + Math.random() * 0.35 : 0);
+    voiceLevel += (target - voiceLevel) * (target > voiceLevel ? 0.35 : 0.07);
+    SI = stateInfo(a || {});
+    if (SI.key !== shownState) {
+      shownState = SI.key;
+      const el = K('coreState'); el.textContent = SI.key; el.dataset.s = SI.key;
+      setK('waveLbl', WAVE_LBL[SI.key]);
+    }
   }
 
   // ================================================================ interaction
@@ -1024,14 +1151,15 @@ html.jarvis-reduce-motion #jarvisLarp .lh-ticker div{animation:none;padding-left
     if (node) {
       root.querySelectorAll('.lh-node').forEach((x) => x.classList.toggle('lh-on', x === node));
       const id = node.dataset.node; flash(NODE_PANEL[id]);
-      if (id === 'comms') { K('askInput').focus(); say('Ich höre, Sir.', { silent: true }); } else say(ANSWERS[id]());
+      if (id === 'comms') toggleTalk(); else say(ANSWERS[id]());
       return;
     }
     if (e.target.matches('[data-c="core"]')) { say(ANSWERS.status()); return; }
     const btn = e.target.closest('[data-act]'); if (!btn) return;
     const act = btn.dataset.act;
     if (act === 'close') close();
-    else if (act === 'voice') { close(); if (hooks.voice) hooks.voice(); }
+    else if (act === 'talk') toggleTalk();
+    else if (act === 'dictate') { if (mode === 'dictate') stopDictation(); else startDictation(); }
     else if (act === 'city') editCity();
     else if (act === 'voiceToggle') {
       voiceOn = !voiceOn; btn.setAttribute('aria-pressed', String(voiceOn)); btn.textContent = voiceOn ? 'VOICE ON' : 'VOICE OFF';
@@ -1041,9 +1169,19 @@ html.jarvis-reduce-motion #jarvisLarp .lh-ticker div{animation:none;padding-left
   // Escape schließt das HUD — in der Capture-Phase, damit nicht zusätzlich
   // ein Menü der darunterliegenden Oberfläche zugeht.
   function onKey(e) {
-    if (e.key !== 'Escape' || !root) return;
-    if (e.target && e.target.classList && e.target.classList.contains('lh-city-input')) return;
-    e.preventDefault(); e.stopPropagation(); close();
+    if (!root) return;
+    const tg = e.target, inField = tg && (tg.tagName === 'INPUT' || tg.tagName === 'TEXTAREA' || tg.isContentEditable);
+    const k = (e.key || '').toLowerCase();
+    if (!inField && !e.ctrlKey && !e.metaKey && !e.altKey && (k === 't' || k === 'd')) {
+      e.preventDefault(); e.stopPropagation();
+      if (k === 't') toggleTalk(); else if (mode === 'dictate') stopDictation(); else startDictation();
+      return;
+    }
+    if (e.key !== 'Escape') return;
+    if (tg && tg.classList && tg.classList.contains('lh-city-input')) return;
+    e.preventDefault(); e.stopPropagation();
+    if (mode === 'dictate') { stopDictation(); return; } // Esc beendet zuerst nur das Diktat
+    close();
   }
 
   // ================================================================ clock / world time
@@ -1073,7 +1211,7 @@ html.jarvis-reduce-motion #jarvisLarp .lh-ticker div{animation:none;padding-left
     const dt = last ? t - last : 16.7; last = t;
     T.frameMs = lerp(T.frameMs, clamp(dt, 1, 250), 0.08);
     fpsN++; if (!fpsT) fpsT = t; if (t - fpsT >= 500) { T.fps = (fpsN * 1000) / (t - fpsT); fpsN = 0; fpsT = t; }
-    voiceLevel += ((typing ? 0.55 + Math.random() * 0.45 : 0) - voiceLevel) * 0.12;
+    updateVoice();
     const st = T.stats || {};
     drawCore(t); drawRadar(t); drawGlobe(t); drawWave(t); drawWxIcon(t); drawCompass(t);
     ring('cpuRing', T.cpu, 'LOAD'); ring('memRing', st.ram, 'RAM'); ring('gpuRing', gpuUtil(), gpuInfo() ? 'GPU' : 'GPU EST');
@@ -1133,9 +1271,10 @@ html.jarvis-reduce-motion #jarvisLarp .lh-ticker div{animation:none;padding-left
     every(60000, renderWeather);
     const EVENTS = ['Routine-Scan abgeschlossen. Keine Anomalien.', 'Satellitenverbindung neu ausgerichtet.', 'Werkstatt-Klima auf 21 Grad geregelt.',
       'Gedächtnis-Index geprüft.', 'Perimeter ruhig.', 'Fertigungsroboter im Standby.'];
-    let ev = 0; every(25000, () => { if (!typing && root) addLine('lh-sys', 'SYS', EVENTS[ev++ % EVENTS.length]); });
+    let ev = 0; every(25000, () => { if (!typing && root && mode === 'idle') addLine('lh-sys', 'SYS', EVENTS[ev++ % EVENTS.length]); });
 
     addLine('lh-sys', 'SYS', 'MK-OS gebootet · Telemetrie verbunden.');
+    if (hooks.isVoice && hooks.isVoice()) { setMode('talk'); addLine('lh-sys', 'SYS', 'Sprachmodus läuft · ich höre zu, Sir.'); }
     say('Systeme hochgefahren. Ich lese Ihre Hardware live aus, Sir.', { instant: true, silent: true });
     timers.push(setTimeout(() => root && say(ANSWERS.status(), { silent: true }), 1500));
     last = 0; fpsT = 0; fpsN = 0;
@@ -1157,5 +1296,5 @@ html.jarvis-reduce-motion #jarvisLarp .lh-ticker div{animation:none;padding-left
     if (hooks.onClose) { try { hooks.onClose(); } catch (e) {} }
   }
 
-  window.JarvisLarp = { open, close, isOpen: () => !!root };
+  window.JarvisLarp = { open, close, isOpen: () => !!root, speechEvent };
 })();

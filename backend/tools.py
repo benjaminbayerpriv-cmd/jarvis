@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import datetime
+import json
 import math
 import operator
 import os
@@ -18,6 +19,7 @@ import requests
 from . import browser_agent, config, confirm, last_target, memory, opencode_agent, panel, platform_utils
 
 IS_WINDOWS = platform.system() == "Windows"
+_NO_WINDOW = 0x08000000 if IS_WINDOWS else 0  # CREATE_NO_WINDOW
 
 TOOL_SCHEMAS = [
     {
@@ -707,6 +709,49 @@ def _find_start_menu_shortcut(name: str) -> str | None:
     return str(hits[0])
 
 
+def _find_start_app(name: str) -> str | None:
+    """AppUserModelID of an app by the name the Start menu shows for it.
+
+    Microsoft Store apps (Spotify from the Store, Rechner, Terminal, ...) have
+    neither an exe on PATH nor a .lnk in the Start Menu folders, so the two
+    lookups in _open_app_windows never find them. Get-StartApps lists
+    everything the Start menu shows, with its localized display name —
+    `shell:AppsFolder\\<AppID>` then launches it."""
+    script = "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; Get-StartApps | ConvertTo-Json -Compress"
+    try:
+        proc = subprocess.run(
+            platform_utils.powershell(script),
+            capture_output=True, encoding="utf-8", errors="replace",
+            timeout=20, creationflags=_NO_WINDOW,
+        )
+        apps = json.loads(proc.stdout)
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+    if isinstance(apps, dict):  # ConvertTo-Json writes a single app as a bare object
+        apps = [apps]
+
+    wanted = re.sub(r"\.exe$", "", name.strip(), flags=re.IGNORECASE).lower()
+    word_start = re.compile(r"\b" + re.escape(wanted))
+    best: tuple[tuple[int, int], str] | None = None
+    for app in apps:
+        app_name, app_id = str(app.get("Name") or ""), app.get("AppID")
+        shown = app_name.lower()
+        if not app_id or not wanted:
+            continue
+        if shown == wanted:
+            rank = 0
+        elif shown.startswith(wanted):
+            rank = 1
+        elif word_start.search(shown):
+            rank = 2
+        else:
+            continue
+        key = (rank, len(app_name))  # exact > prefix > word inside the name, shorter name wins ties
+        if best is None or key < best[0]:
+            best = (key, str(app_id))
+    return best[1] if best else None
+
+
 def _open_app_windows(name: str) -> str:
     # os.startfile resolves anything Windows itself would know how to run:
     # an exe on PATH, a registered "App Path", a URL, a document.
@@ -720,6 +765,14 @@ def _open_app_windows(name: str) -> str:
     if resolved:
         try:
             os.startfile(resolved)
+            return f"{name} geöffnet."
+        except OSError:
+            pass
+
+    app_id = _find_start_app(name)
+    if app_id:
+        try:
+            os.startfile(f"shell:AppsFolder\\{app_id}")  # noqa: S606 - AppID comes from Get-StartApps
             return f"{name} geöffnet."
         except OSError:
             pass
