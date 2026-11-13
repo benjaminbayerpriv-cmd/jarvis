@@ -852,7 +852,6 @@ html.jarvis-reduce-motion #jarvisLarp .lh-mic.lh-on{animation:none}
     MAPCV.width = G.D; MAPCV.height = G.D;
     MAPCV.getContext('2d').putImageData(G.img, 0, 0);
   }
-  const ll = (la, lo) => [la * RAD, lo * RAD];
   function drawGlobe(t) {
     const f = fit(CV('globe')); if (!f) return;
     const { ctx, w, h } = f;

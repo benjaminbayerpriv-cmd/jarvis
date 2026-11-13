@@ -510,8 +510,14 @@ def _eval_calc_node(node):
         left, right = _eval_calc_node(node.left), _eval_calc_node(node.right)
         # Integer powers never overflow in Python, they just keep computing —
         # "9 hoch 9 hoch 9" would pin the server for hours.
-        if isinstance(node.op, ast.Pow) and abs(right) > 1000 and abs(left) > 1:
-            raise OverflowError("exponent too large")
+        if isinstance(node.op, ast.Pow):
+            if abs(right) > 1000 and abs(left) > 1:
+                raise OverflowError("exponent too large")
+            # A small exponent on an already huge base is the same trap one
+            # level down: ((9**999)**999)**999 passed the check above three
+            # times and then tried to build a number with a billion digits.
+            if isinstance(left, int) and isinstance(right, int) and left.bit_length() * right > 100_000:
+                raise OverflowError("result too large")
         return _CALC_OPS[type(node.op)](left, right)
     if isinstance(node, ast.UnaryOp) and type(node.op) in _CALC_OPS:
         return _CALC_OPS[type(node.op)](_eval_calc_node(node.operand))
@@ -557,7 +563,8 @@ def _calculate(expression: str) -> str:
         return "Division durch null ist nicht definiert."
     except OverflowError:
         return f"Das Ergebnis von '{expression}' ist zu groß, um es auszurechnen."
-    except (SyntaxError, ValueError, TypeError):
+    except (SyntaxError, ValueError, TypeError, RecursionError, MemoryError):
+        # RecursionError/MemoryError: hundreds of nested brackets.
         return f"'{expression}' ist kein Rechenausdruck, den ich auswerten kann."
     if isinstance(result, complex):
         # e.g. (-8)**(1/3): Python returns a complex number, which used to be
@@ -571,7 +578,10 @@ def _calculate(expression: str) -> str:
 
 
 def _open_url(url: str) -> str:
-    url = url.strip()
+    url = (url or "").strip()
+    # An empty address used to become "https://" and open a browser error page.
+    if not url or url.lower() in ("http://", "https://"):
+        return "Welche Adresse soll ich öffnen?"
     if not url.lower().startswith(("http://", "https://")):
         url = "https://" + url
     if browser_agent.agent.connected():
@@ -997,7 +1007,7 @@ def _move_file(source: str, destination: str) -> str:
     if src is None:
         return f"Konnte '{source}' nicht finden."
     if _is_protected_location(src):
-        return f"'{src}' ist ein ganzer Hauptordner — den verschiebe ich nicht."
+        return f"'{src}' ist ein geschützter Haupt- oder Systemordner (oder liegt in einem) — das verschiebe ich nicht."
     dst = _spoken_location(destination)
 
     # "in die Dokumente" → move into the folder, keeping the filename.
@@ -1018,11 +1028,30 @@ def _move_file(source: str, destination: str) -> str:
     return f"'{src.name}' nach '{dst.parent}' verschoben."
 
 
+def _system_roots() -> list[Path]:
+    """Folders whose contents belong to the operating system or installed
+    programs — nothing in there is ever the user's "that file over there"."""
+    if IS_WINDOWS:
+        raw = [os.environ.get(var) for var in ("SystemRoot", "ProgramFiles", "ProgramFiles(x86)", "ProgramData")]
+    else:
+        raw = ["/System", "/usr", "/bin", "/sbin", "/etc", "/var", "/private", "/Library"]
+    return [Path(p).resolve() for p in raw if p]
+
+
 def _is_protected_location(target: Path) -> bool:
     resolved = target.resolve()
     home = Path.home().resolve()
     protected = {home, *(Path(os.path.expanduser(p)).resolve() for p in _LOCATION_ALIASES.values())}
-    return resolved in protected or resolved == Path(resolved.anchor) or resolved in home.parents
+    if resolved in protected or resolved == Path(resolved.anchor) or resolved in home.parents:
+        return True
+    # Moving or trashing C:\Windows, a program folder or anything inside them
+    # was not refused before — move_file has no confirmation step at all, and
+    # across drives shutil.move copies first and deletes after.
+    if any(resolved == root or root in resolved.parents for root in _system_roots()):
+        return True
+    # Jarvis itself, and every folder it lives in.
+    jarvis = config.ROOT_DIR.resolve()
+    return resolved == jarvis or resolved in jarvis.parents
 
 
 def _delete_path(description: str) -> str:
@@ -1052,7 +1081,7 @@ def _delete_path(description: str) -> str:
     if _is_protected_location(target):
         # A description made only of filler/location words ("den Ordner auf
         # dem Schreibtisch") resolves to the base folder itself.
-        return f"'{target}' ist ein ganzer Hauptordner — den lösche ich nicht. Welche Datei oder welchen Ordner darin meinst du?"
+        return f"'{target}' ist ein geschützter Haupt- oder Systemordner (oder liegt in einem) — das lösche ich nicht. Welche eigene Datei oder welchen eigenen Ordner meinst du?"
 
     def _do_delete() -> str:
         try:
@@ -1120,7 +1149,7 @@ def _visualize(vtype: str, title: str, data) -> str:
     saubere, begrenzte Werte bekommt — die Eingabe kommt vom Modell."""
     if vtype not in ("bars", "line", "text", "list"):
         return "Unbekannter Typ. Erlaubt: bars, line, text, list."
-    items = [str(x).strip() for x in (data if isinstance(data, list) else [data]) if str(x).strip()]
+    items = [str(x).strip() for x in (data if isinstance(data, list) else [data]) if x is not None and str(x).strip()]
     if not items:
         return "Keine Daten zum Anzeigen."
     if vtype in ("bars", "line"):
@@ -1130,7 +1159,10 @@ def _visualize(vtype: str, title: str, data) -> str:
             if not label and not _:
                 label, num = str(i + 1), raw
             try:
-                points.append({"label": label.strip()[:14] or str(i + 1), "value": float(num.replace(",", ".").strip())})
+                value = float(num.replace(",", ".").strip())
+                if not math.isfinite(value):
+                    raise ValueError(raw)
+                points.append({"label": label.strip()[:14] or str(i + 1), "value": value})
             except ValueError:
                 return f'"{raw}" ist keine Zahl. Format: "Label=Zahl".'
         payload = points
@@ -1331,6 +1363,17 @@ def call_tool(name: str, arguments: dict) -> str:
     handler = DISPATCH.get(name)
     if handler is None:
         return f"Unbekanntes Tool: {name}"
+    # The arguments come from the model: a number or null where a string
+    # belongs used to surface as "'int' object has no attribute 'strip'".
+    if not isinstance(arguments, dict):
+        arguments = {}
+    arguments = {
+        key: value if key == "data" or isinstance(value, str)
+        else "" if value is None
+        else " ".join(map(str, value)) if isinstance(value, (list, tuple))
+        else str(value)
+        for key, value in arguments.items()
+    }
     action_id = f"tool-{datetime.datetime.now().strftime('%H%M%S%f')}"
     panel.push("action", id=action_id, action=name, status="läuft", target=arguments)
     try:

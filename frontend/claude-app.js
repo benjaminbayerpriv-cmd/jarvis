@@ -120,8 +120,12 @@
     } catch (e) { return fallback; }
   }
   function setJarvisPref(key, value) {
-    try { localStorage.setItem(key, value ? 'true' : 'false'); } catch (e) {}
+    lsSet(key, value ? 'true' : 'false');
   }
+  // localStorage kann werfen (voll, vom Browser gesperrt) — ein Merkzettel,
+  // der nicht geschrieben werden kann, darf nie einen Chat-Wechsel abbrechen.
+  function lsGet(key) { try { return localStorage.getItem(key); } catch (e) { return null; } }
+  function lsSet(key, value) { try { localStorage.setItem(key, value); } catch (e) {} }
   function applyReduceMotion(on) {
     document.documentElement.classList.toggle('jarvis-reduce-motion', !!on);
   }
@@ -441,14 +445,16 @@
     if (!pendingImages.length) { attachPreviewEl.style.display = 'none'; attachPreviewEl.innerHTML = ''; return; }
     attachPreviewEl.style.display = 'flex';
     attachPreviewEl.innerHTML = pendingImages.map((att, i) => {
-      const title = (att.note ? `${att.name} — ${att.note}` : att.name).replace(/"/g, '&quot;');
+      // Der Dateiname kommt vom Nutzer-Dateisystem: vollständig escapen, sonst
+      // wird aus einer Datei namens "<img onerror=…>" ausgeführtes HTML.
+      const title = escapeHtml(att.note ? `${att.name} — ${att.note}` : att.name);
       return `
       <div style="position:relative;width:56px;height:56px;flex:0 0 auto;">
         ${att.image
           ? `<img src="${att.image}" title="${title}" style="width:100%;height:100%;object-fit:cover;border-radius:10px;border:1px solid ${C.border};" />`
           : `<div title="${title}" style="width:100%;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;border-radius:10px;border:1px solid ${att.note ? C.accent : C.border};background:${C.bgHover};color:${C.textSoft};padding:2px;">
                <span style="display:inline-flex;">${ICONS.copy}</span>
-               <span style="font-size:9px;line-height:1.1;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${att.name.replace(/"/g, '&quot;')}</span>
+               <span style="font-size:9px;line-height:1.1;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(att.name)}</span>
              </div>`}
         <button class="js-attach-remove" data-idx="${i}" title="Entfernen" style="position:absolute;top:-6px;right:-6px;width:18px;height:18px;border-radius:50%;background:${C.bgSurface3};border:1px solid ${C.border};color:${C.textSoft};cursor:pointer;font-size:11px;line-height:1;display:flex;align-items:center;justify-content:center;padding:0;">×</button>
       </div>
@@ -620,10 +626,12 @@
   // ensure_thinking_filler), das genau diese Lücke überbrückt.
   let thinkingFillerUrl = null;
   // Ausgabe-Pegel-Messung (gesprochene Stimme) für die Orb-Animation
-  let ttsAudioCtx = null, outputAnalyser = null, outBuf = null, speakingLevel = 0;
+  let ttsAudioCtx = null, outputAnalyser = null, outBuf = null;
   let currentAudioEl = null, currentAudioSrc = null;
-  // Abbruch-Zustand für eine laufende Antwort (Stop-Button)
-  let turnAborted = false, activeReader = null, abortController = null, currentTurnId = null;
+  // Laufende Antwort (für den Stop-Button): Reader und AbortController des
+  // aktuellen Turns. Ob ein Turn abgebrochen wurde, liest sendMessage() an
+  // seinem eigenen AbortSignal ab.
+  let activeReader = null, abortController = null, currentTurnId = null;
   // Live-Diktat: Basis-Text im Eingabefeld beim Start
   let dictBase = '';
 
@@ -685,7 +693,6 @@
     if (currentAudioEl === el) currentAudioEl = null;
     if (src) { try { src.disconnect(); } catch (e) {} }
     outputAnalyser = null;
-    speakingLevel = 0;
   }
 
   function enqueueClip(blob) {
@@ -715,13 +722,17 @@
   // hörbare Stille mitten in der Antwort, die wie ein Abbruch/Hänger klingt.
   // Ein kurzes "Ähm" überbrückt das genau wie bei einem Menschen, der noch
   // nachdenkt, statt stumm zu bleiben.
+  let currentFillerEl = null;
   function playFiller() {
     return new Promise((resolve) => {
       if (!thinkingFillerUrl) { resolve(); return; }
       const audio = new Audio(thinkingFillerUrl);
-      const finish = () => resolve();
+      currentFillerEl = audio;
+      const finish = () => { if (currentFillerEl === audio) currentFillerEl = null; resolve(); };
       audio.onended = finish;
       audio.onerror = finish;
+      // pause() (siehe silenceAudio) löst weder ended noch error aus.
+      audio.onpause = finish;
       audio.play().catch(finish);
     });
   }
@@ -770,9 +781,6 @@
     audioDraining = false;
     // nach der Ausgabe wieder in den Bereit-Zustand, wenn noch im Sprachmodus
     if (speechMode && !busy) setSpeechStatus('Bereit');
-    // Erst jetzt ist die Antwort wirklich zu Ende — wieder hinhören, sonst
-    // würde die Erkennung Jarvis' eigene Stimme aufgreifen (Echo).
-    resumeListening();
   }
 
   // Nur die Sprachausgabe abwürgen (Warteschlange + gerade laufender Clip),
@@ -791,12 +799,12 @@
     if (currentAudioEl) { try { currentAudioEl.pause(); } catch (e) {} currentAudioEl = null; }
     outputAnalyser = null;
     speaking = false;
-    speakingLevel = 0;
+    // Auch ein gerade laufendes "Ähm" verstummt sofort mit.
+    if (currentFillerEl) { try { currentFillerEl.pause(); } catch (e) {} currentFillerEl = null; }
   }
 
   // Stop-Button: unterbricht die laufende Antwort UND die Sprachausgabe.
   function stopSpeech() {
-    turnAborted = true;
     try { if (abortController) abortController.abort(); } catch (e) {}
     try { if (activeReader) activeReader.cancel().catch(() => {}); } catch (e) {}
     streamStillGenerating = false;
@@ -804,7 +812,6 @@
     if (busy) setBusy(false);
     if (currentTurnId) { fetch('/chat/cancel', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ turn_id: currentTurnId }) }).catch(() => {}); }
     if (speechMode && !busy) setSpeechStatus('Bereit');
-    resumeListening();
   }
 
   // ------------------------------------------------------------------ zustand
@@ -814,7 +821,7 @@
   let busy = false;
 
   // UI-Anker (in buildUi() gesetzt)
-  let uiEl = null, sidebarEl = null, chatListEl = null, chatRootEl = null, threadEl = null;
+  let uiEl = null, chatListEl = null, chatRootEl = null, threadEl = null;
   let composerTray = null, composerInput = null, sendBtn = null, speechBtn = null, noteBtn = null;
   let uploadBtn = null, settingsBtn = null, modelEl = null, modelBtnEl = null, modelMenuEl = null, fileInput = null;
   // Kamera-Fenster (nur im Sprachmodus, siehe openCameraWindow/closeCameraWindow):
@@ -841,7 +848,7 @@
   // setComposerHealthy() weiter unten.
   let modelHealthy = true;
   let composerContentEl = null, composerSetupEl = null;
-  let setupLmUrlInput = null, setupApiKeyInput = null;
+  let setupLmUrlInput = null;
   // Slash-Befehle im Composer (wie bei Claude selbst): "/" am Anfang der
   // Eingabe öffnet eine Liste ausführbarer Befehle statt eine Chat-Nachricht
   // zu tippen.
@@ -858,7 +865,7 @@
   let speechCaptionEl = null, spcStatusEl = null, spcUserEl = null, spcReplyEl = null;
   let settingsSheetEl = null, settingsModelsEl = null, newProjectSheetEl = null, renameChatSheetEl = null;
   let pinnedChatListEl = null;
-  let chatItemMenuTargetId = null, chatItemMenuTargetProjectId = null, renamingChatId = null, renamingChatProjectId = null, renamingIsCodeSession = false;
+  let chatItemMenuTargetId = null, renamingChatId = null, renamingChatProjectId = null, renamingIsCodeSession = false;
   let allConversations = [];  // letzte /conversations-Antwort — für Umbenennen/Anheften/Löschen ohne erneuten Fetch
 
   // Code-Tab (echte opencode-TUI in einem eingebetteten xterm.js-Terminal)
@@ -874,12 +881,12 @@
   let codeSessionId = null;
 
   // Projects-Ansicht Anker
-  let projectsViewEl = null, projectsGridEl = null, projectsSearchRowEl = null, projectsSearchInputEl = null;
+  let projectsGridEl = null, projectsSearchRowEl = null, projectsSearchInputEl = null;
   let projectsList = [], projectsSortMode = 'newest', projectsSearchOpen = false;
   let projectCardMenuTargetId = null, editingProjectId = null;
   let currentProjectId = null;  // getaggt an die NÄCHSTE neu angelegte Konversation, siehe sendMessage
   // Projekt-Detailseite Anker
-  let projectDetailViewEl = null, pdBackEl = null, pdNameEl = null, pdTitleEl = null;
+  let pdBackEl = null, pdNameEl = null, pdTitleEl = null;
   let pdEditorEl = null, pdUploadBtn = null, pdModelBtn = null, pdModelLabelEl = null;
   let pdNoteBtn = null, pdSpeechBtn = null, pdSendBtn = null, pdRecentEl = null;
   let viewingProjectId = null;
@@ -921,7 +928,6 @@
   let orbOffsetX = 0, orbOffsetY = 0;
   let orbDragStartX = 0, orbDragStartY = 0, orbDragBaseX = 0, orbDragBaseY = 0;
   let orbBoundsRect = null; // vom letzten drawOrb()-Aufruf, fürs Clamping beim Ziehen
-  const DOT_COLOR = '#8b8b8f';
   // Grafik, die JARVIS per visualize-Tool auf das Raster legt (siehe
   // backend/tools.py _visualize) — { vtype, title, data, t0 } oder null.
   let vizState = null, vizAmt = 0;
@@ -968,7 +974,7 @@
   }
   if (deepConv) {
     activeMode = String(deepConv).startsWith('code-') ? 'code' : 'chat';
-    localStorage.setItem(modeKey(activeMode), deepConv);
+    lsSet(modeKey(activeMode), deepConv);
   }
   // Bewusst KEIN Wiederaufnehmen der zuletzt offenen Unterhaltung aus
   // localStorage beim Start — jeder Server-/Browser-Neustart (und jedes
@@ -985,7 +991,7 @@
     if (!currentConversationId || !isModeConv(activeMode, currentConversationId)) {
       currentConversationId = activeMode + '-' + (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2));
     }
-    localStorage.setItem(modeKey(activeMode), currentConversationId);
+    lsSet(modeKey(activeMode), currentConversationId);
     return currentConversationId;
   }
 
@@ -1383,7 +1389,6 @@
     settingsSheetEl.addEventListener('click', (e) => { if (e.target === settingsSheetEl) closeSettings(); });
     document.body.appendChild(settingsSheetEl);
 
-    sidebarEl = $('.js-sidebar', uiEl);
     chatListEl = $('.js-chats', uiEl);
     pinnedChatListEl = $('.js-pinned-chats', uiEl);
     chatRootEl = $('.js-main', uiEl);
@@ -1393,17 +1398,14 @@
     composerContentEl = $('.js-composer-content', uiEl);
     composerSetupEl = $('.js-composer-setup', uiEl);
     setupLmUrlInput = $('.js-setup-lmurl', uiEl);
-    setupApiKeyInput = $('.js-setup-apikey', uiEl);
     sendBtn = $('.js-send', uiEl);
     speechBtn = $('.js-speech', uiEl);
     noteBtn = $('.js-note', uiEl);
     uploadBtn = $('.js-upload', uiEl);
     attachPreviewEl = $('.js-attach-preview', uiEl);
-    projectsViewEl = $('.js-projects-view', uiEl);
     projectsGridEl = $('.js-projects-grid', uiEl);
     projectsSearchRowEl = $('.js-projects-search-row', uiEl);
     projectsSearchInputEl = $('.js-projects-search-input', uiEl);
-    projectDetailViewEl = $('.js-project-detail-view', uiEl);
     pdBackEl = $('.js-pd-back', uiEl);
     pdNameEl = $('.js-pd-name', uiEl);
     pdTitleEl = $('.js-pd-title', uiEl);
@@ -1430,6 +1432,15 @@
     spSendBtn = $('.js-sp-send', speechBarEl);
     spChatBtn = $('.js-sp-chat', speechBarEl);
     settingsModelsEl = $('.js-settings-models', settingsSheetEl);
+    // Statuszeile über der Unterhaltung. Stand früher in buildCodeView() —
+    // Modell-Hinweise gingen dadurch verloren, bis man einmal den Code-Tab
+    // geöffnet hatte.
+    noticeStripEl = $('.js-notice', uiEl);
+    noticeStripTextEl = $('.js-notice-text', uiEl);
+    if (noticeStripEl) {
+      noticeStripEl.addEventListener('click', () => { noticeStripEl.style.display = 'none'; });
+      noticeStripEl.title = 'Klicken zum Schließen';
+    }
 
     injectSkinCss();
     wireUi();
@@ -1462,7 +1473,7 @@
       .jarvis-reduce-motion, .jarvis-reduce-motion * {
         transition-duration: 0s !important; animation-duration: 0s !important; animation-delay: 0s !important;
       }
-      body.js-app-active > :not(#jsApp):not(#jarvisOrb):not(#jarvisOrbHit):not(#jsSpeechTerm):not(#jsCamWindow):not(#jsSpeechbar):not(#jsSpeechCaption):not(#jsSettingsSheet):not(#jsNewProjectSheet):not(#jsRenameChatSheet):not(#jsBtwWindow):not(#jsNotice):not(#jsModelLoad):not(#jsWarmLock):not(#jarvisLarp):not(script):not(style) { display:none !important; }
+      body.js-app-active > :not(#jsApp):not(#jarvisOrb):not(#jarvisOrbHit):not(#jsSpeechTerm):not(#jsCamWindow):not(#jsSpeechbar):not(#jsSpeechCaption):not(#jsSettingsSheet):not(#jsNewProjectSheet):not(#jsRenameChatSheet):not(#jsBtwWindow):not(#jsNotice):not(#jsModelLoad):not(#jsModelFitNotice):not(#jsWarmLock):not(#jarvisLarp):not(script):not(style) { display:none !important; }
       body.js-app-active { overflow:hidden; }
       /* Jeder neu gestreamte Buchstabe (siehe setAssistantText/wrapCharsForReveal)
          erscheint erst unscharf und schärft sich dann ein, statt abrupt
@@ -1593,8 +1604,6 @@
       #jsApp:not(.js-has-content) .js-composer { top:40%; bottom:auto; transform:translateY(24px); background:none; padding:0 24px; }
       #jsApp.js-has-content .js-composer { top:auto; bottom:0; transform:none; }
       .js-main.js-speech-active .js-thread, .js-main.js-speech-active .js-welcome { display:none !important; }
-      .js-code-editor:empty::before, .js-code-editor.is-empty::before { content:attr(data-placeholder); color:${C.textDim}; pointer-events:none; }
-      .js-code-editor:focus::before { opacity:.7; }
       #jsApp.js-code-active .js-thread, #jsApp.js-code-active .js-welcome, #jsApp.js-code-active .js-composer { display:none !important; }
       #jsApp.js-code-active .js-codeview { display:flex !important; }
       #jsApp.js-projects-active .js-thread, #jsApp.js-projects-active .js-welcome, #jsApp.js-projects-active .js-composer { display:none !important; }
@@ -1746,7 +1755,7 @@
       try { w.close(); } catch (e) {}
     }
     if (codeReconnectTimer) { clearTimeout(codeReconnectTimer); codeReconnectTimer = null; }
-    if (currentConversationId) localStorage.setItem(modeKey(activeMode), currentConversationId);
+    if (currentConversationId) lsSet(modeKey(activeMode), currentConversationId);
     saveComposerDraft(currentConversationId);
     activeMode = mode;
     // Nur INNERHALB einer laufenden Sitzung wird beim Hin-und-Herwechseln
@@ -1765,7 +1774,7 @@
     // Ende, nach beiden Aufrufen.
     const saved = isInitialBoot
       ? (deepConv && isModeConv(mode, deepConv) ? deepConv : null)
-      : localStorage.getItem(modeKey(mode));
+      : lsGet(modeKey(mode));
     const nextId = saved && isModeConv(mode, saved) ? saved : null;
     if (nextId === currentConversationId) { loadConversationList(); navRecord(); return; }
     currentConversationId = nextId;
@@ -1781,7 +1790,7 @@
     if (!el) return;
     el.innerHTML = '';
     history = [];
-    historyEpoch++;
+    const epoch = ++historyEpoch;
     let turns = [];
     if (id) {
       try {
@@ -1791,6 +1800,10 @@
         turns = j.turns || [];
       } catch (e) { turns = []; }
     }
+    // Inzwischen wurde ein anderer Chat geöffnet (schnelles Durchklicken):
+    // dessen Laden hat den Thread schon geleert — diese Turns gehören nicht
+    // mehr hinein, sonst stehen zwei Unterhaltungen gemischt untereinander.
+    if (epoch !== historyEpoch) return;
     for (const t of turns) {
       const attachments = (t.images || []).map((img) => ({ image: img }));
       addThreadTurn(t.role === 'you' ? 'you' : 'jarvis', t.text, attachments);
@@ -1852,14 +1865,19 @@
     });
     return el;
   }
+  let chatListEpoch = 0;  // nur die jeweils letzte Listen-Anfrage darf die Sidebar füllen
   async function loadConversationList() {
     if (!chatListEl) return;
-    let list = [];
+    // Im Code-Tab gehört die Liste den opencode-Sessions (loadCodeSessions).
+    if (activeMode === 'code') return;
+    const epoch = ++chatListEpoch;
+    let list;
     try {
       const r = await fetch('/conversations');
       const j = await r.json();
       list = (j.conversations || []).filter((c) => isModeConv(activeMode, c.id));
     } catch (e) { list = []; }
+    if (epoch !== chatListEpoch) return;
     allConversations = list;
     const pinned = list.filter((c) => c.pinned);
     const unpinned = list.filter((c) => !c.pinned);
@@ -1903,12 +1921,15 @@
     if (pinnedChatListEl) pinnedChatListEl.innerHTML = '';
     const pinnedToggle = uiEl ? $('.js-pinned-toggle', uiEl) : null;
     if (pinnedToggle) pinnedToggle.style.display = 'none';
-    let sessions = [];
+    const epoch = ++chatListEpoch;
+    let sessions;
     try {
       const r = await fetch('/code/sessions');
       const j = await r.json();
       sessions = j.sessions || [];
     } catch (e) { sessions = []; }
+    // Inzwischen zurück im Chat-Tab: dort gehört die Liste den Unterhaltungen.
+    if (epoch !== chatListEpoch) return;
     chatListEl.innerHTML = '';
     if (!sessions.length) {
       const d = document.createElement('div');
@@ -1992,7 +2013,7 @@
     if (id === currentConversationId) { navRecord(); return; }
     saveComposerDraft(currentConversationId);
     currentConversationId = id;
-    localStorage.setItem(modeKey(activeMode), id);
+    lsSet(modeKey(activeMode), id);
     await renderConversation(id, projectId);
     restoreComposerDraft(id);
     loadConversationList();
@@ -2007,7 +2028,7 @@
     saveComposerDraft(currentConversationId);
     currentProjectId = null;
     currentConversationId = activeMode + '-' + (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2));
-    localStorage.setItem(modeKey(activeMode), currentConversationId);
+    lsSet(modeKey(activeMode), currentConversationId);
     history = [];
     historyEpoch++;
     clearThreadUI();
@@ -2111,7 +2132,7 @@
     list = list.slice();
     if (projectsSortMode === 'oldest') list.sort((a, b) => (a.created_at || '').localeCompare(b.created_at || ''));
     else if (projectsSortMode === 'updated') list.sort((a, b) => (b.updated_at || b.created_at || '').localeCompare(a.updated_at || a.created_at || ''));
-    else if (projectsSortMode === 'alpha') list.sort((a, b) => a.name.localeCompare(b.name, 'de', { sensitivity: 'base' }));
+    else if (projectsSortMode === 'alpha') list.sort((a, b) => (a.name || '').localeCompare(b.name || '', 'de', { sensitivity: 'base' }));
     else list.sort((a, b) => (b.created_at || '').localeCompare(a.created_at || '')); // 'newest' (Standard)
     return list;
   }
@@ -2119,7 +2140,7 @@
     return `
       <div class="js-project-card" data-id="${p.id}" style="position:relative;border:1px solid ${C.border};border-radius:14px;padding:16px 18px;background:${C.bgSurface3};transition:border-color .15s;display:flex;flex-direction:column;min-height:110px;">
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px;padding-right:34px;">
-          <span style="font-size:14px;font-weight:600;color:${C.text};">${escapeHtml(p.name)}</span>
+          <span style="font-size:14px;font-weight:600;color:${C.text};">${escapeHtml(p.name || 'Unbenannt')}</span>
           ${p.tag ? `<span style="font-size:11px;padding:2px 8px;border-radius:10px;background:${C.bgHover};color:${C.textSoft};">${escapeHtml(p.tag)}</span>` : ''}
         </div>
         <button class="js-project-menu-btn" data-id="${p.id}" title="Optionen" style="position:absolute;top:12px;right:10px;background:none;border:none;color:${C.textSoft};cursor:pointer;padding:4px;display:inline-flex;">${jsIcon('0xe062', 20)}</button>
@@ -2133,7 +2154,7 @@
     if (!projectsGridEl) return;
     let list = projectsList.slice();
     const q = (projectsSearchInputEl ? projectsSearchInputEl.value : '').trim().toLowerCase();
-    if (q) list = list.filter((p) => p.name.toLowerCase().includes(q) || (p.description || '').toLowerCase().includes(q));
+    if (q) list = list.filter((p) => (p.name || '').toLowerCase().includes(q) || (p.description || '').toLowerCase().includes(q));
     list = sortedProjects(list);
 
     projectsGridEl.innerHTML = list.length
@@ -2171,7 +2192,12 @@
     $('.js-newproject-name', newProjectSheetEl).focus();
   }
   function closeNewProjectModal() {
-    if (newProjectSheetEl) newProjectSheetEl.style.display = 'none';
+    if (newProjectSheetEl) {
+      newProjectSheetEl.style.display = 'none';
+      // Sonst steht die Fehlermeldung vom letzten Versuch beim nächsten Öffnen noch da.
+      const errEl = $('.js-newproject-error', newProjectSheetEl);
+      if (errEl) errEl.textContent = '';
+    }
     editingProjectId = null;
   }
   async function createProjectFromModal() {
@@ -2181,11 +2207,20 @@
     if (errEl) errEl.textContent = '';
     try {
       if (editingProjectId) {
-        await fetch(`/projects/${encodeURIComponent(editingProjectId)}`, {
+        // Ein leerer Name ließ eine Karte ohne Titel zurück.
+        if (!name) {
+          if (errEl) errEl.textContent = 'Bitte einen Namen angeben.';
+          return;
+        }
+        const r = await fetch(`/projects/${encodeURIComponent(editingProjectId)}`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ name, description }),
         });
+        if (!r.ok) {
+          if (errEl) errEl.textContent = 'Das Projekt konnte nicht gespeichert werden.';
+          return;
+        }
       } else {
         const dir = $('.js-newproject-dir', newProjectSheetEl).value.trim();
         if (!dir) {
@@ -2245,7 +2280,6 @@
     if (menu) menu.style.display = 'none';
     if (uiEl) uiEl.querySelectorAll('.js-chatitem-menu-btn.is-open').forEach((b) => b.classList.remove('is-open'));
     chatItemMenuTargetId = null;
-    chatItemMenuTargetProjectId = null;
   }
   function openChatItemMenu(btn, id, projectId) {
     closeProjectCardMenu();
@@ -2255,7 +2289,6 @@
     closeChatItemMenu();
     if (alreadyOpenForThis) return;
     chatItemMenuTargetId = id;
-    chatItemMenuTargetProjectId = projectId || null;
     const conv = findConv(id);
     const pinLabel = conv && conv.pinned ? 'Lösen' : 'Anheften';
     menu.innerHTML = `
@@ -2391,9 +2424,9 @@
       e.preventDefault();
       const collapsed = chatListEl.classList.toggle('is-collapsed');
       $('.js-chats-toggle', uiEl).classList.toggle('is-collapsed', collapsed);
-      localStorage.setItem('jarvis_chats_collapsed', collapsed ? '1' : '0');
+      lsSet('jarvis_chats_collapsed', collapsed ? '1' : '0');
     });
-    if (localStorage.getItem('jarvis_chats_collapsed') === '1') {
+    if (lsGet('jarvis_chats_collapsed') === '1') {
       chatListEl.classList.add('is-collapsed');
       $('.js-chats-toggle', uiEl).classList.add('is-collapsed');
     }
@@ -2401,9 +2434,9 @@
       e.preventDefault();
       const collapsed = pinnedChatListEl.classList.toggle('is-collapsed');
       $('.js-pinned-toggle', uiEl).classList.toggle('is-collapsed', collapsed);
-      localStorage.setItem('jarvis_pinned_collapsed', collapsed ? '1' : '0');
+      lsSet('jarvis_pinned_collapsed', collapsed ? '1' : '0');
     });
-    if (localStorage.getItem('jarvis_pinned_collapsed') === '1') {
+    if (lsGet('jarvis_pinned_collapsed') === '1') {
       pinnedChatListEl.classList.add('is-collapsed');
       $('.js-pinned-toggle', uiEl).classList.add('is-collapsed');
     }
@@ -2426,7 +2459,7 @@
     $('.js-renamechat-input', renameChatSheetEl).addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); saveRenameChatModal(); } });
     renameChatSheetEl.addEventListener('click', (e) => { if (e.target === renameChatSheetEl) closeRenameChatModal(); });
     $('.js-projects', uiEl).addEventListener('click', (e) => { e.preventDefault(); openProjectsView(); });
-    $('.js-chats-sort', uiEl).addEventListener('click', (e) => { e.preventDefault(); loadConversationList(); });
+    $('.js-chats-sort', uiEl).addEventListener('click', (e) => { e.preventDefault(); if (activeMode === 'code') loadCodeSessions(); else loadConversationList(); });
     $('.js-projects-new', uiEl).addEventListener('click', (e) => { e.preventDefault(); openNewProjectModal(); });
     $('.js-projects-search-btn', uiEl).addEventListener('click', (e) => {
       e.preventDefault();
@@ -2589,6 +2622,10 @@
       e.preventDefault();
       const text = pdEditorEl ? pdEditorEl.innerText.trim() : '';
       if (!text) return;
+      // sendMessage() verwirft die Nachricht in beiden Fällen stumm — vorher
+      // landete man dann in einem leeren neuen Chat, und der Text war weg.
+      if (busy) { showNotice('Jarvis antwortet gerade noch — bitte kurz warten oder die Antwort stoppen.'); return; }
+      if (!modelHealthy) { showNotice(MODEL_UNREACHABLE_TEXT); return; }
       pdEnterChat();
       sendMessage(text);
     });
@@ -2764,7 +2801,7 @@
     window.addEventListener('click', () => { if (modelMenuEl) modelMenuEl.style.display = 'none'; modelMenuAnchor = null; });
 
     // Sprachmodus-Bottom-Leiste
-    if (spMuteBtn) spMuteBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); muted = !muted; updateMuteIcon(); if (muted) { if (!isRecording()) stopListening(); } else startListening(); });
+    if (spMuteBtn) spMuteBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); muted = !muted; updateMuteIcon(); });
     if (spCamBtn) spCamBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); toggleCameraWindow(); });
     if (spStopBtn) spStopBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); stopSpeech(); });
     if (spSendBtn) spSendBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); const t = composerInput ? composerInput.innerText.trim() : ''; if (t) sendMessage(t); });
@@ -2787,23 +2824,9 @@
     });
     document.body.appendChild(fileInput);
 
-    (async () => {
-      if (currentConversationId) {
-        try {
-          const r = await fetch(`/conversations/${encodeURIComponent(currentConversationId)}`);
-          const j = await r.json();
-          const turns = j.turns || [];
-          const el = ensureThread();
-          for (const t of turns) {
-            addThreadTurn(t.role === 'you' ? 'you' : 'jarvis', t.text);
-            history.push({ role: t.role === 'you' ? 'user' : 'assistant', content: t.text });
-          }
-          if (el.children.length) el.scrollTop = el.scrollHeight;
-        } catch (e) { /* fine — starts with an empty thread */ }
-      }
-      syncWelcome();
-      loadConversationList();
-    })();
+    // Deep-Link (?conv=…): dieselbe Laderoutine wie bei jedem Chat-Wechsel —
+    // die frühere Kopie hier zeigte z. B. keine Bild-Miniaturen an.
+    renderConversation(currentConversationId).then(loadConversationList);
   }
 
   // ---------------------------------------------------------------- thread
@@ -2811,8 +2834,6 @@
     if (!threadEl) { const m = $('.js-thread', uiEl); if (m) threadEl = m; }
     return threadEl;
   }
-  function showThread() {}
-
   function addThreadTurn(role, text, attachments) {
     const el = ensureThread();
     if (!el) return { classList: { add(){}, remove(){}, toggle(){} }, textContent: '' };
@@ -3080,7 +3101,6 @@
     pendingImages = [];
     if (composerInput) { composerInput.innerText = ''; composerInput.classList.remove('is-empty'); }
     renderAttachPreviews();
-    showThread();
     progressHostEl = null; // neue Runde eigener Fortschrittsblöcke
     addThreadTurn('you', text, attachmentsForThisTurn);
     const said = addThreadTurn('jarvis', '');
@@ -3093,13 +3113,23 @@
 
     const parts = [];
     let fullText = '';
-    turnAborted = false;
-    abortController = new AbortController();
+    // Alles, was diesen einen Turn betrifft, hängt an lokalen Variablen:
+    // Stopp (aborted) kommt über das eigene AbortSignal statt über ein
+    // gemeinsames Flag, das ein direkt danach gestarteter Turn wieder
+    // zurücksetzen würde; failed hält Fehlertexte aus der Historie heraus;
+    // epochAtSend merkt, ob inzwischen ein anderer Chat offen ist.
+    const ctrl = new AbortController();
+    const aborted = () => ctrl.signal.aborted;
+    const epochAtSend = historyEpoch;
+    let failed = false;
+    abortController = ctrl;
     activeReader = null;
     // Eindeutig statt "1", "2", … ab jedem Seitenladen: ein Stopp, der kurz
     // nach dem Ende einer Antwort ankam, blieb im Backend stehen und brach den
     // nächsten Turn mit derselben Nummer sofort ab (auch nach einem Reload).
-    currentTurnId = 'turn-' + (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + '-' + (++turnCounter));
+    const turnId = 'turn-' + (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + '-' + (++turnCounter));
+    currentTurnId = turnId;
+    const isCurrentTurn = () => currentTurnId === turnId;
     streamStillGenerating = true;
     clearViz();
     // Kleine Miniaturen NACH dem Absenden erzeugen (Anzeige ist längst
@@ -3111,8 +3141,8 @@
       const resp = await fetch('/chat/stream', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        signal: abortController.signal,
-        body: JSON.stringify({ message: outgoingText, history, turn_id: currentTurnId, mode: activeMode, conversation_id: ensureConversationId(), images: imagesForThisTurn, image_thumbnails: thumbnailsForThisTurn, project_id: currentProjectId, is_speech: speechMode }),
+        signal: ctrl.signal,
+        body: JSON.stringify({ message: outgoingText, history, turn_id: turnId, mode: activeMode, conversation_id: ensureConversationId(), images: imagesForThisTurn, image_thumbnails: thumbnailsForThisTurn, project_id: currentProjectId, is_speech: speechMode }),
       });
       if (!resp.ok) throw new Error('HTTP ' + resp.status);
       const reader = resp.body.getReader();
@@ -3157,27 +3187,35 @@
       }
     } catch (err) {
       // Abbruch durch den Stop-Button ist KEIN Fehler — keine Meldung anzeigen.
-      if (turnAborted) { fullText = fullText || ''; }
-      else if (!fullText) { fullText = MODEL_UNREACHABLE_TEXT; said.classList.remove('thinking'); setAssistantText(said, fullText); }
+      if (!aborted() && !fullText) { failed = true; fullText = MODEL_UNREACHABLE_TEXT; said.classList.remove('thinking'); setAssistantText(said, fullText); }
     }
     // Stream ended without a "done" and without any text (backend crashed
     // mid-turn): the bubble used to stay on "Denkt nach…" forever.
-    if (!turnAborted && !fullText && !parts.length) {
+    if (!aborted() && !fullText && !parts.length) {
+      failed = true;
       fullText = 'Es kam keine Antwort zurück. Versuch es bitte nochmal.';
       said.classList.remove('thinking');
       setAssistantText(said, fullText);
     }
-    activeReader = null;
-    abortController = null;
-    streamStillGenerating = false;
-    if (turnAborted) {
+    // Läuft inzwischen schon der NÄCHSTE Turn (Stopp + sofort neue Frage),
+    // gehören Reader, Busy-Zustand und Sprachstatus ihm — dieser hier darf sie
+    // nicht mehr zurücksetzen, sonst verschwindet z. B. dessen Stopp-Button.
+    const stillMine = isCurrentTurn();
+    // Nur in die Historie, wenn noch derselbe Chat offen ist: sonst landet
+    // dieser Turn als Kontext in der inzwischen geöffneten Unterhaltung.
+    const sameChat = epochAtSend === historyEpoch;
+    if (stillMine) {
+      activeReader = null;
+      abortController = null;
+      streamStillGenerating = false;
+    }
+    if (aborted()) {
       // Abgebrochen (Stop-Taste oder Barge-in) — aber stattgefunden hat der
       // Turn trotzdem: Was Jarvis bis dahin gesagt hat, bleibt in der
       // Historie. Sonst fehlt genau der Bezug, auf den sich eine direkte
       // Anschlussantwort stützt ("mach Hallo Welt", nachdem er "was soll ich
       // tun, zum Beispiel Hallo Welt?" gefragt hat) — man unterbricht ihn,
       // antwortet auf seine Frage, und er weiß nichts mehr davon.
-      turnAborted = false;
       const spoken = (fullText || parts.join(' ')).trim();
       // Stopped before any word arrived: the bubble still said "Denkt nach…"
       // and kept pulsing after Stop — it must visibly end.
@@ -3188,7 +3226,7 @@
       } else {
         setAssistantText(said, spoken);
       }
-      if (spoken) {
+      if (spoken && sameChat) {
         history.push({ role: 'user', content: outgoingText });
         history.push({ role: 'assistant', content: spoken });
         // Fire-and-forget: komprimiert bis zum NÄCHSTEN Turn, statt den
@@ -3198,26 +3236,27 @@
         // einfach weg.
         if (history.length > 40) compactHistory();
       }
-      setBusy(false);
-      resumeListening();
-      if (speechMode) setSpeechStatus('Bereit');
+      if (stillMine) {
+        setBusy(false);
+        if (speechMode) setSpeechStatus('Bereit');
+      }
       return;
     }
     // Finaler Durchlauf mit dem autoritativen Volltext — die Live-Updates
     // während des Streamens können mitten in einem ```-Block gerendert
     // haben, bevor der schließende Zaun überhaupt eingetroffen ist.
     if (fullText) setAssistantText(said, fullText);
-    if (fullText) {
+    // Fehlertexte ("Ich erreiche mein Sprachmodell gerade nicht …") sind
+    // keine Antwort von Jarvis und gehören nicht in den Kontext der nächsten
+    // Frage — vorher wurden sie dem Modell als eigene Aussage wieder vorgelegt.
+    if (fullText && !failed && sameChat) {
       history.push({ role: 'user', content: outgoingText });
       history.push({ role: 'assistant', content: fullText });
-      // Siehe Kommentar oben bei turnAborted — fire-and-forget, wirkt ab
+      // Siehe Kommentar oben beim Abbruch — fire-and-forget, wirkt ab
       // dem nächsten Turn.
       if (history.length > 40) compactHistory();
     }
-    setBusy(false);
-    // Ohne Sprachausgabe (Text-/Diktatmodus) sofort wieder zuhören; im
-    // Sprachmodus übernimmt drainAudioQueue das nach dem letzten Clip.
-    if (!audioDraining && !audioQueue.length) resumeListening();
+    if (stillMine) setBusy(false);
     loadConversationList();
     setTimeout(loadConversationList, 2500);
   }
@@ -3394,7 +3433,6 @@
     });
   }
   function showSlashHelp() {
-    showThread();
     const lines = SLASH_COMMANDS.map((c) => `/${c.cmd} — ${c.desc}`).join('\n');
     addThreadTurn('jarvis', 'Verfügbare Befehle:\n' + lines);
   }
@@ -3887,7 +3925,7 @@
       if (!hostV) return;
       const b = document.createElement('div');
       b.style.cssText = `padding:10px 12px;border:1px solid ${C.border};border-radius:10px;background:${C.bgSurface3};font-size:13px;color:${C.textSoft};white-space:pre-wrap;`;
-      const rows = Array.isArray(item.data) ? item.data.map((q) => (typeof q === 'object' ? q.label + ': ' + q.value : q)) : [String(item.data)];
+      const rows = Array.isArray(item.data) ? item.data.map((q) => (q && typeof q === 'object' ? q.label + ': ' + q.value : String(q))) : [String(item.data)];
       b.textContent = (item.title ? item.title + '\n' : '') + rows.join('\n');
       hostV.appendChild(b);
       scrollThread();
@@ -4271,13 +4309,6 @@
     if (pdModelLabelEl) { pdModelLabelEl.textContent = pretty; pdModelLabelEl.title = id; }
   }
 
-  // ------------------------------------------------------------- code-tab
-  /* Der Code-Tab treibt headless OpenCode (opencode run --format json) über
-     einen WebSocket; die Events werden als eigene Chat-Antwort gerendert —
-     kein Terminal, keine Raw-TUI. opencode braucht ~20k Context-Token, daher
-     zeigt das Modell-Dropdown die geladene Context-Größe und warnt zu kleine
-     Modelle (Exceed-context-Fehler würde LM Studio sonst still schlucken). */
-
   // ------------------------------------------------------------- code (terminal)
   /* Der Code-Tab rendert die echte opencode-TUI in einem eingebetteten
      xterm.js-Terminal. Der Server spawnt `opencode <dir>` auf einem PTY und
@@ -4296,12 +4327,6 @@
     codeDotEl = $('.js-code-dot', uiEl);
     codeRestartBtn = $('.js-code-restart', uiEl);
     codeContextWarningEl = $('.js-code-context-warning', uiEl);
-    noticeStripEl = $('.js-notice', uiEl);
-    noticeStripTextEl = $('.js-notice-text', uiEl);
-    if (noticeStripEl) {
-      noticeStripEl.addEventListener('click', () => { noticeStripEl.style.display = 'none'; });
-      noticeStripEl.title = 'Klicken zum Schließen';
-    }
 
     if (typeof Terminal === 'undefined' || !codeTermEl) {
       if (codeTermEl) {
@@ -4470,12 +4495,16 @@
 
   // ---------------------------------------------------------------- settings
   /* Echte Einstellungen statt Fake-Profil: ein Sheet mit der Modell-Auswahl. */
+  let settingsOpenEpoch = 0;
   async function openSettings() {
     if (!settingsSheetEl) return;
     closeProjectsView();
     closeProjectDetail();
+    // Doppeltes Öffnen (Doppelklick, Zurück-Navigation) füllte die Modell-
+    // liste sonst zweimal: nur der jeweils letzte Aufruf darf sie aufbauen.
+    const epoch = ++settingsOpenEpoch;
     if (uiEl) uiEl.classList.add('js-settings-active');
-    if (settingsSheetEl) settingsSheetEl.style.display = 'flex';
+    settingsSheetEl.style.display = 'flex';
     navRecord();
     updateNavActive();
     // Code-Verzeichnis aus /code/status vorbelegen.
@@ -4521,8 +4550,7 @@
         }
       }
     } catch (e) {}
-    if (settingsModelsEl) {
-      settingsModelsEl.innerHTML = '';
+    if (settingsModelsEl && epoch === settingsOpenEpoch) {
       const load = async () => {
         let models = [];
         let current = '';
@@ -4534,6 +4562,8 @@
           applyModelCaps(j);
           if (j.current) setModelLabel(j.current);
         } catch (e) { models = []; }
+        if (epoch !== settingsOpenEpoch) return;
+        settingsModelsEl.innerHTML = '';
         if (!models.length) {
           const d = document.createElement('div');
           d.textContent = 'Keine Modelle — läuft LM Studio?';
@@ -4578,10 +4608,14 @@
     }
   }
   function closeSettings() {
+    // closeSettings() läuft bei JEDER Navigation mit (Chat öffnen, Projekte,
+    // Moduswechsel) — den Modell-Check nur anstoßen, wenn die Einstellungen
+    // wirklich offen waren, statt bei jedem Klick eine Anfrage zu schicken.
+    const wasOpen = !!(settingsSheetEl && settingsSheetEl.style.display !== 'none');
     if (uiEl) uiEl.classList.remove('js-settings-active');
     if (settingsSheetEl) settingsSheetEl.style.display = 'none';
     updateNavActive();
-    refreshModelHealth();
+    if (wasOpen) refreshModelHealth();
   }
 
   // ---------------------------------------------------------------- sprache
@@ -4901,11 +4935,9 @@
   }
 
   // Zuhören läuft dauerhaft pegelgesteuert über fallbackVadTick() (lokales
-  // Whisper, siehe sendUtterance) — "starten" heißt nur: nichts blockiert,
-  // "stoppen" heißt: eine angefangene Äußerung verwerfen.
-  function startListening() {}
+  // Whisper, siehe sendUtterance) — es gibt nichts zu "starten"; "stoppen"
+  // heißt: eine angefangene Äußerung verwerfen.
   function stopListening() { cancelRecording(); }
-  function resumeListening() { startListening(); }
 
   function vadTick() {
     // Stummschalten sperrt nur NEUE Äußerungen; eine laufende wird zu Ende
@@ -4949,7 +4981,6 @@
     if (vadAbove >= 3) {   // ~240 ms anhaltend
       vadAbove = 0;
       stopSpeech();
-      resumeListening();
     }
   }
 
@@ -4998,14 +5029,15 @@
       noteSpeechReply('');
       showSpeechCaption();
       setSpeechStatus('Bereit');
-      startListening();
       if (composerTray) composerTray.style.display = 'none';
       if (chatRootEl) chatRootEl.classList.add('js-speech-active');
       if (speechBarEl) speechBarEl.style.display = 'flex';
       layoutSpeechBar();
       if (speechBtn) speechBtn.classList.add('on');
     }).catch(() => {
-      if (speechBtn) speechBtn.title = 'Microphone denied — typing still works';
+      // Vorher änderte sich nur der (englische) Tooltip — ein Klick auf
+      // "Sprachmodus" ohne Mikrofon-Freigabe tat scheinbar gar nichts.
+      showNotice('Kein Zugriff auf das Mikrofon — der Sprachmodus braucht die Mikrofon-Freigabe. Tippen geht weiterhin.');
     });
   }
   function exitSpeech() {
@@ -5536,9 +5568,9 @@
     }
   }
 
-  // Diktat-Modus: transkribiert ins Eingabefeld. Die Zwischenergebnisse der
-  // Web-Speech-Erkennung erscheinen live; fertige Segmente werden zur Basis
-  // für das nächste (dictBase).
+  // Diktat-Modus: transkribiert ins Eingabefeld. Die Zwischenergebnisse
+  // (Whisper, siehe runInterimTranscription) erscheinen live; fertige Segmente
+  // werden zur Basis für das nächste (dictBase).
   function setDictating(should) {
     dictating = should;
     // dictBase ist ab hier die alleinige Quelle für den "bestätigten" Text
@@ -5554,22 +5586,19 @@
       ensureMic().then(() => {
         if (!dictating) return;
         if (noteBtn) noteBtn.classList.add('on');
-        if (noteBtn) noteBtn.title = 'Dictation off';
+        if (noteBtn) noteBtn.title = 'Diktat aus';
         dictBase = composerInput ? composerInput.innerText.trim() : '';
-        startListening();
       }).catch(() => {
-        if (noteBtn) noteBtn.title = 'Microphone denied';
         dictating = false;
+        showNotice('Kein Zugriff auf das Mikrofon — Diktieren braucht die Mikrofon-Freigabe.');
       });
       return;
     }
     dictating = should;
     if (noteBtn) noteBtn.classList.toggle('on', should);
     if (noteBtn) noteBtn.title = should ? 'Diktat aus' : 'Diktieren';
-    if (should) {
-      dictBase = composerInput ? composerInput.innerText.trim() : '';
-      startListening();
-    } else stopListening();
+    if (should) dictBase = composerInput ? composerInput.innerText.trim() : '';
+    else stopListening();
   }
 
     // ------------------------------------------- Leuchtender Ring (Sprachmodus)
@@ -5704,8 +5733,26 @@
     ctx.restore();
   }
 
+  // Die Daten kommen aus einem Tool-Aufruf des Modells. drawViz() läuft in
+  // der Animationsschleife der Orb — unerwartete Formen (Zahl statt Liste,
+  // fehlende Werte) hier in eine zeichenbare Form bringen, statt dort bei
+  // jedem Frame eine Exception zu werfen.
   function setViz(item) {
-    vizState = { vtype: item.vtype, title: item.title || '', data: item.data, t0: performance.now() };
+    const vtype = ['bars', 'line', 'text', 'list'].includes(item.vtype) ? item.vtype : 'text';
+    let data = item.data;
+    if (vtype === 'bars' || vtype === 'line') {
+      data = (Array.isArray(data) ? data : []).map((q) => {
+        const o = q && typeof q === 'object' ? q : { value: q };
+        const value = Number(o.value);
+        return { label: String(o.label == null ? '' : o.label), value: Number.isFinite(value) ? value : 0 };
+      });
+    } else if (vtype === 'list') {
+      data = (Array.isArray(data) ? data : [data]).filter((x) => x != null).map((x) => (typeof x === 'object' ? [x.label, x.value].filter((y) => y != null).join(': ') : String(x)));
+    } else {
+      data = Array.isArray(data) ? data.join(', ') : String(data == null ? '' : data);
+    }
+    if ((vtype !== 'text' && !data.length) || (vtype === 'text' && !data)) { vizState = null; return; }
+    vizState = { vtype, title: String(item.title || ''), data, t0: performance.now() };
   }
   function clearViz() { vizState = null; }
 
@@ -5946,7 +5993,9 @@
     const listening = speechMode && !muted && !busy && !speaking;
     const source = speaking ? speechLevel() : (listening ? getMicLevel() : 0);
     orbLevel = Math.max(0, orbLevel * 0.78 + source * 0.22);
-    drawOrb(now);
+    // Ein Fehler beim Zeichnen darf die Schleife nicht beenden — sonst
+    // bleibt die Orb als Standbild stehen, bis man den Sprachmodus verlässt.
+    try { drawOrb(now); } catch (e) { console.error('[jarvis] Orb:', e); vizState = null; }
     orbRaf = requestAnimationFrame(orbLoop);
   }
 
