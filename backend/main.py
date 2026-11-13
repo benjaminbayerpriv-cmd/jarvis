@@ -1250,6 +1250,7 @@ def _validate_lm_studio(ip: str, port: int) -> dict | None:
 # OpenAI-Extension, koboldcpp, LocalAI, vLLM, ...), sonst würde
 # _validate_lm_studio() sie ohnehin als "kein Treffer" verwerfen.
 EXTENDED_SCAN_PORTS = [1234, 11434, 5000, 5001, 7860, 8000, 8080, 4891, 1337]
+MAX_SCAN_PORTS = 32
 
 
 @app.post("/model/scan")
@@ -1274,6 +1275,10 @@ async def model_scan(body: dict | None = None):
         raise HTTPException(status_code=422, detail="Ports müssen Zahlen sein.")
     if not all(1 <= p <= 65535 for p in ports):
         raise HTTPException(status_code=422, detail="Ports müssen zwischen 1 und 65535 liegen.")
+    # Jeder Port heißt 254 Verbindungsversuche: eine Liste mit ein paar hundert
+    # Ports hielt den Scan über fünf Minuten am Laufen (live gemessen).
+    if len(ports) > MAX_SCAN_PORTS:
+        raise HTTPException(status_code=422, detail=f"Höchstens {MAX_SCAN_PORTS} Ports pro Suche.")
     network = _local_subnet()
 
     async def gen():
@@ -1300,14 +1305,20 @@ async def model_scan(body: dict | None = None):
         # mehreren Ports (erweiterte Suche) sind das leicht über 2000 Ziele,
         # "alle 4" wäre dort über 500 NDJSON-Zeilen für den Fortschrittsbalken.
         step = max(1, total // 60)
-        while scanned < total:
-            item = await queue.get()
-            scanned += 1
-            if item:
-                open_targets.append(item)
-            if scanned % step == 0 or scanned == total:
-                yield json.dumps({"type": "progress", "phase": "scan", "scanned": scanned, "total": total}) + "\n"
-        await asyncio.gather(*tasks)
+        try:
+            while scanned < total:
+                item = await queue.get()
+                scanned += 1
+                if item:
+                    open_targets.append(item)
+                if scanned % step == 0 or scanned == total:
+                    yield json.dumps({"type": "progress", "phase": "scan", "scanned": scanned, "total": total}) + "\n"
+            await asyncio.gather(*tasks)
+        finally:
+            # Fenster geschlossen/Scan abgebrochen: die restlichen
+            # Verbindungsversuche nicht im Hintergrund zu Ende laufen lassen.
+            for task in tasks:
+                task.cancel()
 
         if not open_targets:
             yield json.dumps({"type": "done", "found": []}) + "\n"
