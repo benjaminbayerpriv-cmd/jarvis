@@ -133,7 +133,13 @@ _gpu_broken = False
 
 def _build_model(device: str) -> WhisperModel:
     compute_type = "float16" if device == "cuda" else "int8"
-    return WhisperModel(config.WHISPER_MODEL, device=device, compute_type=compute_type)
+    name = config.WHISPER_MODEL
+    # "medium" is the GPU default; on a CPU it needs 2-3x longer per sentence
+    # than "small" and made voice input feel stuck. An explicit WHISPER_MODEL
+    # is always respected.
+    if device == "cpu" and name == "medium" and "WHISPER_MODEL" not in os.environ:
+        name = "small"
+    return WhisperModel(name, device=device, compute_type=compute_type)
 
 
 def reset_model() -> None:
@@ -173,6 +179,11 @@ def _run_transcribe(model: WhisperModel, path: str) -> str:
         path,
         language="de",
         vad_filter=True,
+        # Greedy decoding instead of beam search (default 5): ~30% faster on
+        # CPU with no visible quality loss for short utterances.
+        beam_size=1,
+        # Without a hint the small models hear the name as "Drabis"/"Travis".
+        initial_prompt="Jarvis",
         # A hallucinated segment tends to seed the next one with the
         # same invented text otherwise — this stops each segment
         # from being conditioned on a previous hallucination.

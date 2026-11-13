@@ -6,6 +6,7 @@ import platform
 import re
 import subprocess
 import threading
+from urllib.parse import urlparse
 import time
 from typing import Callable
 
@@ -977,6 +978,44 @@ def eject_model(model_id: str) -> None:
         print(f"[model] Konnte {model_id} nicht entladen: {exc}")
 
 
+_LOCAL_LM_STUDIO = "http://127.0.0.1:1234/v1"
+
+
+def _probe_models(base_url: str) -> set:
+    """Model ids LM Studio lists at base_url; raises if it doesn't answer.
+    Short connect timeout: a dead LAN address must not stall the check."""
+    response = requests.get(f"{base_url}/models", headers=config.lm_studio_headers(), timeout=(2, 6))
+    response.raise_for_status()
+    return {entry.get("id") for entry in response.json().get("data", [])}
+
+
+def _reachable_lm_studio_models() -> set:
+    """Models of the configured LM Studio, tolerant of the two ways the
+    check used to flap: (1) one slow/failed request while LM Studio is busy
+    immediately greyed out the composer - now retried once; (2) .env still
+    pointing at this PC's own LAN address from an earlier network (the IP
+    changes with every Wi-Fi/hotspot switch) although LM Studio runs right
+    here - now falls back to 127.0.0.1 and keeps that endpoint."""
+    base = config.LM_STUDIO_BASE_URL
+    try:
+        return _probe_models(base)
+    except requests.RequestException:
+        time.sleep(0.4)
+    try:
+        return _probe_models(base)
+    except requests.RequestException as exc:
+        host = (urlparse(base).hostname or "").lower()
+        if host in ("127.0.0.1", "localhost", "::1"):
+            raise
+        try:
+            models = _probe_models(_LOCAL_LM_STUDIO)
+        except requests.RequestException:
+            raise exc from None
+        print(f"[model] {base} nicht erreichbar, LM Studio läuft aber lokal - wechsle auf {_LOCAL_LM_STUDIO}.")
+        config.set_lm_studio_base_url(_LOCAL_LM_STUDIO)
+        return models
+
+
 def model_health() -> tuple[bool, str]:
     """Report whether at least one text model in the fallback chain is
     reachable. Skips DeepSeek entirely (no network call at all, not even the
@@ -997,9 +1036,7 @@ def model_health() -> tuple[bool, str]:
             print(f"[model] DeepSeek nicht erreichbar, prüfe LM Studio: {exc}")
 
     try:
-        response = requests.get(f"{config.LM_STUDIO_BASE_URL}/models", headers=config.lm_studio_headers(), timeout=5)
-        response.raise_for_status()
-        models = {entry.get("id") for entry in response.json().get("data", [])}
+        models = _reachable_lm_studio_models()
     except requests.RequestException as exc:
         return False, f"LM Studio nicht erreichbar: {exc}"
     if config.LM_STUDIO_MODEL not in models:
