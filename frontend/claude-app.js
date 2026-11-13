@@ -899,7 +899,7 @@
   // Wartezeit jetzt der Großteil der spürbaren Verzögerung — 10 Ticks
   // (~0,8s) ist ein gängiger Wert für Sprachassistenten.
   const DICTATE_SILENCE_SUSTAIN = 10;
-  const PCM_BUFFER_SIZE = 4096, PREROLL_MS = 1500, RECORD_SILENCE_SUSTAIN = 28, RECORD_MIN_MS = 300;
+  const PCM_BUFFER_SIZE = 4096, PREROLL_MS = 1500, RECORD_SILENCE_SUSTAIN = 16, RECORD_MIN_MS = 300;
 
   // Graues Punktnetz (Sprachmodus)
   let orbCtx = null, orbCanvas = null, orbLevel = 0, orbRaf = 0, orbVisible = false;
@@ -2753,7 +2753,7 @@
     window.addEventListener('click', () => { if (modelMenuEl) modelMenuEl.style.display = 'none'; modelMenuAnchor = null; });
 
     // Sprachmodus-Bottom-Leiste
-    if (spMuteBtn) spMuteBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); muted = !muted; updateMuteIcon(); if (muted) stopListening(); else startListening(); });
+    if (spMuteBtn) spMuteBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); muted = !muted; updateMuteIcon(); if (muted) { if (!isRecording()) stopListening(); } else startListening(); });
     if (spCamBtn) spCamBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); toggleCameraWindow(); });
     if (spStopBtn) spStopBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); stopSpeech(); });
     if (spSendBtn) spSendBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); const t = composerInput ? composerInput.innerText.trim() : ''; if (t) sendMessage(t); });
@@ -4701,12 +4701,20 @@
       const resp = await fetch('/stt', { method: 'POST', body: form });
       // Zwischenzeitlich abgebrochen/neu gestartet/schon final abgeschickt —
       // dieses Ergebnis gehört nicht mehr zur aktuellen Äußerung.
-      if (epoch !== recordingEpoch || !dictating || !(composerInput || larpDictSink)) return;
+      if (epoch !== recordingEpoch || !(dictating || speechMode)) return;
       if (!resp.ok) return;
       const data = await resp.json();
       const text = (data.text || '').trim();
       if (!text) return;
+      // Sprachmodus: die Live-Mitschrift steht in der Sprachmodus-Beschriftung,
+      // nicht im Textfeld.
+      if (speechMode && !dictating) {
+        noteSpeechWords(text);
+        setSpeechStatus('Hören');
+        return;
+      }
       if (larpDictSink) { larpDictSink(text, false); return; }
+      if (!composerInput) return;
       if (!dictInterimSpan || !dictInterimSpan.isConnected) {
         // Erster Zwischenstand dieser Äußerung: die feste Basis (falls vorhanden,
         // mit trennendem Leerzeichen) bleibt als reiner Textknoten stehen, das
@@ -4746,7 +4754,7 @@
     utterancePCM = pcmRing.slice();
     utteranceStartedAt = Date.now();
     recordingEpoch++;
-    if (dictating) startInterimLoop(recordingEpoch);
+    if (dictating || speechMode) startInterimLoop(recordingEpoch);
   }
   function stopRecording() {
     if (!utterancePCM) return;
@@ -4754,12 +4762,40 @@
     recordingEpoch++;
     const chunks = utterancePCM;
     const startedAt = utteranceStartedAt;
+    const spec = specStt;
+    specStt = null;
     utterancePCM = null;
     pcmRing = [];
-    sendUtterance(chunks, startedAt);
+    sendUtterance(chunks, startedAt, spec);
+  }
+  // Vorab-Transkription: schon nach einer kurzen Sprechpause (~0,56 s) wird
+  // das bisher Aufgenommene transkribiert, während noch auf das eigentliche
+  // Sprechende gewartet wird. Redet der Nutzer weiter, wird das Ergebnis
+  // verworfen; hält die Stille, liegt der Text im Moment des Endes schon vor.
+  let specStt = null;
+  const SPEC_SILENCE_TICKS = 7;
+  async function fetchStt(chunks, startedAt) {
+    if (!chunks.length || Date.now() - startedAt < RECORD_MIN_MS) return '';
+    const samples = concatFloat32(chunks);
+    if (samples.length < pcmSampleRate * 0.2) return '';
+    try {
+      const form = new FormData();
+      form.append('audio', encodeWav(samples, pcmSampleRate), 'speech.wav');
+      const resp = await fetch('/stt', { method: 'POST', body: form });
+      if (!resp.ok) return '';
+      return ((await resp.json()).text || '').trim();
+    } catch (err) {
+      console.error(err);
+      return '';
+    }
+  }
+  function startSpeculativeStt() {
+    if (!utterancePCM || specStt) return;
+    specStt = { promise: fetchStt(utterancePCM.slice(), utteranceStartedAt) };
   }
   function cancelRecording() {
     if (!utterancePCM) return;
+    specStt = null;
     stopInterimLoop();
     recordingEpoch++;
     clearDictInterimSpan();
@@ -4799,18 +4835,10 @@
     }
     return new Blob([view], { type: 'audio/wav' });
   }
-  async function sendUtterance(chunks, startedAt) {
-    if (!chunks.length || Date.now() - startedAt < RECORD_MIN_MS) return;
-    const samples = concatFloat32(chunks);
-    if (samples.length < pcmSampleRate * 0.2) return;
-    const blob = encodeWav(samples, pcmSampleRate);
+  async function sendUtterance(chunks, startedAt, spec) {
     try {
-      const form = new FormData();
-      form.append('audio', blob, 'speech.wav');
-      const resp = await fetch('/stt', { method: 'POST', body: form });
-      if (!resp.ok) return;
-      const data = await resp.json();
-      const text = (data.text || '').trim();
+      let text = spec ? await spec.promise : '';
+      if (!text) text = await fetchStt(chunks, startedAt);
       if (!text) return;
       if (speechMode) {
         noteSpeechWords(text);
@@ -4849,8 +4877,10 @@
       if (rms > threshold) beginUtterance();
     } else if (rms > threshold) {
       fallbackSilenceStreak = 0;
+      specStt = null; // er redet weiter — die Vorab-Transkription ist veraltet
     } else {
       fallbackSilenceStreak++;
+      if (fallbackSilenceStreak === SPEC_SILENCE_TICKS) startSpeculativeStt();
       const sustain = dictating ? DICTATE_SILENCE_SUSTAIN : RECORD_SILENCE_SUSTAIN;
       if (fallbackSilenceStreak >= sustain) {
         fallbackSilenceStreak = 0;
@@ -4867,7 +4897,10 @@
   function resumeListening() { startListening(); }
 
   function vadTick() {
-    if (!vadAnalyser || !vadData || muted) return;
+    // Stummschalten sperrt nur NEUE Äußerungen; eine laufende wird zu Ende
+    // aufgenommen und normal transkribiert.
+    if (!vadAnalyser || !vadData || (muted && !isRecording())) return;
+    if (muted && (busy || speaking || audioDraining)) return;
     const rms = rmsFrom(vadAnalyser, vadData);
 
     // busy deckt nur die Denk-/Streamphase ab. Das Vorlesen läuft danach
@@ -4998,7 +5031,7 @@
     // Nur ein ausdrücklich genanntes Ziel zählt ("Open Code" / "Terminal") —
     // ein beiläufiges "Code" reicht nicht, sonst kapert "Jarvis, schreib mir
     // einen Code-Schnipsel" den Befehl, statt ans Chat-Modell zu gehen.
-    const namesCode = /\b(open ?-? ?code|opencode|obencode)\b/.test(t);
+    const namesCode = /\b(open ?-? ?code|opencode|obencode|claude ?-? ?code|clau?de ?-? ?code|codex|kodex|coding ?-? ?agent(?:en)?|code ?-? ?agent(?:en)?|programmier ?-? ?agent(?:en)?)\b/.test(t);
     const namesTerminal = /\b(terminal|konsole)\b/.test(t);
     if (!namesCode && !namesTerminal) return null;
     // Fenstersteuerung ist ein kurzes Kommando ("öffne Open Code"). Sobald
@@ -5007,7 +5040,7 @@
     // und die Bitte erreicht das Modell nie (live passiert).
     const bareWords = t.replace(/\b(jarvis|bitte|mal|doch|hey|der|die|das|den|dem|mir|mal)\b/g, ' ')
       .split(/\s+/).filter(Boolean);
-    if (bareWords.length > 5) return null;
+    if (bareWords.length > 4) return null;
     // Bewusst ohne \b/\w um die Verben: JavaScripts \w ist reines ASCII, "ß"
     // gilt darin als Nicht-Wortzeichen — "schließ das Terminal" fiel damit
     // durch die Wortgrenze und landete als Prompt in opencode (live gesehen).
@@ -5018,7 +5051,7 @@
     // schreiben"), gehört der Satz Jarvis — sonst kapert der Produktname den
     // Befehl und die Äußerung erreicht das Modell nie (live passiert).
     const bare = t.replace(/\b(jarvis|bitte|mal|doch|hey)\b/g, ' ').replace(/\s+/g, ' ').trim();
-    return /^(open ?-? ?code|opencode|obencode|terminal|konsole)$/.test(bare) ? 'open' : null;
+    return /^(open ?-? ?code|opencode|obencode|claude ?-? ?code|clau?de ?-? ?code|codex|kodex|coding ?-? ?agent(?:en)?|code ?-? ?agent(?:en)?|programmier ?-? ?agent(?:en)?|terminal|konsole)$/.test(bare) ? 'open' : null;
   }
 
   // Dasselbe Muster wie matchSpeechTerminalCommand, für "öffne die Kamera" /
