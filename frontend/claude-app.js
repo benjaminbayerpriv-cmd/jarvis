@@ -821,7 +821,18 @@
   // spCamBtn ist der Ein-/Aus-Knopf in der Sprachmodus-Leiste, camWinEl das
   // ziehbare/skalierbare Fenster selbst (nach demselben Muster wie das
   // OpenCode-Terminal, siehe speechTermEl weiter unten).
-  let spCamBtn = null, camWinEl = null, camWinHostEl = null, camWinOpen = false, camWinUserRect = null;
+  let spCamBtn = null, camWinEl = null, camWinHostEl = null, camWinOpen = false, camWinUserRect = loadCamWinRect();
+  // Position und Größe des Kamerafensters überleben einen Neustart (localStorage
+  // des App-Fensters bleibt erhalten, siehe launcher/jarvis_launcher.py).
+  function loadCamWinRect() {
+    try {
+      const r = JSON.parse(localStorage.getItem('jarvisCamWinRect') || 'null');
+      return r && [r.x, r.y, r.w, r.h].every((n) => Number.isFinite(n)) && r.w > 0 && r.h > 0 ? r : null;
+    } catch (e) { return null; }
+  }
+  function saveCamWinRect() {
+    try { if (camWinUserRect) localStorage.setItem('jarvisCamWinRect', JSON.stringify(camWinUserRect)); } catch (e) {}
+  }
   const CAMERA_WIN_MIN_W = 320, CAMERA_WIN_MIN_H = 260;
   // Ob gerade irgendein Chat-Modell erreichbar ist (LM Studio oder der
   // DeepSeek-Fallback, siehe GET /model/health) — false blendet den
@@ -5297,6 +5308,7 @@
       const onUp = () => {
         document.removeEventListener('mousemove', onMove);
         document.removeEventListener('mouseup', onUp);
+        saveCamWinRect();
       };
       document.addEventListener('mousemove', onMove);
       document.addEventListener('mouseup', onUp);
@@ -5324,6 +5336,7 @@
       const onUp = () => {
         document.removeEventListener('mousemove', onMove);
         document.removeEventListener('mouseup', onUp);
+        saveCamWinRect();
       };
       document.addEventListener('mousemove', onMove);
       document.addEventListener('mouseup', onUp);
