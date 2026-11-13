@@ -1123,7 +1123,10 @@ def delete_project(project_id: str):
 @app.get("/settings")
 def get_settings():
     return {
-        "lm_studio_base_url": config.LM_STUDIO_BASE_URL,
+        # The configured address, not a temporary local fallback (see
+        # llm_client._reachable_lm_studio_models) - saving the settings must
+        # not turn that fallback into the stored value.
+        "lm_studio_base_url": config.LM_STUDIO_CONFIGURED_BASE_URL or config.LM_STUDIO_BASE_URL,
         "deepseek_enabled": config.DEEPSEEK_ENABLED,
         **config.get_simple_settings(),
     }
@@ -1361,8 +1364,11 @@ _REQUIRED_SETTINGS = {"whisper_model", "supertonic_voice", "supertonic_lang", "e
 
 @app.post("/settings")
 def update_settings(req: UpdateSettingsRequest):
-    if req.lm_studio_base_url is not None and req.lm_studio_base_url.strip():
-        config.set_lm_studio_base_url(req.lm_studio_base_url.strip())
+    new_base = (req.lm_studio_base_url or "").strip().rstrip("/")
+    # The settings form posts the address back unchanged on every save - only
+    # a real change may end a running local fallback.
+    if new_base and new_base != (config.LM_STUDIO_CONFIGURED_BASE_URL or config.LM_STUDIO_BASE_URL):
+        config.set_lm_studio_base_url(new_base)
     for name in config.get_simple_settings():
         value = getattr(req, name)
         if value is None:
@@ -1384,7 +1390,10 @@ def update_settings(req: UpdateSettingsRequest):
     if req.deepseek_enabled is not None:
         config.set_deepseek_enabled(req.deepseek_enabled)
     return {
-        "lm_studio_base_url": config.LM_STUDIO_BASE_URL,
+        # The configured address, not a temporary local fallback (see
+        # llm_client._reachable_lm_studio_models) - saving the settings must
+        # not turn that fallback into the stored value.
+        "lm_studio_base_url": config.LM_STUDIO_CONFIGURED_BASE_URL or config.LM_STUDIO_BASE_URL,
         "deepseek_enabled": config.DEEPSEEK_ENABLED,
         **config.get_simple_settings(),
     }
