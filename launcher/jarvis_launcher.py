@@ -163,7 +163,16 @@ def _load_window_size() -> tuple[int, int]:
         return WINDOW_WIDTH, WINDOW_HEIGHT
     if not (640 <= width <= 10000 and 480 <= height <= 10000):
         return WINDOW_WIDTH, WINDOW_HEIGHT
-    return width, height
+    # Nie größer als der Hauptbildschirm: ein maximiert geschlossenes Fenster
+    # speichert die Bildschirmgröße samt Rahmen und startet sonst übergroß.
+    try:
+        import webview
+
+        screen = webview.screens[0]
+        width, height = min(width, int(screen.width)), min(height, int(screen.height))
+    except Exception:
+        pass
+    return max(width, 640), max(height, 480)
 
 
 def _save_window_size(size: tuple[int, int]) -> None:
@@ -272,8 +281,20 @@ def main() -> None:
             min_size=(640, 480),
         )
 
+        save_timer: list[threading.Timer] = []
+
         def _on_resized(new_width: int, new_height: int) -> None:
             window_size[:] = [new_width, new_height]
+            # Sofort (entprellt) schreiben, nicht erst beim Schließen: wird die
+            # App hart beendet (Task-Manager, taskkill, Absturz), lief der
+            # Schreibvorgang am Ende nie, und beim nächsten Start kam die
+            # veraltete Größe zurück.
+            if save_timer:
+                save_timer[0].cancel()
+            timer = threading.Timer(0.6, lambda: _save_window_size((window_size[0], window_size[1])))
+            timer.daemon = True
+            save_timer[:] = [timer]
+            timer.start()
 
         window.events.resized += _on_resized
         # private_mode=False: Einstellungen der UI (localStorage) über
