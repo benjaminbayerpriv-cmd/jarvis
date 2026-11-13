@@ -22,6 +22,10 @@ SUPERTONIC_LANG = os.environ.get("SUPERTONIC_LANG", "de")
 # not — "medium" on CPU cost ~2.7s per utterance, which is why "small"
 # remains available via WHISPER_MODEL=small for a CPU-only machine.
 WHISPER_MODEL = os.environ.get("WHISPER_MODEL", "medium")
+# Whether that value was chosen (in .env or the settings UI) rather than
+# being the default — stt.py only swaps "medium" for "small" on a CPU when
+# nobody picked "medium" on purpose.
+WHISPER_MODEL_EXPLICIT = "WHISPER_MODEL" in os.environ
 # "auto" (GPU if it works, else CPU), "cpu" or "cuda" — see stt._get_model.
 WHISPER_DEVICE = os.environ.get("WHISPER_DEVICE", "auto").strip().lower()
 
@@ -36,6 +40,11 @@ WHISPER_DEVICE = os.environ.get("WHISPER_DEVICE", "auto").strip().lower()
 # native /api/v1/* endpoints were looked up under ".../v1/api/v1/...".
 LM_STUDIO_BASE_URL = os.environ.get("LM_STUDIO_BASE_URL", "http://127.0.0.1:1234/v1").strip().rstrip("/")
 LM_STUDIO_MODEL = os.environ.get("LM_STUDIO_MODEL", "google/gemma-4-e4b")
+# Normally None. While llm_client temporarily talks to the local LM Studio
+# because the configured one doesn't answer, LM_STUDIO_BASE_URL holds the
+# local address and this holds the configured one - what the settings show
+# and what .env keeps.
+LM_STUDIO_CONFIGURED_BASE_URL: str | None = None
 
 # API token LM Studio itself requires once its "Require Authentication"
 # server setting is on — a prerequisite for "Allow calling servers from
@@ -180,8 +189,9 @@ def set_lm_studio_base_url(url: str) -> None:
     """Switch the LM Studio endpoint at runtime (chat, embeddings, model
     listing all read config.LM_STUDIO_BASE_URL fresh on every call) and
     persist it to .env so it survives a restart."""
-    global LM_STUDIO_BASE_URL
+    global LM_STUDIO_BASE_URL, LM_STUDIO_CONFIGURED_BASE_URL
     LM_STUDIO_BASE_URL = url.strip().rstrip("/")
+    LM_STUDIO_CONFIGURED_BASE_URL = None  # an explicit choice ends any fallback
     _persist_env("LM_STUDIO_BASE_URL", LM_STUDIO_BASE_URL)
 
 
@@ -219,6 +229,9 @@ def set_simple_setting(name: str, value: str) -> None:
     ein Import hier andersrum einen Zirkel wäre)."""
     env_key = _SIMPLE_SETTINGS[name]
     globals()[env_key] = value
+    if name == "whisper_model":
+        global WHISPER_MODEL_EXPLICIT
+        WHISPER_MODEL_EXPLICIT = True
     _persist_env(env_key, value)
 
 

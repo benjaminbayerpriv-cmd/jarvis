@@ -135,9 +135,9 @@ def _build_model(device: str) -> WhisperModel:
     compute_type = "float16" if device == "cuda" else "int8"
     name = config.WHISPER_MODEL
     # "medium" is the GPU default; on a CPU it needs 2-3x longer per sentence
-    # than "small" and made voice input feel stuck. An explicit WHISPER_MODEL
-    # is always respected.
-    if device == "cpu" and name == "medium" and "WHISPER_MODEL" not in os.environ:
+    # than "small" and made voice input feel stuck. A WHISPER_MODEL chosen in
+    # .env or the settings UI is always respected.
+    if device == "cpu" and name == "medium" and not config.WHISPER_MODEL_EXPLICIT:
         name = "small"
     return WhisperModel(name, device=device, compute_type=compute_type)
 
