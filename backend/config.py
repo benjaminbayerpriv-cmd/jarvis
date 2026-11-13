@@ -219,6 +219,10 @@ def set_simple_setting(name: str, value: str) -> None:
     ein Import hier andersrum einen Zirkel wäre)."""
     env_key = _SIMPLE_SETTINGS[name]
     globals()[env_key] = value
+    # Code, der "ausdrücklich gesetzt?" über os.environ prüft (stt._build_model
+    # nimmt auf der CPU sonst "small" statt eines gewählten "medium"), sieht
+    # die Wahl so schon vor dem nächsten Neustart.
+    os.environ[env_key] = value
     _persist_env(env_key, value)
 
 

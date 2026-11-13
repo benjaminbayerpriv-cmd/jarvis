@@ -989,6 +989,39 @@ def _probe_models(base_url: str) -> set:
     return {entry.get("id") for entry in response.json().get("data", [])}
 
 
+def _is_own_address(host: str) -> bool:
+    """Whether host names one of this machine's own (current or recent) IPs."""
+    import socket
+
+    try:
+        own = set(socket.gethostbyname_ex(socket.gethostname())[2])
+    except OSError:
+        own = set()
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            s.connect(("8.8.8.8", 80))  # picks the LAN interface, sends nothing
+            own.add(s.getsockname()[0])
+        finally:
+            s.close()
+    except OSError:
+        pass
+    if host in own:
+        return True
+    # The .env address is from an EARLIER network (that's the whole point of
+    # the fallback), so it no longer matches a current IP: accept it only if
+    # it resolves to nothing else reachable — i.e. it is a private address
+    # that no host answers on, which the failed probes above already showed.
+    try:
+        import ipaddress
+
+        return ipaddress.ip_address(host).is_private and not any(
+            ipaddress.ip_address(host) in ipaddress.ip_network(f"{ip}/24", strict=False) for ip in own if ":" not in ip
+        )
+    except ValueError:
+        return False
+
+
 def _reachable_lm_studio_models() -> set:
     """Models of the configured LM Studio, tolerant of the two ways the
     check used to flap: (1) one slow/failed request while LM Studio is busy
@@ -1005,7 +1038,10 @@ def _reachable_lm_studio_models() -> set:
         return _probe_models(base)
     except requests.RequestException as exc:
         host = (urlparse(base).hostname or "").lower()
-        if host in ("127.0.0.1", "localhost", "::1"):
+        # Only an address of THIS machine may be swapped for 127.0.0.1. A
+        # second PC that is briefly off used to be rewritten permanently into
+        # .env as soon as a local LM Studio happened to answer.
+        if host in ("127.0.0.1", "localhost", "::1") or not _is_own_address(host):
             raise
         try:
             models = _probe_models(_LOCAL_LM_STUDIO)

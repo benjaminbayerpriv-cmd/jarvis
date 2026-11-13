@@ -1605,7 +1605,12 @@ async def code_tty_ws(websocket: WebSocket):
     session_id = websocket.query_params.get("session_id") or None
     try:
         opencode_agent.reset_output()
-        tty = opencode_agent.start_tty(wdir, session_id=session_id)
+        # start_tty() fragt LM Studio zweimal nach der Modellliste und schreibt
+        # opencodes Konfiguration — direkt hier im Handler hielt das die EINE
+        # gemeinsame Event-Loop bis zu ~10 s an (jede andere Anfrage stand).
+        tty = await asyncio.get_running_loop().run_in_executor(
+            None, lambda: opencode_agent.start_tty(wdir, session_id=session_id)
+        )
     except (RuntimeError, OSError) as exc:
         # RuntimeError: z.B. kein PTY auf diesem OS (Windows).
         # OSError (u.a. FileNotFoundError): OPENCODE_BIN existiert nicht,
