@@ -16,7 +16,7 @@ from urllib.parse import quote_plus
 
 import requests
 
-from . import browser_agent, config, confirm, jarvis_browser, last_target, memory, opencode_agent, panel, platform_utils
+from . import alpaca_client, browser_agent, config, confirm, jarvis_browser, last_target, memory, opencode_agent, panel, platform_utils
 
 IS_WINDOWS = platform.system() == "Windows"
 _NO_WINDOW = 0x08000000 if IS_WINDOWS else 0  # CREATE_NO_WINDOW
@@ -206,6 +206,93 @@ TOOL_SCHEMAS = [
             "name": "browser_back",
             "description": "Geht im Jarvis-Browser eine Seite zurück.",
             "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "alpaca_data",
+            "description": "Echte Börsendaten von Alpaca: Kurs, Kerzen, Tagesübersicht, Nachrichten, Gewinner/Verlierer, meistgehandelte Aktien, Optionen, Krypto (Symbol wie BTC/USD). Für jede Frage nach Kursen oder Marktdaten — nie schätzen.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "kind": {
+                        "type": "string",
+                        "enum": ["quote", "snapshot", "bars", "trades", "news", "movers", "most_active", "option_chain"],
+                        "description": "quote = aktueller Kurs, snapshot = Tagesübersicht, bars = Kursverlauf",
+                    },
+                    "symbols": {"type": "string", "description": "Ticker, mehrere mit Komma, z.B. 'NVDA,AAPL'"},
+                    "timeframe": {"type": "string", "description": "Nur bars: 1Min, 5Min, 15Min, 1Hour, 1Day, 1Week, 1Month"},
+                    "start": {"type": "string", "description": "Nur bars: Beginn, z.B. 2026-01-01"},
+                    "end": {"type": "string", "description": "Nur bars: Ende, z.B. 2026-02-01"},
+                    "limit": {"type": "string", "description": "Anzahl Einträge"},
+                },
+                "required": ["kind"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "alpaca_account",
+            "description": "Liest das Alpaca-Depot: Kontostand, Positionen, Orders, Kontobewegungen, Depotverlauf, ob die Börse offen ist, Handelstage, Infos zu einem Wertpapier, Watchlists.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "what": {
+                        "type": "string",
+                        "enum": ["account", "positions", "orders", "activities", "portfolio_history", "clock", "calendar", "asset", "watchlists"],
+                    },
+                    "symbol": {"type": "string", "description": "Nur für asset"},
+                    "status": {"type": "string", "description": "Nur für orders: open, closed oder all"},
+                },
+                "required": ["what"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "alpaca_order",
+            "description": "Kauft, verkauft, ändert oder storniert bei Alpaca und schließt Positionen. Fragt selbst nach Bestätigung — ruf es direkt auf, sobald der Nutzer handeln will.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["buy", "sell", "replace", "cancel", "cancel_all", "close_position", "close_all"],
+                    },
+                    "symbol": {"type": "string", "description": "Ticker, z.B. NVDA oder BTC/USD"},
+                    "qty": {"type": "string", "description": "Stückzahl"},
+                    "notional": {"type": "string", "description": "Betrag in Dollar statt Stückzahl"},
+                    "type": {"type": "string", "enum": ["market", "limit", "stop", "stop_limit", "trailing_stop"]},
+                    "limit_price": {"type": "string"},
+                    "stop_price": {"type": "string"},
+                    "trail_percent": {"type": "string", "description": "Nur trailing_stop"},
+                    "time_in_force": {"type": "string", "enum": ["day", "gtc", "opg", "cls", "ioc", "fok"]},
+                    "take_profit": {"type": "string", "description": "Zielkurs einer Bracket-Order"},
+                    "stop_loss": {"type": "string", "description": "Stoppkurs einer Bracket-Order"},
+                    "order_id": {"type": "string", "description": "Für replace und cancel"},
+                },
+                "required": ["action"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "alpaca_request",
+            "description": "Beliebiger Aufruf der Alpaca-REST-API für alles, was alpaca_data, alpaca_account und alpaca_order nicht abdecken (z.B. Watchlist anlegen, Optionskontrakte, Corporate Actions). Verändernde Aufrufe fragen selbst nach Bestätigung.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "method": {"type": "string", "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"]},
+                    "path": {"type": "string", "description": "Pfad wie /v2/watchlists, keine ganze URL"},
+                    "params": {"type": "string", "description": "Query-Parameter als JSON-Objekt"},
+                    "body": {"type": "string", "description": "Request-Body als JSON-Objekt"},
+                },
+                "required": ["method", "path"],
+            },
         },
     },
     {
@@ -1539,7 +1626,204 @@ def _set_code_agent(name: str) -> str:
     return f"Programmieraufträge gehen ab jetzt an {display_name}."
 
 
+def _alpaca_guarded(run) -> str:
+    """Runs an Alpaca call; a failure becomes a sentence instead of a trace."""
+    try:
+        return run()
+    except alpaca_client.AlpacaError as exc:
+        return f"Fehler bei Alpaca: {exc}"
+    except (KeyError, TypeError, ValueError, AttributeError) as exc:
+        return f"Fehler bei Alpaca: unerwartete Antwort ({exc})."
+
+
+def _alpaca_data(a: dict) -> str:
+    return _alpaca_guarded(lambda: alpaca_client.market_data(
+        a.get("kind", ""), a.get("symbols", "") or a.get("symbol", ""), a.get("timeframe", ""),
+        a.get("start", ""), a.get("end", ""), a.get("limit", ""),
+    ))
+
+
+def _alpaca_account(a: dict) -> str:
+    return _alpaca_guarded(lambda: alpaca_client.account_info(a.get("what", ""), a.get("symbol", ""), a.get("status", "")))
+
+
+def _alpaca_number(value: str) -> str:
+    """'10', '10,5', '$1.200' -> a plain decimal string, '' if not a positive number."""
+    text = str(value or "").strip().replace("$", "").replace("€", "").replace(" ", "")
+    if "," in text and "." in text:
+        text = text.replace(".", "").replace(",", ".") if text.rfind(",") > text.rfind(".") else text.replace(",", "")
+    else:
+        text = text.replace(",", ".")
+    try:
+        return text if float(text) > 0 else ""
+    except ValueError:
+        return ""
+
+
+# The paper account is shared with the analyst app on the tower.
+_ALPACA_SHARED_NOTE = " Das betrifft auch Positionen und Orders anderer Programme auf diesem Konto."
+
+
+def _alpaca_confirm(question: str, method: str, path: str, params: dict | None, body: dict | None, done) -> str:
+    """Every account-changing Alpaca call goes through here: nothing is sent
+    until the user's next message is a plain yes (see confirm.propose)."""
+    hint = alpaca_client.missing_keys_hint()
+    if hint:
+        return hint
+
+    def _send() -> str:
+        return _alpaca_guarded(lambda: done(alpaca_client.request(method, path, params, body, data=False)))
+
+    return confirm.propose(question, _send)
+
+
+def _alpaca_order(a: dict) -> str:
+    action = (a.get("action") or "").strip().lower()
+    label = alpaca_client.account_label()
+    syms = alpaca_client.symbols(a.get("symbol", ""))
+    symbol = syms[0] if syms else ""
+    order_id = (a.get("order_id") or "").strip()
+
+    if action == "cancel_all":
+        return _alpaca_confirm(
+            f"Soll ich wirklich ALLE offenen Orders stornieren ({label})?{_ALPACA_SHARED_NOTE}",
+            "DELETE", "/v2/orders", None, None, lambda r: "Alle offenen Orders wurden storniert.",
+        )
+    if action == "close_all":
+        return _alpaca_confirm(
+            f"Soll ich wirklich ALLE Positionen zum Marktpreis schließen und alle Orders stornieren ({label})?{_ALPACA_SHARED_NOTE}",
+            "DELETE", "/v2/positions", {"cancel_orders": "true"}, None,
+            lambda r: f"Schließen von {len(r or [])} Positionen wurde beauftragt.",
+        )
+    if action == "cancel":
+        if not order_id:
+            return "Welche Order soll ich stornieren? Ich brauche die Order-ID (siehe alpaca_account mit what=orders)."
+        return _alpaca_confirm(
+            f"Soll ich die Order {order_id} stornieren ({label})?",
+            "DELETE", f"/v2/orders/{quote_plus(order_id)}", None, None, lambda r: f"Order {order_id} wurde storniert.",
+        )
+    if action == "close_position":
+        if not symbol:
+            return "Welche Position soll ich schließen?"
+        return _alpaca_confirm(
+            f"Soll ich die gesamte Position {symbol} zum Marktpreis schließen ({label})?",
+            "DELETE", f"/v2/positions/{quote_plus(symbol)}", None, None,
+            lambda r: f"Schließen der Position {symbol} wurde beauftragt (Order {(r or {}).get('id', '?')}).",
+        )
+    if action == "replace":
+        if not order_id:
+            return "Welche Order soll ich ändern? Ich brauche die Order-ID."
+        changes = {
+            key: _alpaca_number(a.get(src, "")) for key, src in
+            (("qty", "qty"), ("limit_price", "limit_price"), ("stop_price", "stop_price"), ("trail", "trail_percent"))
+        }
+        changes = {k: v for k, v in changes.items() if v}
+        if a.get("time_in_force"):
+            changes["time_in_force"] = a["time_in_force"].lower()
+        if not changes:
+            return "Was soll ich an der Order ändern (Stückzahl, Limit- oder Stoppkurs)?"
+        text = ", ".join(f"{k} {v}" for k, v in changes.items())
+        return _alpaca_confirm(
+            f"Soll ich die Order {order_id} ändern auf {text} ({label})?",
+            "PATCH", f"/v2/orders/{quote_plus(order_id)}", None, changes,
+            lambda r: f"Order geändert, neue ID {(r or {}).get('id', '?')}, Status {(r or {}).get('status', '?')}.",
+        )
+    if action not in ("buy", "sell"):
+        return "Unbekannte Order-Aktion. Möglich: buy, sell, replace, cancel, cancel_all, close_position, close_all."
+
+    if not symbol:
+        return "Welches Wertpapier soll ich handeln?"
+    qty, notional = _alpaca_number(a.get("qty", "")), _alpaca_number(a.get("notional", ""))
+    if not qty and not notional:
+        return f"Wie viele Stück {symbol} (oder für welchen Betrag) soll ich {'kaufen' if action == 'buy' else 'verkaufen'}?"
+    limit_price, stop_price = _alpaca_number(a.get("limit_price", "")), _alpaca_number(a.get("stop_price", ""))
+    trail = _alpaca_number(a.get("trail_percent", ""))
+    take_profit, stop_loss = _alpaca_number(a.get("take_profit", "")), _alpaca_number(a.get("stop_loss", ""))
+    order_type = (a.get("type") or "").strip().lower() or (
+        "stop_limit" if limit_price and stop_price else "limit" if limit_price else "stop" if stop_price
+        else "trailing_stop" if trail else "market"
+    )
+    needs = {"limit": [("Limitkurs", limit_price)], "stop": [("Stoppkurs", stop_price)],
+             "stop_limit": [("Limitkurs", limit_price), ("Stoppkurs", stop_price)],
+             "trailing_stop": [("Abstand in Prozent", trail)], "market": []}
+    if order_type not in needs:
+        return f"Unbekannter Ordertyp '{order_type}'. Möglich: market, limit, stop, stop_limit, trailing_stop."
+    missing = [name for name, value in needs[order_type] if not value]
+    if missing:
+        return f"Für eine {order_type}-Order fehlt noch: {', '.join(missing)}."
+
+    crypto = "/" in symbol
+    body = {
+        "symbol": symbol, "side": action, "type": order_type,
+        "time_in_force": (a.get("time_in_force") or ("gtc" if crypto else "day")).lower(),
+    }
+    body["qty" if qty else "notional"] = qty or notional
+    if order_type in ("limit", "stop_limit"):
+        body["limit_price"] = limit_price
+    if order_type in ("stop", "stop_limit"):
+        body["stop_price"] = stop_price
+    if order_type == "trailing_stop":
+        body["trail_percent"] = trail
+    if take_profit or stop_loss:
+        body["order_class"] = "bracket" if take_profit and stop_loss else "oto"
+        if take_profit:
+            body["take_profit"] = {"limit_price": take_profit}
+        if stop_loss:
+            body["stop_loss"] = {"stop_price": stop_loss}
+
+    verb = "kaufen" if action == "buy" else "verkaufen"
+    amount = f"{qty} Stück {symbol}" if qty else f"{symbol} für {notional} $"
+    details = [f"Ordertyp {order_type}"]
+    details += [f"{name} {value} $" for name, value in (("Limit", body.get("limit_price")), ("Stopp", body.get("stop_price"))) if value]
+    if trail and order_type == "trailing_stop":
+        details.append(f"Abstand {trail} %")
+    if take_profit:
+        details.append(f"Ziel {take_profit} $")
+    if stop_loss:
+        details.append(f"Stop-Loss {stop_loss} $")
+    details.append(f"gültig {body['time_in_force']}")
+    if qty:
+        price = float(limit_price) if limit_price else alpaca_client.latest_price(symbol)
+        if price:
+            details.append(f"Gegenwert etwa {float(qty) * price:,.0f} $".replace(",", "."))
+    return _alpaca_confirm(
+        f"Soll ich wirklich {amount} {verb}? {', '.join(details)}. Konto: {label}.",
+        "POST", "/v2/orders", None, body,
+        lambda r: f"Order aufgegeben ({label}): {amount} {verb}, Status {(r or {}).get('status', '?')}, ID {(r or {}).get('id', '?')}.",
+    )
+
+
+def _alpaca_request(a: dict) -> str:
+    method = (a.get("method") or "GET").strip().upper()
+    path = (a.get("path") or "").strip()
+    if method not in ("GET", "POST", "PUT", "PATCH", "DELETE"):
+        return f"Unbekannte Methode '{method}'."
+    parsed = {}
+    for field in ("params", "body"):
+        raw = (a.get(field) or "").strip()
+        try:
+            parsed[field] = json.loads(raw) if raw else None
+        except ValueError:
+            return f"Konnte '{field}' nicht als JSON lesen."
+        if parsed[field] is not None and not isinstance(parsed[field], dict):
+            return f"'{field}' muss ein JSON-Objekt sein."
+    if method == "GET":
+        return _alpaca_guarded(lambda: alpaca_client.compact(alpaca_client.request("GET", path, parsed["params"])))
+    if alpaca_client.is_data_path(path):
+        return "Die Marktdaten-API von Alpaca kennt nur lesende Aufrufe (GET)."
+    body_text = f" mit {alpaca_client.compact(parsed['body'], 300)}" if parsed["body"] else ""
+    return _alpaca_confirm(
+        f"Soll ich wirklich {method} {path}{body_text} an Alpaca senden ({alpaca_client.account_label()})?",
+        method, path, parsed["params"], parsed["body"],
+        lambda r: "Erledigt. Antwort von Alpaca: " + (alpaca_client.compact(r, 600) if r is not None else "leer"),
+    )
+
+
 DISPATCH = {
+    "alpaca_data": _alpaca_data,
+    "alpaca_account": _alpaca_account,
+    "alpaca_order": _alpaca_order,
+    "alpaca_request": _alpaca_request,
     "get_weather": lambda a: _get_weather(a.get("city", "")),
     "get_time": lambda a: _get_time(),
     "add_note": lambda a: _add_note(a.get("text", "")),
