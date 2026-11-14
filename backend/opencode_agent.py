@@ -167,9 +167,9 @@ def agent_available(agent_id: str) -> bool:
     b = agent_bin(agent_id)
     if not b:
         return False
-    if agent_id == "opencode":
-        return pathlib.Path(b).exists()
-    return shutil.which(b) is not None or pathlib.Path(b).exists()
+    # OPENCODE_BIN may also be a bare name from the env var ("opencode"),
+    # which only shutil.which resolves.
+    return pathlib.Path(b).exists() or shutil.which(b) is not None
 
 
 def list_code_agents() -> list[dict]:
@@ -419,14 +419,27 @@ _state_checked_at = 0.0
 _STATE_MIN_INTERVAL = 0.5
 
 
+_state_lock = threading.Lock()
+
+
 def _check_state() -> None:
-    global _state, _state_checked_at
+    global _state_checked_at
     now = time.monotonic()
     # Die TUI zeichnet bei jedem Tastendruck komplett neu; ohne Drossel
-    # liefe die Auswertung hunderte Male pro Sekunde.
-    if now - _state_checked_at < _STATE_MIN_INTERVAL:
+    # liefe die Auswertung hunderte Male pro Sekunde. Nicht blockierend:
+    # läuft gerade eine Prüfung (anderer PTY-Leser), diese auslassen —
+    # zwei gleichzeitige Prüfungen meldeten denselben Wechsel doppelt.
+    if now - _state_checked_at < _STATE_MIN_INTERVAL or not _state_lock.acquire(blocking=False):
         return
-    _state_checked_at = now
+    try:
+        _state_checked_at = now
+        _check_state_locked()
+    finally:
+        _state_lock.release()
+
+
+def _check_state_locked() -> None:
+    global _state
     # Bewusst nur ein kurzes Stück: die TUI zeichnet ihren ganzen Bildschirm
     # bei jeder Änderung neu, und in einem längeren Ausschnitt steht das
     # "esc interrupt" vergangener Neuzeichnungen noch drin — der Zustand
@@ -663,6 +676,9 @@ def set_code_dir(dir_path: str) -> None:
     config.update_config(code_dir=dir_path)
 
 
+_config_write_lock = threading.Lock()
+
+
 def ensure_provider_config(models: list[dict], model_id: str) -> dict:
     """Merge an ``lmstudio`` provider into the opencode config.
 
@@ -673,6 +689,9 @@ def ensure_provider_config(models: list[dict], model_id: str) -> dict:
     if OPENCODE_CONFIG.exists():
         try:
             cfg = json.loads(OPENCODE_CONFIG.read_text(encoding="utf-8"))
+        except OSError as exc:
+            print(f"[code] {OPENCODE_CONFIG} nicht lesbar, LM-Studio-Provider nicht eingetragen: {exc}")
+            return {}
         except ValueError as exc:
             # opencode itself accepts comments/trailing commas in this file;
             # json.loads doesn't. Overwriting would destroy the user's config,
@@ -680,13 +699,11 @@ def ensure_provider_config(models: list[dict], model_id: str) -> dict:
             # the file alone and let opencode start with what it has.
             print(f"[code] {OPENCODE_CONFIG} ist kein reines JSON, LM-Studio-Provider nicht eingetragen: {exc}")
             return {}
-    # Only back up once, so repeated UI opens don't churn .bak files.
-    bak = pathlib.Path(str(OPENCODE_CONFIG) + ".jarvis.bak")
-    if not bak.exists():
-        if OPENCODE_CONFIG.exists():
-            bak.write_text(OPENCODE_CONFIG.read_text(encoding="utf-8"), encoding="utf-8")
-
-    cfg["provider"] = cfg.get("provider", {})
+    if not isinstance(cfg, dict):
+        return {}
+    before = json.dumps(cfg, sort_keys=True)
+    if not isinstance(cfg.get("provider"), dict):
+        cfg["provider"] = {}
     cfg["provider"][PROVIDER_ID] = {
         "npm": "@ai-sdk/openai-compatible",
         "name": "LM Studio (local)",
@@ -703,8 +720,25 @@ def ensure_provider_config(models: list[dict], model_id: str) -> dict:
     # von opencode selbst (z.B. "opencode/big-pickle") muss hier stehen
     # können, nicht nur eins aus LM Studio.
     cfg["model"] = model_id
-    OPENCODE_CONFIG.parent.mkdir(parents=True, exist_ok=True)
-    OPENCODE_CONFIG.write_text(json.dumps(cfg, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    # /code/status calls this every time the Code-Tab opens: rewriting an
+    # unchanged file every time was pointless churn on the user's config.
+    if json.dumps(cfg, sort_keys=True) == before:
+        return cfg
+    with _config_write_lock:
+        try:
+            OPENCODE_CONFIG.parent.mkdir(parents=True, exist_ok=True)
+            # Only back up once, so repeated UI opens don't churn .bak files.
+            bak = pathlib.Path(str(OPENCODE_CONFIG) + ".jarvis.bak")
+            if OPENCODE_CONFIG.exists() and not bak.exists():
+                bak.write_text(OPENCODE_CONFIG.read_text(encoding="utf-8"), encoding="utf-8")
+            # Temp file + rename: this is the USER's opencode config — a crash
+            # or a second writer mid-write must never leave it truncated.
+            tmp = OPENCODE_CONFIG.with_name(OPENCODE_CONFIG.name + ".jarvis.tmp")
+            tmp.write_text(json.dumps(cfg, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+            os.replace(tmp, OPENCODE_CONFIG)
+        except OSError as exc:
+            # A read-only/locked file used to turn /code/status into a 500.
+            print(f"[code] {OPENCODE_CONFIG} nicht schreibbar: {exc}")
     return cfg
 
 
