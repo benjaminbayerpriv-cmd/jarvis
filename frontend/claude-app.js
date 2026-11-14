@@ -379,6 +379,8 @@
   // das Backend meldet, was gerade wirklich passiert (siehe backend/
   // llm_client._stream_reply_impl's "status"-Events: thinking/answering/tool).
   const TOOL_STATUS_LABELS = {
+    alpaca_data: 'Holt Marktdaten …', alpaca_account: 'Schaut ins Depot …',
+    alpaca_order: 'Bereitet die Order vor …', alpaca_request: 'Fragt Alpaca …',
     opencode: 'Programmiert gerade …', opencode_model: 'Wechselt das Coding-Modell …',
     opencode_status: 'Schaut nach dem Stand …', set_code_agent: 'Wechselt den Coding-Agenten …',
     run_shell: 'Führt einen Befehl aus …', build_project: 'Baut das Projekt …',

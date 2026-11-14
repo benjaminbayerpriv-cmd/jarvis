@@ -107,6 +107,18 @@ GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 # zurück (Suche im verbundenen Browser öffnen statt Ergebnisse zurückzugeben).
 TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY", "")
 
+# Alpaca (alpaca.markets) — Marktdaten, Konto und Orders, siehe
+# backend/alpaca_client.py. Paper und Live haben bei Alpaca getrennte
+# Schlüssel. Live zählt nur mit ALPACA_MODE=live UND gesetzten Live-
+# Schlüsseln; absichtlich nur hier in .env umschaltbar, nicht per Sprache.
+ALPACA_PAPER_KEY = os.environ.get("ALPACA_PAPER_KEY", "").strip()
+ALPACA_PAPER_SECRET = os.environ.get("ALPACA_PAPER_SECRET", "").strip()
+ALPACA_LIVE_KEY = os.environ.get("ALPACA_LIVE_KEY", "").strip()
+ALPACA_LIVE_SECRET = os.environ.get("ALPACA_LIVE_SECRET", "").strip()
+ALPACA_MODE = os.environ.get("ALPACA_MODE", "paper").strip().lower()
+# "iex" ist kostenlos (ein Handelsplatz); "sip" braucht ein Alpaca-Datenabo.
+ALPACA_DATA_FEED = os.environ.get("ALPACA_DATA_FEED", "iex").strip().lower()
+
 JARVIS_HOST = os.environ.get("JARVIS_HOST", "127.0.0.1")
 JARVIS_PORT = int(os.environ.get("JARVIS_PORT", "8000"))
 # Port of the MCP server LM Studio calls Jarvis's tools through (see
