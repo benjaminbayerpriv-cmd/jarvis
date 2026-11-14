@@ -267,6 +267,13 @@ ehrlich, wenn das Ziel gar nicht existiert.
 - **Im Web suchen** — mit `TAVILY_API_KEY` (kostenlos, tavily.com) echte
   Ergebnisse zum Vorlesen/Zusammenfassen; ohne Key öffnet es stattdessen
 die Suche im verbundenen Browser.
+- **Börse und Depot (Alpaca)** — mit `ALPACA_PAPER_KEY`/`ALPACA_PAPER_SECRET`
+  in `.env` holt Jarvis Kurse, Kursverläufe und Nachrichten, liest Konto,
+  Positionen und Orders und kann handeln. Jede Order, Stornierung und jedes
+  Schließen fragt vorher nach Bestätigung. Standard ist das Paper-Konto;
+  echtes Geld nur mit `ALPACA_MODE=live` plus `ALPACA_LIVE_KEY`/
+  `ALPACA_LIVE_SECRET`. Alles Übrige der Alpaca-REST-API erreicht
+  `alpaca_request`.
 - **Projekte programmieren** — Jarvis fragt nach dem Ordner und baut das
   Projekt mit seinem eigenen Modell selbst, ganz ohne externes Tool. Läuft
   im Hintergrund (dabei erscheint eine kleine zweite "arbeitet"-Kugel im
