@@ -77,13 +77,18 @@ class BrowserAgent:
     def command(self, action: str, payload: dict, timeout: float = 20) -> str:
         if not self.connected():
             return "Browser-Agent nicht verbunden. Installiere oder aktiviere die Jarvis-Chrome-Erweiterung."
+        # Snapshot: the extension can disconnect between connected() and the
+        # send — reading self._socket/_loop again then sent to None.
+        socket, loop = self._socket, self._loop
+        if socket is None or loop is None:
+            return "Browser-Agent nicht verbunden. Installiere oder aktiviere die Jarvis-Chrome-Erweiterung."
         request = _Request(id=f"browser-{next(self._counter)}", action=action, payload=payload)
         with self._lock:
             self._requests[request.id] = request
             self._pending.append(request.id)
         try:
             future = asyncio.run_coroutine_threadsafe(
-                self._socket.send_json({"id": request.id, "action": action, "payload": payload}), self._loop
+                socket.send_json({"id": request.id, "action": action, "payload": payload}), loop
             )
             future.result(timeout=3)
         except Exception as exc:

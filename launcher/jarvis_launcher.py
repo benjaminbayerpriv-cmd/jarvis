@@ -297,6 +297,25 @@ def main() -> None:
             timer.start()
 
         window.events.resized += _on_resized
+
+        # Jarvis' eigener Browser (zweites Fenster, wird erst beim ersten
+        # Befehl vom Backend geöffnet). Scheitert sein Start, läuft Jarvis
+        # ganz normal weiter — er ist nur ein Zusatz.
+        jarvis_browser = None
+        try:
+            from browser_window import JarvisBrowserWindow
+
+            state = _window_state_file()
+            jarvis_browser = JarvisBrowserWindow(
+                webview, URL.replace("http://", "ws://") + "/jarvis-browser/ws", root_dir,
+                state.with_name("browser_window.json") if state else None,
+            )
+            jarvis_browser.start()
+            # Hauptfenster zu = alles zu, auch ein noch offenes Browser-Fenster.
+            window.events.closed += jarvis_browser.shutdown
+        except Exception as exc:  # noqa: BLE001
+            server_log.write(f"[launcher] Jarvis-Browser nicht gestartet: {exc}\n")
+            server_log.flush()
         # private_mode=False: Einstellungen der UI (localStorage) über
         # Neustarts hinweg behalten, siehe _webview_storage_dir().
         storage_dir = _webview_storage_dir()

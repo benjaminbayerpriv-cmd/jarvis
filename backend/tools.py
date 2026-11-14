@@ -16,7 +16,7 @@ from urllib.parse import quote_plus
 
 import requests
 
-from . import browser_agent, config, confirm, last_target, memory, opencode_agent, panel, platform_utils
+from . import browser_agent, config, confirm, jarvis_browser, last_target, memory, opencode_agent, panel, platform_utils
 
 IS_WINDOWS = platform.system() == "Windows"
 _NO_WINDOW = 0x08000000 if IS_WINDOWS else 0  # CREATE_NO_WINDOW
@@ -131,6 +131,81 @@ TOOL_SCHEMAS = [
             "name": "web_search",
             "description": "Web-Suche mit echten Ergebnissen (Titel, Kurzbeschreibung, URL). Nur für Aktuelles oder Unsicheres (Preise, News, Öffnungszeiten); Allgemeinwissen beantwortest du selbst.",
             "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "browser_open",
+            "description": (
+                "Öffnet eine Seite in Jarvis' EIGENEM Browser (nicht im Chrome des Nutzers) und liefert die nummerierte "
+                "Elementliste. Für Recherche und Bedienen von Webseiten; open_url nur, wenn der Nutzer die Seite selbst sehen will."
+            ),
+            "parameters": {"type": "object", "properties": {"url": {"type": "string"}}, "required": ["url"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "browser_look",
+            "description": "Aktuelle Seite im Jarvis-Browser: nummerierte Liste der sichtbaren Buttons, Links und Felder. Immer zuerst aufrufen, bevor du klickst oder tippst.",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "browser_click",
+            "description": "Klickt das Element mit dieser Nummer aus der letzten Elementliste (browser_look/browser_open). Nie Koordinaten raten.",
+            "parameters": {"type": "object", "properties": {"nr": {"type": "integer"}}, "required": ["nr"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "browser_type",
+            "description": "Tippt Text in das Feld mit dieser Nummer. enter=true schickt danach Enter (Suche absenden). Passwort- und Zahlungsfelder fasst Jarvis nie an.",
+            "parameters": {
+                "type": "object",
+                "properties": {"nr": {"type": "integer"}, "text": {"type": "string"}, "enter": {"type": "boolean"}},
+                "required": ["nr", "text"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "browser_select",
+            "description": "Wählt in der Auswahlliste mit dieser Nummer eine Option (Text oder Wert).",
+            "parameters": {
+                "type": "object",
+                "properties": {"nr": {"type": "integer"}, "value": {"type": "string"}},
+                "required": ["nr", "value"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "browser_scroll",
+            "description": "Scrollt die Seite im Jarvis-Browser: unten, oben, anfang oder ende. Danach neue Elementliste.",
+            "parameters": {"type": "object", "properties": {"direction": {"type": "string"}}, "required": ["direction"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "browser_read",
+            "description": "Liest den Text der aktuellen Seite im Jarvis-Browser (Artikel, Ergebnisse), um daraus zu antworten.",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "browser_back",
+            "description": "Geht im Jarvis-Browser eine Seite zurück.",
+            "parameters": {"type": "object", "properties": {}},
         },
     },
     {
@@ -652,6 +727,137 @@ def _web_search(query: str) -> str:
 
 def _browser_tabs() -> str:
     return browser_agent.agent.command("list_tabs", {})
+
+
+def _jb_page_number(raw) -> int | None:
+    try:
+        return int(float(str(raw).strip().lstrip("#")))
+    except (TypeError, ValueError):
+        return None
+
+
+def _jb_fail(res: dict) -> str:
+    message = res.get("message") or "Unbekannter Fehler."
+    # "nicht verbunden" erklärt sich selbst; alles andere als Fehler kennzeichnen,
+    # damit das Panel den Aufruf als fehlgeschlagen zeigt.
+    return message if message.startswith("Jarvis-Browser nicht verbunden") else f"Konnte das im Jarvis-Browser nicht tun: {message}"
+
+
+def _jb_view(res: dict, previous: dict | None = None) -> str:
+    data = res.get("data") or {}
+    jarvis_browser.agent.remember(data)
+    return jarvis_browser.agent.render(data, previous)
+
+
+def _browser_open(url: str) -> str:
+    url = (url or "").strip()
+    if not url or url.lower() in ("http://", "https://"):
+        return "Welche Adresse soll ich im Jarvis-Browser öffnen?"
+    # Nur Webseiten: javascript:/file:/data:/chrome: & Co. würden Skripte
+    # ausführen oder lokale Dateien lesen.
+    if re.match(r"^(javascript|file|data|vbscript|blob|about|chrome|edge|view-source|ftp)\s*:", url, re.IGNORECASE):
+        return "Konnte das nicht tun: Der Jarvis-Browser öffnet nur http- und https-Adressen."
+    if not url.lower().startswith(("http://", "https://")):
+        url = "https://" + url
+    res = jarvis_browser.agent.command("open", {"url": url}, timeout=50)
+    return _jb_view(res) if res["ok"] else _jb_fail(res)
+
+
+def _browser_look() -> str:
+    res = jarvis_browser.agent.command("look", {})
+    return _jb_view(res) if res["ok"] else _jb_fail(res)
+
+
+def _jb_target(raw_nr) -> tuple[int, dict, int] | str:
+    """Prüft Nummer, Schalter und letzte Elementliste. Gibt (nr, element, epoch)
+    oder eine Fehlermeldung für das Modell zurück."""
+    if not jarvis_browser.agent.actions_enabled():
+        return "Konnte das nicht tun: Klicken und Tippen im Jarvis-Browser ist ausgeschaltet (config.json: jarvis_browser_actions)."
+    nr = _jb_page_number(raw_nr)
+    if nr is None:
+        return "Konnte das nicht tun: Welche Nummer aus der Elementliste?"
+    last = jarvis_browser.agent.last
+    element = jarvis_browser.agent.element(nr)
+    if element is None or last.get("epoch") is None:
+        return f"Konnte das nicht tun: Es gibt kein Element Nr. {nr} in der letzten Liste. Bitte erst browser_look aufrufen."
+    return nr, element, int(last["epoch"])
+
+
+def _browser_click(nr_raw) -> str:
+    target = _jb_target(nr_raw)
+    if isinstance(target, str):
+        return target
+    nr, element, epoch = target
+    name = element.get("name") or element.get("role", "Element")
+    url = jarvis_browser.agent.last.get("url", "")
+    previous = dict(jarvis_browser.agent.last)
+
+    def _do_click(after_confirm: bool) -> str:
+        res = jarvis_browser.agent.command("click", {"nr": nr, "epoch": epoch}, timeout=45)
+        if not res["ok"]:
+            return _jb_fail(res)
+        if after_confirm:
+            # Nach "Ja" ist das hier die ganze Antwort an den Nutzer (das Modell
+            # wird übersprungen, siehe confirm.resolve) — also ein lesbarer Satz.
+            data = res.get("data") or {}
+            jarvis_browser.agent.remember(data)
+            return f"Erledigt: \u201e{name}\u201c angeklickt. Die Seite ist jetzt \u201e{data.get('title') or ''}\u201c."
+        return _jb_view(res, previous)
+
+    if jarvis_browser.RISKY_RE.search(name):
+        # Kauf/Senden/Löschen/Zustimmen: nie ohne ausdrückliches Ja des Nutzers.
+        what = "dem Link" if element.get("role") == "Link" else "auf"
+        return confirm.propose(
+            f"Soll ich im Jarvis-Browser {what} \u201e{name}\u201c klicken (Seite: {url[:60]})?", lambda: _do_click(True)
+        )
+    return _do_click(False)
+
+
+def _browser_type(nr_raw, text: str, enter) -> str:
+    target = _jb_target(nr_raw)
+    if isinstance(target, str):
+        return target
+    nr, element, epoch = target
+    if element.get("role") in jarvis_browser.SECRET_ROLES:
+        return "Konnte das nicht tun: In Passwort- und Zahlungsfelder tippe ich nicht. Das musst du selbst eingeben."
+    previous = dict(jarvis_browser.agent.last)
+    submit = str(enter).strip().lower() in ("true", "1", "ja", "yes")
+    res = jarvis_browser.agent.command("type", {"nr": nr, "epoch": epoch, "text": str(text or ""), "enter": submit}, timeout=45)
+    return _jb_view(res, previous) if res["ok"] else _jb_fail(res)
+
+
+def _browser_select(nr_raw, value: str) -> str:
+    target = _jb_target(nr_raw)
+    if isinstance(target, str):
+        return target
+    nr, _element, epoch = target
+    previous = dict(jarvis_browser.agent.last)
+    res = jarvis_browser.agent.command("select", {"nr": nr, "epoch": epoch, "value": str(value or "")}, timeout=30)
+    return _jb_view(res, previous) if res["ok"] else _jb_fail(res)
+
+
+def _browser_scroll(direction: str) -> str:
+    res = jarvis_browser.agent.command("scroll", {"direction": str(direction or "unten")})
+    return _jb_view(res) if res["ok"] else _jb_fail(res)
+
+
+def _browser_read() -> str:
+    res = jarvis_browser.agent.command("read", {"max_chars": 5000}, timeout=30)
+    if not res["ok"]:
+        return _jb_fail(res)
+    data = res.get("data") or {}
+    text = str(data.get("text") or "").strip()
+    head = f'{jarvis_browser.PAGE_DATA_NOTE}\nSeite: "{data.get("title", "")}" ({data.get("url", "")})'
+    if not text:
+        return head + "\nAuf der Seite steht kein lesbarer Text."
+    tail = f"\n[gekürzt, die Seite hat {data.get('length')} Zeichen]" if data.get("truncated") else ""
+    return f"{head}\n{text}{tail}"
+
+
+def _browser_back() -> str:
+    previous = dict(jarvis_browser.agent.last)
+    res = jarvis_browser.agent.command("back", {}, timeout=40)
+    return _jb_view(res, previous) if res["ok"] else _jb_fail(res)
 
 
 def _resolve_app_macos(name: str) -> str | None:
@@ -1348,6 +1554,14 @@ DISPATCH = {
     "youtube_search": lambda a: _youtube_search(a.get("query", "")),
     "web_search": lambda a: _web_search(a.get("query", "")),
     "browser_tabs": lambda a: _browser_tabs(),
+    "browser_open": lambda a: _browser_open(a.get("url", "")),
+    "browser_look": lambda a: _browser_look(),
+    "browser_click": lambda a: _browser_click(a.get("nr", "")),
+    "browser_type": lambda a: _browser_type(a.get("nr", ""), a.get("text", ""), a.get("enter", "")),
+    "browser_select": lambda a: _browser_select(a.get("nr", ""), a.get("value", "")),
+    "browser_scroll": lambda a: _browser_scroll(a.get("direction", "")),
+    "browser_read": lambda a: _browser_read(),
+    "browser_back": lambda a: _browser_back(),
     "open_app": lambda a: _open_app(a.get("name", "")),
     "open_folder": lambda a: _open_folder(a.get("description", "")),
     "list_folder": lambda a: _list_folder(a.get("description", "")),
@@ -1378,7 +1592,7 @@ def call_tool(name: str, arguments: dict) -> str:
     panel.push("action", id=action_id, action=name, status="läuft", target=arguments)
     try:
         result = handler(arguments)
-        failed = result.lower().startswith(("fehler", "konnte", "unbekannt", "browser-agent nicht verbunden", "browser-aktion fehlgeschlagen"))
+        failed = result.lower().startswith(("fehler", "konnte", "unbekannt", "browser-agent nicht verbunden", "browser-aktion fehlgeschlagen", "jarvis-browser nicht verbunden"))
         panel.push("action", id=action_id, action=name, status="fehlgeschlagen" if failed else "erfolgreich", detail=result)
         return result
     except Exception as exc:
