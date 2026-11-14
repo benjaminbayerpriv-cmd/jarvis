@@ -999,37 +999,10 @@ def _probe_models(base_url: str) -> set:
     return {entry.get("id") for entry in response.json().get("data", [])}
 
 
-def _is_own_address(host: str) -> bool:
-    """Whether host names one of this machine's own (current or recent) IPs."""
-    import socket
-
-    try:
-        own = set(socket.gethostbyname_ex(socket.gethostname())[2])
-    except OSError:
-        own = set()
-    try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        try:
-            s.connect(("8.8.8.8", 80))  # picks the LAN interface, sends nothing
-            own.add(s.getsockname()[0])
-        finally:
-            s.close()
-    except OSError:
-        pass
-    if host in own:
-        return True
-    # The .env address is from an EARLIER network (that's the whole point of
-    # the fallback), so it no longer matches a current IP: accept it only if
-    # it resolves to nothing else reachable — i.e. it is a private address
-    # that no host answers on, which the failed probes above already showed.
-    try:
-        import ipaddress
-
-        return ipaddress.ip_address(host).is_private and not any(
-            ipaddress.ip_address(host) in ipaddress.ip_network(f"{ip}/24", strict=False) for ip in own if ":" not in ip
-        )
-    except ValueError:
-        return False
+# When the local fallback (see _reachable_lm_studio_models) last re-tried
+# the configured LM Studio.
+_lm_fallback_checked = 0.0
+_LM_FALLBACK_RECHECK_S = 60
 
 
 def _reachable_lm_studio_models() -> set:
@@ -1038,7 +1011,27 @@ def _reachable_lm_studio_models() -> set:
     immediately greyed out the composer - now retried once; (2) .env still
     pointing at this PC's own LAN address from an earlier network (the IP
     changes with every Wi-Fi/hotspot switch) although LM Studio runs right
-    here - now falls back to 127.0.0.1 and keeps that endpoint."""
+    here - now falls back to 127.0.0.1.
+
+    The fallback is for this process only and never written to .env: the
+    configured machine may just be switched off for a moment. The configured
+    address stays in config.LM_STUDIO_CONFIGURED_BASE_URL, is re-tried every
+    minute and taken back as soon as it answers; a new address set in the
+    settings ends the fallback as well (config.set_lm_studio_base_url)."""
+    global _lm_fallback_checked
+    configured = config.LM_STUDIO_CONFIGURED_BASE_URL
+    if configured and time.monotonic() - _lm_fallback_checked >= _LM_FALLBACK_RECHECK_S:
+        _lm_fallback_checked = time.monotonic()
+        try:
+            models = _probe_models(configured)
+        except requests.RequestException:
+            pass
+        else:
+            print(f"[model] {configured} ist wieder erreichbar - zurück vom lokalen LM Studio.")
+            config.LM_STUDIO_BASE_URL = configured
+            config.LM_STUDIO_CONFIGURED_BASE_URL = None
+            return models
+
     base = config.LM_STUDIO_BASE_URL
     try:
         return _probe_models(base)
@@ -1048,17 +1041,19 @@ def _reachable_lm_studio_models() -> set:
         return _probe_models(base)
     except requests.RequestException as exc:
         host = (urlparse(base).hostname or "").lower()
-        # Only an address of THIS machine may be swapped for 127.0.0.1. A
-        # second PC that is briefly off used to be rewritten permanently into
-        # .env as soon as a local LM Studio happened to answer.
-        if host in ("127.0.0.1", "localhost", "::1") or not _is_own_address(host):
+        if host in ("127.0.0.1", "localhost", "::1"):
             raise
         try:
             models = _probe_models(_LOCAL_LM_STUDIO)
         except requests.RequestException:
             raise exc from None
-        print(f"[model] {base} nicht erreichbar, LM Studio läuft aber lokal - wechsle auf {_LOCAL_LM_STUDIO}.")
-        config.set_lm_studio_base_url(_LOCAL_LM_STUDIO)
+        print(
+            f"[model] {base} nicht erreichbar, LM Studio läuft aber lokal - nutze vorübergehend "
+            f"{_LOCAL_LM_STUDIO} (die Einstellung bleibt unverändert)."
+        )
+        config.LM_STUDIO_CONFIGURED_BASE_URL = base
+        _lm_fallback_checked = time.monotonic()
+        config.LM_STUDIO_BASE_URL = _LOCAL_LM_STUDIO
         return models
 
 
