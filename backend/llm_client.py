@@ -462,10 +462,16 @@ ist?" oder "soll ich nachschauen?", wenn du es einfach selbst nachschauen
 kannst, statt eine Gesprächsrunde zu verschwenden. Antworte erst, wenn du
 die eigentliche Frage wirklich beantworten kannst.
 
+Jede Nutzernachricht beginnt mit einer Zeile "[Aktuell: …]" — das ist das
+echte Datum und die echte Uhrzeit JETZT. Daran richtest du dich bei allem,
+was mit Datum, Jahr, Wochentag, Uhrzeit oder "heute/morgen/gestern" zu tun
+hat; dein Trainingswissen über das Jahr ist veraltet. Erwähne die Zeile nicht
+von dich aus.
+
 Für das aktuelle Datum, die Uhrzeit oder den Wochentag (auch beiläufig,
 z.B. "welches Jahr haben wir" oder eine Berechnung wie "wie alt ist
-jemand, der 1990 geboren ist") rufe IMMER zuerst get_time auf und nutze
-exakt dessen Ergebnis — das ist der einzige echte Zeitpunkt, den du
+jemand, der 1990 geboren ist") nutze die "[Aktuell: …]"-Zeile; get_time
+liefert dasselbe und darf alternativ aufgerufen werden — nutze exakt dessen Ergebnis — das ist der einzige echte Zeitpunkt, den du
 kennst. Nenne niemals ein Datum oder eine Uhrzeit aus eigenem Training
 (dessen Stichtag in der Vergangenheit liegt) oder aus einer früheren
 Erwähnung weiter oben im Gespräch, selbst wenn seither einige Nachrichten
@@ -1373,6 +1379,18 @@ def _content_text(content) -> str:
     return content or ""
 
 
+_WEEKDAYS_DE = ("Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag")
+_MONTHS_DE = ("Januar", "Februar", "März", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Dezember")
+
+
+def _now_german() -> str:
+    """"Samstag, 14. November 2026, 01:15 Uhr" — unabhängig von der Systemsprache."""
+    import datetime
+
+    n = datetime.datetime.now()
+    return f"{_WEEKDAYS_DE[n.weekday()]}, {n.day}. {_MONTHS_DE[n.month - 1]} {n.year}, {n:%H:%M} Uhr"
+
+
 def _native_input(messages: list):
     """(system_prompt, input) for /api/v1/chat, built from the same message
     list the OpenAI path sends.
@@ -1394,6 +1412,10 @@ def _native_input(messages: list):
     system_prompt = messages[0]["content"]
     *earlier, current = messages[1:]
     text = _content_text(current["content"])
+    # Die Uhrzeit steht bewusst in der NEUEN Nachricht, nicht im System-Prompt:
+    # ein sich ändernder Satz dort würde LM Studios Prompt-Cache bei jeder
+    # Minute entwerten (jedes Mal der volle Prefill von ~6k Tokens).
+    text = f"[Aktuell: {_now_german()}]\n{text}"
     lines = [
         f"{'Nutzer' if m['role'] == 'user' else 'Jarvis'}: {_content_text(m.get('content')).strip()}"
         for m in earlier
