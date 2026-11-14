@@ -25,7 +25,7 @@ from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import browser_agent, config, conversations, fillers, hardware, llm_client, mcp_server, memory, opencode_agent, panel, projects, stt, transcript_log, tts, vector_memory
+from . import browser_agent, config, conversations, fillers, hardware, jarvis_browser, llm_client, mcp_server, memory, opencode_agent, panel, projects, stt, transcript_log, tts, vector_memory
 
 
 @asynccontextmanager
@@ -1734,6 +1734,36 @@ async def ws_endpoint(websocket: WebSocket):
         # In finally: any other exit used to leave a dead socket in the list.
         if websocket in active_sockets:
             active_sockets.remove(websocket)
+
+
+@app.get("/jarvis-browser/status")
+def jarvis_browser_status():
+    return {"connected": jarvis_browser.agent.connected(), "actions": jarvis_browser.agent.actions_enabled()}
+
+
+@app.websocket("/jarvis-browser/ws")
+async def jarvis_browser_ws(websocket: WebSocket):
+    """Command channel to the second window of the Jarvis launcher (see
+    backend/jarvis_browser.py and launcher/browser_window.py)."""
+    if not await _accept_ws(websocket):
+        return
+    jarvis_browser.agent.connect(websocket, asyncio.get_running_loop())
+    try:
+        while True:
+            try:
+                message = json.loads(await websocket.receive_text())
+            except ValueError:
+                continue  # one malformed frame must not drop the connection
+            if not isinstance(message, dict):
+                continue
+            if message.get("type") == "heartbeat":
+                jarvis_browser.agent.heartbeat()
+                continue
+            jarvis_browser.agent.resolve(str(message.get("id", "")), message)
+    except (WebSocketDisconnect, RuntimeError, KeyError):
+        pass
+    finally:
+        jarvis_browser.agent.disconnect(websocket)
 
 
 @app.websocket("/browser/ws")
