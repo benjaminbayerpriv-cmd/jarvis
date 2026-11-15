@@ -13,6 +13,7 @@ strenger Content-Security-Policy scheitert.
 from __future__ import annotations
 
 import base64
+import itertools
 import json
 import re
 import threading
@@ -25,10 +26,31 @@ JS_TIMEOUT = 10.0
 # Screenshots gehen an das lokale Bildmodell: breiter bringt nichts mehr,
 # kostet aber spürbar Rechenzeit.
 SCREENSHOT_MAX_WIDTH = 1024
+MAX_TABS = 8
 
 
 class BrowserError(Exception):
     """Wird dem Backend als Fehlermeldung (auf Deutsch) zurückgegeben."""
+
+
+class _Tab:
+    """Ein Tab: eigenes Browser-Fenster samt Ansicht und Zustand. Ein Tab ohne
+    Fenster ist ein leerer "Neuer Tab" (das Fenster entsteht erst mit der
+    ersten Adresse)."""
+
+    _ids = itertools.count(1)
+
+    def __init__(self) -> None:
+        self.id = next(_Tab._ids)
+        self.window = None
+        self.control = None
+        self.loaded = 0
+        self.hooked = False
+        self.state = _Tab.blank_state()
+
+    @staticmethod
+    def blank_state() -> dict:
+        return {"url": "", "title": "", "back": False, "forward": False, "loading": False}
 
 
 class JarvisBrowserWindow:
@@ -37,8 +59,8 @@ class JarvisBrowserWindow:
         self.ws_url = ws_url
         self.inject_path = root_dir / "frontend" / "jarvis-browser-inject.js"
         self.state_file = state_file
-        self.window = None
-        self._loaded = 0
+        self.tabs: list[_Tab] = [_Tab()]
+        self._active: _Tab = self.tabs[0]
         self._cond = threading.Condition()
         self._stop = threading.Event()
         self._size = list(self._load_size())
@@ -48,9 +70,7 @@ class JarvisBrowserWindow:
         # (unsichtbaren) Browser-Fensters wird dort ins Hauptfenster gehängt.
         self.main_window = None
         self.api = PaneApi(self)
-        self._control = None
         self._pane = {"x": 0, "y": 0, "w": 0, "h": 0, "visible": False}
-        self._state = {"url": "", "title": "", "back": False, "forward": False, "loading": False}
         # Befehle vom Backend und Eingaben in der Adressleiste laufen auf
         # verschiedenen Threads: ohne Sperre legten beide gleichzeitig ein
         # Browser-Fenster an.
@@ -96,42 +116,81 @@ class JarvisBrowserWindow:
             pass
 
     # --------------------------------------------------------------- Fenster
-    def _on_loaded(self) -> None:
-        if self._control is not None and not getattr(self, "_hooked", False):
-            self._ui(self._hook_state)
+    # Jeder Tab ist ein eigenes (unsichtbares) pywebview-Fenster, dessen
+    # WebView2-Ansicht ins Hauptfenster gehängt wird. Aktiv ist immer genau
+    # ein Tab: ihn bedienen die Tools und die Adressleiste. Die Eigenschaften
+    # window/_control/_state/_loaded zeigen auf den aktiven Tab, damit der Rest
+    # des Codes nicht jeden Tab einzeln kennen muss.
+    @property
+    def window(self):
+        tab = self._active
+        return tab.window if tab else None
+
+    @property
+    def _control(self):
+        tab = self._active
+        return tab.control if tab else None
+
+    @property
+    def _state(self) -> dict:
+        tab = self._active
+        return tab.state if tab else _Tab.blank_state()
+
+    @property
+    def _loaded(self) -> int:
+        tab = self._active
+        return tab.loaded if tab else 0
+
+    def _on_loaded(self, tab) -> None:
+        if tab.control is not None and not tab.hooked:
+            self._ui(lambda: self._hook_state(tab))
         with self._cond:
-            self._loaded += 1
+            tab.loaded += 1
             self._cond.notify_all()
 
-    def _on_closed(self) -> None:
-        self.window = None
-        self._control = None
-        self._state.update(url="", title="", back=False, forward=False, loading=False)
+    def _on_tab_closed(self, tab) -> None:
+        tab.window = None
+        tab.control = None
+        tab.state.update(_Tab.blank_state())
+
+    def _add_tab(self, activate: bool = True) -> "_Tab":
+        with self._nav_lock:
+            if len(self.tabs) >= MAX_TABS:
+                raise BrowserError(f"Es sind schon {MAX_TABS} Tabs offen. Bitte erst einen schließen.")
+            tab = _Tab()
+            self.tabs.append(tab)
+            if activate:
+                self._active = tab
+            return tab
 
     def _ensure_window(self, url: str):
-        if self.window is not None:
-            return self.window
-        with self._cond:
-            before = self._loaded
-        # Mit Hauptfenster: unsichtbar anlegen, die Ansicht wandert gleich in
-        # die Seitenleiste. Ohne (Fallback): wie früher ein eigenes Fenster.
-        docked = self.main_window is not None and getattr(self.main_window, "native", None) is not None
-        window = self.webview.create_window(
-            "Jarvis-Browser", url, width=self._size[0], height=self._size[1], min_size=(480, 360),
-            text_select=True, hidden=docked,
-        )
-        if window is None:
-            raise BrowserError("Das Browser-Fenster konnte nicht geöffnet werden.")
-        window.events.loaded += self._on_loaded
-        window.events.closed += self._on_closed
-        window.events.resized += self._on_resized
-        if not window.events.shown.wait(15):
-            raise BrowserError("Das Browser-Fenster ist nicht rechtzeitig erschienen.")
-        self.window = window
-        if docked and not self._dock(window):
-            window.show()  # Einhängen gescheitert: dann eben als eigenes Fenster
-        self._wait_loaded(before)
-        return window
+        """Fenster für den aktiven Tab anlegen (falls er noch leer ist)."""
+        with self._nav_lock:
+            tab = self._active
+            if tab is None:
+                tab = self._add_tab(True)
+            if tab.window is not None:
+                return tab.window
+            before = tab.loaded
+            # Mit Hauptfenster: unsichtbar anlegen, die Ansicht wandert gleich in
+            # die Seitenleiste. Ohne (Fallback): wie früher ein eigenes Fenster.
+            docked = self.main_window is not None and getattr(self.main_window, "native", None) is not None
+            window = self.webview.create_window(
+                "Jarvis-Browser", url, width=self._size[0], height=self._size[1], min_size=(480, 360),
+                text_select=True, hidden=docked,
+            )
+            if window is None:
+                raise BrowserError("Das Browser-Fenster konnte nicht geöffnet werden.")
+            window.events.loaded += lambda: self._on_loaded(tab)
+            window.events.closed += lambda: self._on_tab_closed(tab)
+            window.events.resized += self._on_resized
+            if not window.events.shown.wait(15):
+                raise BrowserError("Das Browser-Fenster ist nicht rechtzeitig erschienen.")
+            tab.window = window
+            if docked and not self._dock(tab):
+                window.show()  # Einhängen gescheitert: dann eben als eigenes Fenster
+            self._wait_loaded(before, tab=tab)
+            return window
 
     # ------------------------------------------------------- Seitenleiste
     def _ui(self, fn, wait: float = 0) -> bool:
@@ -159,10 +218,11 @@ class JarvisBrowserWindow:
             return False
         return done.wait(wait) if wait else True
 
-    def _dock(self, window) -> bool:
+    def _dock(self, tab) -> bool:
         """Die WebView2-Ansicht aus dem unsichtbaren Browser-Fenster ins
         Hauptfenster hängen (Position setzt die Jarvis-Oberfläche)."""
         main = self.main_window.native
+        window = tab.window
         ok: list[bool] = []
 
         def run() -> None:
@@ -173,20 +233,20 @@ class JarvisBrowserWindow:
             control.Dock = getattr(DockStyle, "None")
             control.Visible = False
             main.Controls.Add(control)
-            self._control = control
-            self._hooked = False
-            self._hook_state()
+            tab.control = control
+            tab.hooked = False
+            self._hook_state(tab)
             self._apply_bounds()
             ok.append(True)
 
         self._ui(run, wait=10)
         return bool(ok)
 
-    def _undock(self) -> None:
+    def _undock(self, tab) -> None:
         """Ansicht zurück ins Browser-Fenster, damit pywebview sie beim
         Schließen wie gewohnt aufräumt."""
-        control, window = self._control, self.window
-        self._control = None
+        control, window = tab.control, tab.window
+        tab.control = None
         if control is None or window is None:
             return
 
@@ -201,29 +261,38 @@ class JarvisBrowserWindow:
 
         self._ui(run, wait=5)
 
-    def _destroy_window(self) -> None:
-        self._undock()
-        window, self.window = self.window, None
+    def _destroy_tab_window(self, tab) -> None:
+        """Nur das Fenster des Tabs schließen; der Tab selbst bleibt (leer)."""
+        self._undock(tab)
+        window, tab.window = tab.window, None
+        tab.state.update(_Tab.blank_state())
+        tab.hooked = False
         if window is not None:
             try:
                 window.destroy()
             except Exception:  # noqa: BLE001 - schon zu
                 pass
 
-    def _hook_state(self) -> None:
+    def _destroy_window(self) -> None:
+        """Alle Tabs schließen (Hauptfenster zu oder Befehl browser_close)."""
+        for tab in list(self.tabs):
+            self._destroy_tab_window(tab)
+
+    def _hook_state(self, tab) -> None:
         """Adresse, Titel und Verlauf für die Leiste mitschreiben — direkt aus
         den WebView2-Ereignissen, damit die Abfrage den UI-Thread nie braucht.
         Nur auf dem UI-Thread; ist WebView2 noch nicht fertig, holt _on_loaded
         das nach."""
-        control = self._control
+        control = tab.control
         core = control.CoreWebView2 if control is not None else None
-        if core is None or getattr(self, "_hooked", False):
+        if core is None or tab.hooked:
             return
-        self._hooked = True
+        tab.hooked = True
+        state = tab.state
 
         def update(*_args) -> None:
             try:
-                self._state.update(
+                state.update(
                     url=str(core.Source or ""), title=str(core.DocumentTitle or ""),
                     back=bool(core.CanGoBack), forward=bool(core.CanGoForward),
                 )
@@ -237,40 +306,92 @@ class JarvisBrowserWindow:
                     return
             except Exception:  # noqa: BLE001
                 pass
-            self._state["loading"] = True
+            state["loading"] = True
 
         def finished(*_args) -> None:
-            self._state["loading"] = False
+            state["loading"] = False
             update()
+
+        def new_window(_sender=None, args=None) -> None:
+            # Links mit target=_blank: als neuer Tab statt in einem fremden
+            # Fenster oder gar nicht.
+            try:
+                uri = str(args.Uri)
+                args.Handled = True
+                if not _is_own_server(uri, self._own_ports) and uri.lower().startswith(("http://", "https://")):
+                    threading.Thread(target=self._open_in_new_tab, args=(uri,), daemon=True).start()
+            except Exception:  # noqa: BLE001
+                pass
 
         core.SourceChanged += update
         core.DocumentTitleChanged += update
         core.HistoryChanged += update
         core.NavigationStarting += started
         core.NavigationCompleted += finished
+        core.NewWindowRequested += new_window
         update()
 
+    def _open_in_new_tab(self, url: str) -> None:
+        try:
+            with self._nav_lock:
+                self._add_tab(True)
+                self._ensure_window(url)
+        except BrowserError:
+            pass
+
     def _apply_bounds(self) -> None:
-        """Nur auf dem UI-Thread aufrufen."""
-        control, pane = self._control, self._pane
-        if control is None:
-            return
+        """Nur auf dem UI-Thread aufrufen. Sichtbar ist nur der aktive Tab."""
+        pane = self._pane
         from System.Drawing import Rectangle
 
-        if pane["visible"] and pane["w"] > 20 and pane["h"] > 20:
-            control.Bounds = Rectangle(pane["x"], pane["y"], pane["w"], pane["h"])
-            control.Visible = True
-            control.BringToFront()
-        else:
-            control.Visible = False
+        show = pane["visible"] and pane["w"] > 20 and pane["h"] > 20
+        for tab in list(self.tabs):
+            control = tab.control
+            if control is None:
+                continue
+            if show and tab is self._active:
+                control.Bounds = Rectangle(pane["x"], pane["y"], pane["w"], pane["h"])
+                control.Visible = True
+                control.BringToFront()
+            else:
+                control.Visible = False
 
     def set_bounds(self, x, y, w, h, visible) -> None:
         new = {"x": int(x), "y": int(y), "w": int(w), "h": int(h), "visible": bool(visible)}
         if new == self._pane:
             return
         self._pane.update(new)
-        if self._control is not None:
+        if any(t.control is not None for t in self.tabs):
             self._ui(self._apply_bounds)
+
+    # ------------------------------------------------------------------ Tabs
+    def new_tab(self) -> None:
+        self._add_tab(True)
+        self._ui(self._apply_bounds)
+
+    def select_tab(self, tab_id: int) -> None:
+        with self._nav_lock:
+            for tab in self.tabs:
+                if tab.id == tab_id:
+                    self._active = tab
+                    break
+            else:
+                return
+        self._ui(self._apply_bounds)
+
+    def close_tab(self, tab_id: int) -> None:
+        with self._nav_lock:
+            tab = next((t for t in self.tabs if t.id == tab_id), None)
+            if tab is None:
+                return
+            index = self.tabs.index(tab)
+            self._destroy_tab_window(tab)
+            if len(self.tabs) == 1:
+                return  # letzter Tab: bleibt als leerer "Neuer Tab"
+            self.tabs.remove(tab)
+            if self._active is tab:
+                self._active = self.tabs[min(index, len(self.tabs) - 1)]
+        self._ui(self._apply_bounds)
 
     def reveal(self) -> None:
         """Die Seitenleiste in der Jarvis-Oberfläche aufziehen (z. B. wenn das
@@ -318,10 +439,13 @@ class JarvisBrowserWindow:
 
         self._ui(run)
 
-    def _wait_loaded(self, before: int, timeout: float = PAGE_LOAD_TIMEOUT) -> bool:
+    def _wait_loaded(self, before: int, timeout: float = PAGE_LOAD_TIMEOUT, tab=None) -> bool:
+        tab = tab or self._active
+        if tab is None:
+            return False
         deadline = time.monotonic() + timeout
         with self._cond:
-            while self._loaded <= before:
+            while tab.loaded <= before:
                 left = deadline - time.monotonic()
                 if left <= 0:
                     return False
@@ -572,7 +696,6 @@ class JarvisBrowserWindow:
 
     def do_close(self, payload: dict) -> tuple[str, dict]:
         self._destroy_window()
-        self._state.update(url="", title="", back=False, forward=False, loading=False)
         return "Browser-Fenster geschlossen.", {}
 
     # --------------------------------------------------------------- Kanal
@@ -671,7 +794,34 @@ class PaneApi:
 
     def pane_state(self) -> dict:
         b = self._browser
-        return {**b._state, "open": b.window is not None}
+        active = b._active
+        tabs = [
+            {"id": t.id, "title": t.state.get("title") or t.state.get("url") or "", "url": t.state.get("url") or "",
+             "loading": bool(t.state.get("loading")), "blank": t.window is None}
+            for t in list(b.tabs)
+        ]
+        return {**b._state, "open": b.window is not None, "tabs": tabs, "active": active.id if active else 0}
+
+    def pane_new_tab(self) -> dict:
+        try:
+            self._browser.new_tab()
+        except BrowserError as exc:
+            return {**self.pane_state(), "error": str(exc)}
+        return self.pane_state()
+
+    def pane_select_tab(self, tab_id) -> dict:
+        try:
+            self._browser.select_tab(int(tab_id))
+        except (TypeError, ValueError):
+            pass
+        return self.pane_state()
+
+    def pane_close_tab(self, tab_id) -> dict:
+        try:
+            self._browser.close_tab(int(tab_id))
+        except (TypeError, ValueError):
+            pass
+        return self.pane_state()
 
     def pane_bounds(self, x, y, w, h, visible) -> dict:
         self._browser.set_bounds(x, y, w, h, visible)
