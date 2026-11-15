@@ -75,13 +75,22 @@ class BrowserAgent:
         self._last_seen = time.monotonic()
 
     def command(self, action: str, payload: dict, timeout: float = 20) -> str:
+        return self.request(action, payload, timeout)[0]
+
+    def request(self, action: str, payload: dict, timeout: float = 20) -> tuple[str, dict]:
+        """Like command(), but also hands back the extension's data (the tab
+        list, say) -- command() alone only ever returned the status line."""
+        message, data = self._request(action, payload, timeout)
+        return message, data if isinstance(data, dict) else {}
+
+    def _request(self, action: str, payload: dict, timeout: float) -> tuple[str, dict]:
         if not self.connected():
-            return "Browser-Agent nicht verbunden. Installiere oder aktiviere die Jarvis-Chrome-Erweiterung."
+            return "Browser-Agent nicht verbunden. Installiere oder aktiviere die Jarvis-Chrome-Erweiterung.", {}
         # Snapshot: the extension can disconnect between connected() and the
         # send — reading self._socket/_loop again then sent to None.
         socket, loop = self._socket, self._loop
         if socket is None or loop is None:
-            return "Browser-Agent nicht verbunden. Installiere oder aktiviere die Jarvis-Chrome-Erweiterung."
+            return "Browser-Agent nicht verbunden. Installiere oder aktiviere die Jarvis-Chrome-Erweiterung.", {}
         request = _Request(id=f"browser-{next(self._counter)}", action=action, payload=payload)
         with self._lock:
             self._requests[request.id] = request
@@ -93,21 +102,21 @@ class BrowserAgent:
             future.result(timeout=3)
         except Exception as exc:
             self._forget(request.id)
-            return f"Browser-Aktion fehlgeschlagen: Verbindung verloren ({exc})"
+            return f"Browser-Aktion fehlgeschlagen: Verbindung verloren ({exc})", {}
         panel.push("action", id=request.id, action=action, status="läuft", target=payload)
         if not request.done.wait(timeout):
             self._forget(request.id)
             panel.push("action", id=request.id, action=action, status="fehlgeschlagen", detail="Zeitüberschreitung")
-            return "Browser-Aktion hat keine Antwort erhalten."
+            return "Browser-Aktion hat keine Antwort erhalten.", {}
         self._forget(request.id)
         result = request.result or {}
         if not result.get("ok"):
             detail = result.get("error", "Unbekannter Browserfehler")
             panel.push("action", id=request.id, action=action, status="fehlgeschlagen", detail=detail)
-            return f"Browser-Aktion fehlgeschlagen: {detail}"
+            return f"Browser-Aktion fehlgeschlagen: {detail}", {}
         detail = result.get("message", "Ausgeführt.")
         panel.push("action", id=request.id, action=action, status="erfolgreich", detail=detail, data=result.get("data", {}))
-        return detail
+        return detail, result.get("data") or {}
 
     def youtube_search(self, query: str) -> str:
         return self.command("open_url", {"url": f"https://www.youtube.com/results?search_query={quote_plus(query)}"})

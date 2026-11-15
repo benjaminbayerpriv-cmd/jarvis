@@ -25,8 +25,11 @@ _EMOJI_RE = re.compile(
 CASES = [
     ("Wie ist das Wetter in Hamburg?", "get_weather"),
     ("Wie ist das Wetter gerade in Berlin?", "get_weather"),
-    ("Wie spät ist es?", "get_time"),
-    ("Welcher Wochentag ist heute?", "get_time"),
+    # Every user message now starts with "[Aktuell: <date>, <time>]", so the
+    # model may answer straight from that line -- get_time is optional (None
+    # inside a tuple means "no tool call is fine too").
+    ("Wie spät ist es?", ("get_time", None)),
+    ("Welcher Wochentag ist heute?", ("get_time", None)),
     ("Notiere: Auto waschen", "add_note"),
     ("Merk dir: Zahnarzttermin verschieben", "add_note"),
     ("Öffne github.com", "open_url"),
@@ -58,11 +61,14 @@ CASES = [
     # into (the packaged app is now just a floating orb) — a long
     # explanation has nowhere to go but speech, so no tool call is expected.
     ("Erklär mir ausführlich wie Docker funktioniert", None),
-    # Must ask where to build before doing anything.
-    ("Bau mir einen Taschenrechner", None),
+    # Coding requests go straight to the coding agent, without asking where
+    # to build (the system prompt demands exactly that).
+    ("Bau mir einen Taschenrechner", "opencode"),
     # Pure knowledge — no tool should fire.
     ("Was ist die Hauptstadt von Frankreich?", None),
-    ("Was gibt 12 mal 7?", None),
+    # Arithmetic always goes through calculate (see system prompt) -- small
+    # sums in the head are tolerated.
+    ("Was gibt 12 mal 7?", ("calculate", None)),
 ]
 
 STUBS = {
@@ -75,6 +81,8 @@ STUBS = {
     "web_search": "Hamburg: rund 1,9 Millionen Einwohner (de.wikipedia.org)",
     "run_shell": "16 GB",
     "build_project": "Baue das Projekt.",
+    "opencode": "Auftrag an den Coding-Agenten weitergegeben.",
+    "calculate": "12 * 7 = 84",
     "list_folder": "Inhalt von 'Dokumente': rechnung.pdf, urlaub/",
 }
 
@@ -112,7 +120,7 @@ def run_pass(results):
                 ok = True
             elif expected:
                 accepted = expected if isinstance(expected, tuple) else (expected,)
-                ok = any(tool in calls for tool in accepted)
+                ok = any(tool in calls for tool in accepted if tool) or (None in accepted and not calls)
             else:
                 ok = not calls
 

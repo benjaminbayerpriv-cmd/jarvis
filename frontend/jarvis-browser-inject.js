@@ -8,7 +8,7 @@
 // liefern, ein String ist eindeutig).
 (() => {
   'use strict';
-  if (window.__jb && window.__jb.v === 3) return;
+  if (window.__jb && window.__jb.v === 5) return;
 
   const MAX_ITEMS = 50;
   const MAX_NODES = 30000;
@@ -272,11 +272,32 @@
 
   function read(maxChars) {
     const root = document.querySelector('article') || document.querySelector('main') || document.querySelector('[role=main]') || document.body;
-    let text = (root && (root.innerText || root.textContent)) || '';
+    // Nur innerText: textContent enthält auch den Quelltext von <script>- und
+    // <style>-Blöcken — auf einer reinen Canvas-Seite bekam das Modell sonst
+    // den JavaScript-Code als "Seitentext" vorgesetzt.
+    let text = (root && root.innerText) || '';
+    const visuals = document.querySelectorAll('canvas, svg, img, video, iframe').length;
     text = text.replace(/\r/g, '').replace(/[ \t]+/g, ' ').replace(/\n[ \t]+/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
     const limit = Math.max(500, Math.min(Number(maxChars) || 5000, 12000));
-    return JSON.stringify({ ok: true, title: clean(document.title, 120), url: location.href, length: text.length, text: text.slice(0, limit), truncated: text.length > limit });
+    return JSON.stringify({ ok: true, title: clean(document.title, 120), url: location.href, length: text.length, text: text.slice(0, limit), truncated: text.length > limit, visuals });
   }
 
-  window.__jb = { v: 3, look, click, type, select, scroll, read };
+  // Alle Links der Seite mit Ziel — für browser_research, das daraus die
+  // Suchtreffer liest. (look() nennt bewusst keine Adressen: zu viele Zeichen.)
+  function links() {
+    const out = [];
+    const seen = new Set();
+    for (const a of document.querySelectorAll('a[href]')) {
+      const href = a.href;
+      if (!/^https?:/i.test(href) || seen.has(href)) continue;
+      const text = clean(a.innerText || a.textContent, 140);
+      if (text.length < 8) continue;
+      seen.add(href);
+      out.push({ text, href });
+      if (out.length >= 200) break;
+    }
+    return JSON.stringify({ ok: true, title: clean(document.title, 120), url: location.href, links: out });
+  }
+
+  window.__jb = { v: 5, look, click, type, select, scroll, read, links };
 })();

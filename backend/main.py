@@ -546,7 +546,7 @@ def chat(req: ChatRequest):
         # English error ("input must not be an empty string").
         return ChatResponse(reply="Ich habe nichts verstanden — sag oder schreib es bitte nochmal.")
     try:
-        reply = llm_client.get_reply(req.message, req.history, req.mode)
+        reply = _strip_emojis(llm_client.get_reply(req.message, req.history, req.mode))
     except (llm_client.LmStudioError, mcp_server.ToolServerError) as exc:
         reply = str(exc)
     except (requests.RequestException, llm_client.ModelError):
