@@ -388,6 +388,7 @@
     browser_open: 'Öffnet eine Seite im Jarvis-Browser …', browser_look: 'Schaut sich die Seite an …', browser_click: 'Klickt auf der Seite …',
     browser_type: 'Tippt auf der Seite …', browser_select: 'Wählt eine Option …', browser_scroll: 'Scrollt die Seite …',
     browser_read: 'Liest die Seite …', browser_back: 'Geht eine Seite zurück …',
+    browser_research: 'Recherchiert im Internet …', browser_screenshot: 'Sieht sich ein Bild der Seite an …',
     open_url: 'Öffnet eine Webseite …', open_app: 'Öffnet ein Programm …',
     open_folder: 'Öffnet einen Ordner …', list_folder: 'Schaut in einen Ordner …',
     open_file: 'Öffnet eine Datei …', write_file: 'Schreibt eine Datei …',
@@ -1449,10 +1450,234 @@
 
     injectSkinCss();
     wireUi();
+    initBrowserPane();
     setMode('chat');
     refreshModelHealth();
     setInterval(refreshModelHealth, 20000);
     initWarmLock();
+  }
+
+  // ------------------------------------------- Jarvis-Browser (Seitenleiste)
+  // Button oben rechts schiebt den Jarvis-Browser von rechts herein. Die
+  // Kopfzeile (Tab, Adresse, Zurück/Vor) ist HTML; die Seite selbst ist die
+  // echte WebView2-Ansicht, die der Launcher genau über .js-bp-view legt
+  // (launcher/browser_window.py, PaneApi). Gibt es den Launcher nicht (Jarvis
+  // im normalen Browser-Tab), bleibt der Button unsichtbar.
+  const BP_ICONS = {
+    panel: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M14 4v16"/></svg>',
+    globe: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.6 3.8 5.6 3.8 9s-1.3 6.4-3.8 9c-2.5-2.6-3.8-5.6-3.8-9S9.5 5.6 12 3z"/></svg>',
+    reload: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></svg>',
+    external: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 4h6v6"/><path d="M20 4l-9 9"/><path d="M18 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4"/></svg>',
+  };
+
+  function initBrowserPane() {
+    if (!uiEl || !chatRootEl || $('.js-bpane', uiEl)) return;
+    const btnCss = `background:none;border:none;color:${C.textSoft};cursor:pointer;display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:7px;flex:0 0 auto;padding:0;`;
+
+    const style = document.createElement('style');
+    style.textContent = `
+      #jsApp { --jb-pane-w: 0px; }
+      .js-bp-toggle { position:absolute; top:10px; right:12px; z-index:6; display:none !important; }
+      .js-bp-toggle.is-ready { display:inline-flex !important; }
+      .js-bp-toggle svg, .js-bpane button svg { width:17px; height:17px; display:block; }
+      .js-bp-toggle:hover, .js-bpane button:hover:not(:disabled) { background:${C.bgHover} !important; color:${C.text} !important; }
+      .js-bp-toggle.is-active { color:${C.text} !important; background:${C.bgHover} !important; }
+      .js-bpane button:disabled { opacity:.35; cursor:default !important; }
+      .js-bpane { flex:0 0 auto; width:0; height:100%; overflow:hidden; position:relative; background:${C.bg};
+        transition:width .34s cubic-bezier(.32,.72,0,1); }
+      .js-bpane.is-open { border-left:1px solid ${C.border}; }
+      .js-bpane.no-anim, #jsApp.js-bp-noanim .js-composer { transition:none !important; }
+      #jsApp .js-composer { right:var(--jb-pane-w) !important; transition:top .25s ease, bottom .25s ease, transform .25s ease, right .34s cubic-bezier(.32,.72,0,1); }
+      .js-bp-url { flex:1; min-width:0; height:30px; border-radius:8px; border:1px solid transparent; background:${C.bgSoft};
+        color:${C.text}; font:13px ${C.font}; padding:0 10px; outline:none; }
+      .js-bp-url:focus { border-color:${C.borderStrong}; }
+      .js-bp-load { position:absolute; left:0; bottom:-1px; height:2px; width:0; background:${C.accent}; opacity:0; }
+      .js-bpane.is-loading .js-bp-load { opacity:1; animation:jsBpLoad 1.4s ease-in-out infinite; }
+      @keyframes jsBpLoad { 0% { left:0; width:0; } 50% { left:20%; width:55%; } 100% { left:100%; width:0; } }
+      @media (prefers-reduced-motion: reduce) { .js-bpane, #jsApp .js-composer { transition:none !important; } }
+    `;
+    document.head.appendChild(style);
+
+    const toggle = document.createElement('button');
+    toggle.className = 'js-bp-toggle';
+    toggle.title = 'Jarvis-Browser';
+    toggle.style.cssText = btnCss;
+    toggle.innerHTML = BP_ICONS.panel;
+    chatRootEl.appendChild(toggle);
+    if (noticeStripEl) noticeStripEl.style.paddingRight = '52px';
+
+    const pane = document.createElement('div');
+    pane.className = 'js-bpane';
+    pane.innerHTML = `
+      <div class="js-bp-inner" style="position:absolute;top:0;left:0;bottom:0;display:flex;flex-direction:column;">
+        <div style="flex:0 0 auto;display:flex;align-items:center;gap:6px;height:44px;padding:0 8px 0 12px;">
+          <div class="js-bp-tab" style="display:flex;align-items:center;gap:8px;min-width:0;max-width:260px;height:30px;padding:0 10px;border-radius:8px;background:${C.bgSoft};color:${C.text};font-size:13px;">
+            <span style="width:15px;height:15px;color:${C.textSoft};flex:0 0 auto;display:inline-flex;">${BP_ICONS.globe}</span>
+            <span class="js-bp-title" style="overflow:hidden;white-space:nowrap;text-overflow:ellipsis;">Neuer Tab</span>
+          </div>
+          <span style="flex:1;"></span>
+          <button class="js-bp-external" title="Im Standardbrowser öffnen" style="${btnCss}">${BP_ICONS.external}</button>
+          <button class="js-bp-close" title="Browser einklappen" style="${btnCss}">${ICONS.close}</button>
+        </div>
+        <div style="flex:0 0 auto;position:relative;display:flex;align-items:center;gap:2px;height:42px;padding:0 10px 6px;border-bottom:1px solid ${C.border};">
+          <button class="js-bp-back" title="Zurück" disabled style="${btnCss}">${ICONS.arrowLeft}</button>
+          <button class="js-bp-forward" title="Vorwärts" disabled style="${btnCss}">${ICONS.arrowRight}</button>
+          <button class="js-bp-reload" title="Neu laden" style="${btnCss}">${BP_ICONS.reload}</button>
+          <input class="js-bp-url" type="text" spellcheck="false" autocomplete="off" placeholder="URL oder Suchbegriff eingeben" style="margin-left:6px;">
+          <div class="js-bp-load"></div>
+        </div>
+        <div class="js-bp-view" style="flex:1 1 auto;position:relative;min-height:0;">
+          <div class="js-bp-empty" style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;padding:24px;text-align:center;">
+            <span style="width:26px;height:26px;color:${C.textSoft};display:inline-flex;">${BP_ICONS.globe}</span>
+            <div style="font-size:14px;font-weight:500;color:${C.text};">Mit Jarvis browsen</div>
+            <div style="font-size:12.5px;color:${C.textDim};max-width:280px;line-height:1.5;">Gib eine URL ein oder bitte Jarvis, eine Website zu öffnen. Jarvis kann lesen, klicken und tippen.</div>
+          </div>
+        </div>
+      </div>`;
+    uiEl.appendChild(pane);
+
+    const inner = $('.js-bp-inner', pane);
+    const view = $('.js-bp-view', pane);
+    const urlInput = $('.js-bp-url', pane);
+    const titleEl = $('.js-bp-title', pane);
+    const backBtn = $('.js-bp-back', pane);
+    const fwdBtn = $('.js-bp-forward', pane);
+    const emptyEl = $('.js-bp-empty', pane);
+    let api = null;
+    let isOpen = false;
+    let settled = false; // Animation fertig: erst dann liegt die echte Ansicht darüber
+    let pollTimer = null;
+    let settleTimer = null;
+    let lastUrl = '';
+
+    const paneWidth = () => {
+      const avail = uiEl.clientWidth - ($('.js-sidebar', uiEl)?.offsetWidth || 0);
+      return Math.round(Math.max(360, Math.min(avail * 0.5, avail - 380)));
+    };
+
+    // Liegt gerade ein Dialog über allem, muss die echte Ansicht weg — sie
+    // läge sonst (als natives Fenster-Element) über dem Dialog.
+    // Geprüft wird alles, was direkt an <body> hängt und über der Leiste liegt
+    // (Einstellungen, HUD, Kamera-Fenster, Sperrbildschirm …) — nicht eine
+    // feste Liste, die bei jedem neuen Dialog vergessen würde.
+    const overlayOpen = () => {
+      const v = view.getBoundingClientRect();
+      for (const el of document.body.children) {
+        if (el === uiEl || el.id === 'jarvisOrb' || el.id === 'jarvisOrbHit' || el.offsetWidth === 0) continue;
+        const cs = getComputedStyle(el);
+        if (cs.position !== 'fixed' || cs.display === 'none' || cs.visibility === 'hidden' || cs.opacity === '0') continue;
+        const r = el.getBoundingClientRect();
+        if (r.right > v.left && r.left < v.right && r.bottom > v.top && r.top < v.bottom) return true;
+      }
+      return false;
+    };
+
+    const applyState = (s) => {
+      if (!s) return;
+      const has = !!(s.open && s.url);
+      emptyEl.style.display = has ? 'none' : 'flex';
+      titleEl.textContent = has ? (s.title || s.url) : 'Neuer Tab';
+      backBtn.disabled = !s.back;
+      fwdBtn.disabled = !s.forward;
+      pane.classList.toggle('is-loading', !!s.loading);
+      if (s.url !== lastUrl && document.activeElement !== urlInput) urlInput.value = s.url || '';
+      lastUrl = s.url || '';
+    };
+
+    let boundsFrame = 0;
+    const sendBounds = () => {
+      if (!api || boundsFrame) return;
+      boundsFrame = requestAnimationFrame(() => {
+        boundsFrame = 0;
+        const r = view.getBoundingClientRect();
+        const dpr = window.devicePixelRatio || 1;
+        const visible = isOpen && settled && !overlayOpen();
+        Promise.resolve(api.pane_bounds(Math.round(r.left * dpr), Math.round(r.top * dpr), Math.round(r.width * dpr), Math.round(r.height * dpr), visible))
+          .then(applyState).catch(() => {});
+      });
+    };
+
+    const poll = () => {
+      if (!api || !isOpen) return;
+      sendBounds(); // liefert den Zustand mit und fängt auf-/zugehende Dialoge ab
+    };
+
+    const layout = (animate) => {
+      const w = isOpen ? paneWidth() : 0;
+      inner.style.width = (isOpen ? w : Math.max(pane.offsetWidth, paneWidth())) + 'px';
+      pane.classList.toggle('no-anim', !animate);
+      uiEl.classList.toggle('js-bp-noanim', !animate);
+      pane.style.width = w + 'px';
+      uiEl.style.setProperty('--jb-pane-w', w + 'px');
+      // transitionend bleibt aus, wenn Animationen abgeschaltet sind
+      // ("Bewegung reduzieren") oder sich die Breite nicht ändert: Dann
+      // erschien die Webseite nie. Der Timer schließt den Wechsel sicher ab.
+      clearTimeout(settleTimer);
+      if (animate) settleTimer = setTimeout(() => settle(), 450);
+    };
+
+    function open() {
+      if (isOpen) return;
+      isOpen = true;
+      settled = false;
+      pane.classList.add('is-open');
+      toggle.classList.add('is-active');
+      layout(true);
+      clearInterval(pollTimer);
+      pollTimer = setInterval(poll, 700);
+      poll();
+    }
+
+    function close() {
+      if (!isOpen) return;
+      isOpen = false;
+      settled = false;
+      sendBounds(); // echte Ansicht sofort weg, dann einklappen
+      toggle.classList.remove('is-active');
+      layout(true);
+      clearInterval(pollTimer);
+    }
+
+    const settle = () => {
+      clearTimeout(settleTimer);
+      if (isOpen) { settled = true; sendBounds(); } else pane.classList.remove('is-open');
+    };
+    pane.addEventListener('transitionend', (e) => {
+      if (e.target === pane && e.propertyName === 'width') settle();
+    });
+    window.addEventListener('resize', () => { if (isOpen) { layout(false); sendBounds(); } });
+    new ResizeObserver(() => { if (isOpen && settled) sendBounds(); }).observe(view);
+
+    const call = (fn) => { if (api) Promise.resolve(fn()).then(applyState).catch(() => {}); };
+    toggle.addEventListener('click', () => (isOpen ? close() : open()));
+    $('.js-bp-close', pane).addEventListener('click', close);
+    $('.js-bp-external', pane).addEventListener('click', () => api && api.pane_external());
+    backBtn.addEventListener('click', () => call(() => api.pane_history('back')));
+    fwdBtn.addEventListener('click', () => call(() => api.pane_history('forward')));
+    $('.js-bp-reload', pane).addEventListener('click', () => call(() => api.pane_history('reload')));
+    urlInput.addEventListener('focus', () => urlInput.select());
+    urlInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') { urlInput.value = lastUrl; urlInput.blur(); return; }
+      if (e.key !== 'Enter' || !api || !urlInput.value.trim()) return;
+      e.preventDefault();
+      pane.classList.add('is-loading');
+      const text = urlInput.value;
+      urlInput.blur();
+      Promise.resolve(api.pane_navigate(text)).then((s) => { applyState(s); sendBounds(); })
+        .catch(() => pane.classList.remove('is-loading'));
+    });
+
+    // Der Launcher ruft das auf, wenn Jarvis selbst eine Seite öffnet.
+    window.jarvisBrowserPane = { open, close, toggle: () => (isOpen ? close() : open()) };
+
+    const connect = () => {
+      const a = window.pywebview && window.pywebview.api;
+      if (!a || typeof a.pane_bounds !== 'function') return false;
+      api = a;
+      toggle.classList.add('is-ready');
+      return true;
+    };
+    if (!connect()) window.addEventListener('pywebviewready', connect);
   }
 
   // CSS für :root und :root[data-jarvis-theme="…"] aus JARVIS_THEMES erzeugen,

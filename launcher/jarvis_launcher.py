@@ -271,6 +271,22 @@ def main() -> None:
 
         _allow_microphone_macos()
 
+        # Jarvis' eigener Browser (Seitenleiste im Hauptfenster, wird erst beim
+        # ersten Befehl vom Backend bzw. beim ersten Aufruf geöffnet). Scheitert
+        # sein Start, läuft Jarvis ganz normal weiter — er ist nur ein Zusatz.
+        jarvis_browser = None
+        try:
+            from browser_window import JarvisBrowserWindow
+
+            state = _window_state_file()
+            jarvis_browser = JarvisBrowserWindow(
+                webview, URL.replace("http://", "ws://") + "/jarvis-browser/ws", root_dir,
+                state.with_name("browser_window.json") if state else None,
+            )
+        except Exception as exc:  # noqa: BLE001
+            server_log.write(f"[launcher] Jarvis-Browser nicht gestartet: {exc}\n")
+            server_log.flush()
+
         width, height = _load_window_size()
         window_size = [width, height]
         window = webview.create_window(
@@ -279,6 +295,8 @@ def main() -> None:
             width=width,
             height=height,
             min_size=(640, 480),
+            # window.pywebview.api: Steuerung der Browser-Seitenleiste.
+            js_api=jarvis_browser.api if jarvis_browser else None,
         )
 
         save_timer: list[threading.Timer] = []
@@ -298,18 +316,10 @@ def main() -> None:
 
         window.events.resized += _on_resized
 
-        # Jarvis' eigener Browser (zweites Fenster, wird erst beim ersten
-        # Befehl vom Backend geöffnet). Scheitert sein Start, läuft Jarvis
-        # ganz normal weiter — er ist nur ein Zusatz.
-        jarvis_browser = None
         try:
-            from browser_window import JarvisBrowserWindow
-
-            state = _window_state_file()
-            jarvis_browser = JarvisBrowserWindow(
-                webview, URL.replace("http://", "ws://") + "/jarvis-browser/ws", root_dir,
-                state.with_name("browser_window.json") if state else None,
-            )
+            if jarvis_browser is None:
+                raise RuntimeError("nicht verfügbar")
+            jarvis_browser.main_window = window
             jarvis_browser.start()
             # Hauptfenster zu = alles zu, auch ein noch offenes Browser-Fenster.
             window.events.closed += jarvis_browser.shutdown

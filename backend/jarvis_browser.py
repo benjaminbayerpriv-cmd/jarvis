@@ -119,7 +119,7 @@ class JarvisBrowser:
         result = request.result or {}
         if not result.get("ok"):
             return {"ok": False, "message": str(result.get("error") or "Unbekannter Fehler im Jarvis-Browser."), "data": {}}
-        data = result.get("data") if isinstance(result.get("data"), dict) else {}
+        data = clean_data(result.get("data"))
         return {"ok": True, "message": str(result.get("message") or ""), "data": data}
 
     def _forget(self, request_id: str) -> None:
@@ -143,7 +143,10 @@ class JarvisBrowser:
         els = data.get("elements") or []
         lines = [PAGE_DATA_NOTE, f'Seite: "{_clip(data.get("title", ""), 90)}" ({_clip(data.get("url", ""), 120)})']
         if not els:
-            lines.append("Keine bedienbaren Elemente sichtbar. Mit browser_scroll weiterblättern oder browser_read den Text lesen.")
+            lines.append(
+                "Keine bedienbaren Elemente sichtbar. browser_read liest den Text; ist die Seite eine Grafik "
+                "(Karte, Diagramm, Spiel), zeigt browser_screenshot, was darauf zu sehen ist."
+            )
         elif previous and previous.get("url") == data.get("url") and previous.get("elements"):
             old = {_key(e) for e in previous["elements"]}
             new = {_key(e) for e in els}
@@ -154,7 +157,7 @@ class JarvisBrowser:
                 lines.append(f"Seite weitgehend unverändert ({same} Elemente gleich). Neu nummeriert, aktuelle Nummern:")
                 lines.extend(_line(e) for e in els)
                 if gone:
-                    lines.append("Nicht mehr sichtbar: " + "; ".join(f'{e["role"]} "{_clip(e["name"], 30)}"' for e in gone[:8]))
+                    lines.append("Nicht mehr sichtbar: " + "; ".join(f'{e.get("role") or "Element"} "{_clip(e.get("name") or "", 30)}"' for e in gone[:8]))
                 if added:
                     lines.append("Neu: " + ", ".join(f'[{e["n"]}]' for e in added[:12]))
                 return self._tail(lines, data)
@@ -168,6 +171,17 @@ class JarvisBrowser:
         elif data.get("below"):
             lines.append("(unten gibt es mehr Seite: browser_scroll unten)")
         return "\n".join(lines)
+
+
+def clean_data(data) -> dict:
+    """Antwort des Browser-Fensters auf das zurechtstutzen, worauf sich die
+    Tools verlassen: ein dict, darin nur wohlgeformte Elemente."""
+    if not isinstance(data, dict):
+        return {}
+    if "elements" in data:
+        raw = data["elements"] if isinstance(data["elements"], list) else []
+        data["elements"] = [e for e in raw if isinstance(e, dict) and isinstance(e.get("n"), int)]
+    return data
 
 
 def _clip(text: str, n: int) -> str:
@@ -194,7 +208,7 @@ def _line(el: dict) -> str:
     if el.get("options"):
         extra.append("Optionen: " + ", ".join(_clip(o, 20) for o in el["options"][:8]))
     tail = f" ({'; '.join(extra)})" if extra else ""
-    return f'[{el["n"]}] {el["role"]} "{_clip(el["name"], 70)}"{tail}'
+    return f'[{el["n"]}] {el.get("role") or "Element"} "{_clip(el.get("name") or "", 70)}"{tail}'
 
 
 agent = JarvisBrowser()

@@ -15,6 +15,9 @@ function isJarvisTab(tab) {
 async function execute(command) {
   const { action, payload = {} } = command;
   if (action === "open_url") {
+    // Only real web pages: chrome.tabs would otherwise happily open
+    // file://, chrome:// or javascript: addresses sent over the socket.
+    if (!/^https?:\/\//i.test(String(payload.url || ""))) throw new Error("Nur http- und https-Adressen werden geöffnet.");
     // Reuse a blank new-tab page if one exists — never a real page, and
     // never the Jarvis tab (which would navigate Jarvis's own UI away).
     const tabs = await chrome.tabs.query({});
@@ -25,6 +28,9 @@ async function execute(command) {
     } else {
       tab = await chrome.tabs.create({ url: payload.url });
     }
+    // A new tab alone stays behind whatever window is in front (usually the
+    // Jarvis app itself) — bring Chrome forward so the page is actually seen.
+    try { await chrome.windows.update(tab.windowId, { focused: true }); } catch (error) { /* window gone */ }
     return { message: `Chrome-Tab geöffnet: ${payload.url}`, data: { tabId: tab.id, url: payload.url } };
   }
   if (action === "list_tabs") {
