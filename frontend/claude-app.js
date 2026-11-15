@@ -1467,6 +1467,7 @@
     panel: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M14 4v16"/></svg>',
     globe: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.6 3.8 5.6 3.8 9s-1.3 6.4-3.8 9c-2.5-2.6-3.8-5.6-3.8-9S9.5 5.6 12 3z"/></svg>',
     reload: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></svg>',
+    plus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>',
     external: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 4h6v6"/><path d="M20 4l-9 9"/><path d="M18 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4"/></svg>',
   };
 
@@ -1488,6 +1489,20 @@
       .js-bpane.is-open { border-left:1px solid ${C.border}; }
       .js-bpane.no-anim, #jsApp.js-bp-noanim .js-composer { transition:none !important; }
       #jsApp .js-composer { right:var(--jb-pane-w) !important; transition:top .25s ease, bottom .25s ease, transform .25s ease, right .34s cubic-bezier(.32,.72,0,1); }
+      .js-bp-tab { display:flex; align-items:center; gap:7px; flex:0 1 168px; min-width:38px; max-width:168px; height:30px; padding:0 6px 0 10px;
+        border-radius:8px; color:${C.textSoft}; font-size:13px; cursor:pointer; }
+      .js-bp-tab:hover { background:${C.bgHover}; }
+      .js-bp-tab.is-active { background:${C.bgSoft}; color:${C.text}; }
+      .js-bp-tab .js-bp-tab-ico { width:14px; height:14px; flex:0 0 auto; display:inline-flex; }
+      .js-bp-tab .js-bp-tab-ico svg { width:14px; height:14px; }
+      .js-bp-tab .js-bp-tab-title { flex:1; min-width:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+      .js-bp-tab .js-bp-tab-x { width:18px; height:18px; flex:0 0 auto; display:inline-flex; align-items:center; justify-content:center;
+        border-radius:5px; opacity:0; }
+      .js-bp-tab:hover .js-bp-tab-x, .js-bp-tab.is-active .js-bp-tab-x { opacity:.8; }
+      .js-bp-tab .js-bp-tab-x:hover { background:${C.bgHover}; opacity:1; }
+      .js-bp-tab .js-bp-tab-x svg { width:11px; height:11px; }
+      .js-bp-tab.is-loading .js-bp-tab-ico { animation:jsBpSpin 1s linear infinite; }
+      @keyframes jsBpSpin { to { transform:rotate(360deg); } }
       .js-bp-url { flex:1; min-width:0; height:30px; border-radius:8px; border:1px solid transparent; background:${C.bgSoft};
         color:${C.text}; font:13px ${C.font}; padding:0 10px; outline:none; }
       .js-bp-url:focus { border-color:${C.borderStrong}; }
@@ -1511,10 +1526,8 @@
     pane.innerHTML = `
       <div class="js-bp-inner" style="position:absolute;top:0;left:0;bottom:0;display:flex;flex-direction:column;">
         <div style="flex:0 0 auto;display:flex;align-items:center;gap:6px;height:44px;padding:0 8px 0 12px;">
-          <div class="js-bp-tab" style="display:flex;align-items:center;gap:8px;min-width:0;max-width:260px;height:30px;padding:0 10px;border-radius:8px;background:${C.bgSoft};color:${C.text};font-size:13px;">
-            <span style="width:15px;height:15px;color:${C.textSoft};flex:0 0 auto;display:inline-flex;">${BP_ICONS.globe}</span>
-            <span class="js-bp-title" style="overflow:hidden;white-space:nowrap;text-overflow:ellipsis;">Neuer Tab</span>
-          </div>
+          <div class="js-bp-tabs" style="display:flex;align-items:center;gap:4px;min-width:0;flex:0 1 auto;"></div>
+          <button class="js-bp-newtab" title="Neuer Tab" style="${btnCss}">${BP_ICONS.plus}</button>
           <span style="flex:1;"></span>
           <button class="js-bp-external" title="Im Standardbrowser öffnen" style="${btnCss}">${BP_ICONS.external}</button>
           <button class="js-bp-close" title="Browser einklappen" style="${btnCss}">${ICONS.close}</button>
@@ -1539,7 +1552,8 @@
     const inner = $('.js-bp-inner', pane);
     const view = $('.js-bp-view', pane);
     const urlInput = $('.js-bp-url', pane);
-    const titleEl = $('.js-bp-title', pane);
+    const tabsEl = $('.js-bp-tabs', pane);
+    let tabsSig = '';
     const backBtn = $('.js-bp-back', pane);
     const fwdBtn = $('.js-bp-forward', pane);
     const emptyEl = $('.js-bp-empty', pane);
@@ -1572,11 +1586,41 @@
       return false;
     };
 
+    // Tab-Leiste: nur neu zeichnen, wenn sich etwas geändert hat. Titel kommen
+    // von fremden Webseiten und gehen deshalb nur über textContent hinein.
+    const renderTabs = (s) => {
+      const list = Array.isArray(s.tabs) ? s.tabs : [];
+      const sig = JSON.stringify([s.active, list.map((t) => [t.id, t.title, t.loading, t.blank])]);
+      if (sig === tabsSig) return;
+      tabsSig = sig;
+      tabsEl.textContent = '';
+      for (const t of list) {
+        const el = document.createElement('div');
+        el.className = 'js-bp-tab' + (t.id === s.active ? ' is-active' : '') + (t.loading ? ' is-loading' : '');
+        el.dataset.id = String(t.id);
+        const name = t.blank ? 'Neuer Tab' : (t.title || t.url || 'Neuer Tab');
+        el.title = name;
+        const ico = document.createElement('span');
+        ico.className = 'js-bp-tab-ico';
+        ico.innerHTML = t.loading ? BP_ICONS.reload : BP_ICONS.globe;
+        const label = document.createElement('span');
+        label.className = 'js-bp-tab-title';
+        label.textContent = name;
+        const x = document.createElement('span');
+        x.className = 'js-bp-tab-x';
+        x.title = 'Tab schließen';
+        x.dataset.close = String(t.id);
+        x.innerHTML = ICONS.close;
+        el.append(ico, label, x);
+        tabsEl.appendChild(el);
+      }
+    };
+
     const applyState = (s) => {
       if (!s) return;
       const has = !!(s.open && s.url);
       emptyEl.style.display = has ? 'none' : 'flex';
-      titleEl.textContent = has ? (s.title || s.url) : 'Neuer Tab';
+      renderTabs(s);
       backBtn.disabled = !s.back;
       fwdBtn.disabled = !s.forward;
       pane.classList.toggle('is-loading', !!s.loading);
@@ -1651,6 +1695,35 @@
     const call = (fn) => { if (api) Promise.resolve(fn()).then(applyState).catch(() => {}); };
     toggle.addEventListener('click', () => (isOpen ? close() : open()));
     $('.js-bp-close', pane).addEventListener('click', close);
+    tabsEl.addEventListener('click', (e) => {
+      const closeEl = e.target.closest('[data-close]');
+      const tabEl = e.target.closest('.js-bp-tab');
+      if (closeEl) call(() => api.pane_close_tab(Number(closeEl.dataset.close)));
+      else if (tabEl) call(() => api.pane_select_tab(Number(tabEl.dataset.id)));
+    });
+    tabsEl.addEventListener('auxclick', (e) => { // Mittelklick schließt
+      const tabEl = e.button === 1 && e.target.closest('.js-bp-tab');
+      if (tabEl) { e.preventDefault(); call(() => api.pane_close_tab(Number(tabEl.dataset.id))); }
+    });
+    $('.js-bp-newtab', pane).addEventListener('click', () => {
+      if (!api) return;
+      Promise.resolve(api.pane_new_tab()).then((s) => {
+        applyState(s);
+        urlInput.value = '';
+        lastUrl = '';
+        urlInput.focus();
+      }).catch(() => {});
+    });
+    // Strg+T: neuer Tab, Strg+W: Tab schließen — nur, solange die Leiste offen ist.
+    document.addEventListener('keydown', (e) => {
+      if (!isOpen || !api || !(e.ctrlKey || e.metaKey) || e.shiftKey || e.altKey) return;
+      if (e.key === 't') { e.preventDefault(); $('.js-bp-newtab', pane).click(); }
+      else if (e.key === 'w' && pane.contains(document.activeElement)) {
+        e.preventDefault();
+        const active = tabsEl.querySelector('.js-bp-tab.is-active');
+        if (active) call(() => api.pane_close_tab(Number(active.dataset.id)));
+      }
+    });
     $('.js-bp-external', pane).addEventListener('click', () => api && api.pane_external());
     backBtn.addEventListener('click', () => call(() => api.pane_history('back')));
     fwdBtn.addEventListener('click', () => call(() => api.pane_history('forward')));
