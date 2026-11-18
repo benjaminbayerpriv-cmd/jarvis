@@ -718,3 +718,163 @@ body[data-view="speech"] .jarvis-column { padding-bottom: 140px; }
     transition-duration: .001ms !important;
   }
 }
+
+
+/* =====================================================================
+   LIQUID GLASS — Oberflächen im Stil von macOS NSGlassEffectView.
+   Werte gemessen an einer nativen NSGlassEffectView (macOS 27, dunkel):
+     Regular: Gauß-Unschärfe σ ≈ 8,4 px, Entsättigung ~0,67, stark abgedunkelt,
+              heller 1-px-Rand oben/unten, dunkle 1-px-Linie an den Seiten,
+              kleiner Schatten nach unten.
+     Clear:   σ ≈ 11,4 px, Schwarzwerte leicht angehoben, Farben bleiben,
+              stärkerer heller Rand, kein Schatten.
+   Rückgängig machen: diesen Block löschen oder style.css.bak-before-liquidglass
+   zurückkopieren.
+   ===================================================================== */
+
+:root {
+  --lg-blur: 8.4px;
+  --lg-clear-blur: 11.4px;
+  --lg-regular-bg: rgb(40 38 34 / .78);
+  --lg-clear-bg: rgb(255 255 255 / .10);
+  --lg-rim-regular:
+    inset 0 1px 0 rgb(255 255 255 / .16),
+    inset 0 -1px 0 rgb(255 255 255 / .12),
+    1px 0 0 rgb(0 0 0 / .55),
+    -1px 0 0 rgb(0 0 0 / .55);
+  --lg-rim-clear:
+    inset 0 1px 0 rgb(255 255 255 / .34),
+    inset 0 -1px 0 rgb(255 255 255 / .30),
+    inset 1px 0 0 rgb(0 0 0 / .22),
+    inset -1px 0 0 rgb(0 0 0 / .22);
+  --lg-shadow: 0 6px 22px rgb(0 0 0 / .30);
+}
+
+/* Ohne etwas Farbiges dahinter ist Glas unsichtbar: ruhiger Farbverlauf unter der
+   ganzen Oberfläche, in den Akzentfarben von Jarvis. */
+html, body { background: var(--ground); }
+body::before {
+  content: "";
+  position: fixed;
+  inset: -10vmax;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(38vmax 38vmax at 18% 28%, rgb(217 119 87 / .55), transparent 70%),
+    radial-gradient(34vmax 34vmax at 82% 24%, rgb(76 108 255 / .42), transparent 70%),
+    radial-gradient(40vmax 40vmax at 62% 82%, rgb(124 88 214 / .40), transparent 70%),
+    radial-gradient(30vmax 30vmax at 12% 86%, rgb(52 190 170 / .30), transparent 70%);
+  animation: lg-drift 48s ease-in-out infinite alternate;
+}
+@keyframes lg-drift {
+  from { transform: translate3d(0, 0, 0) scale(1); }
+  to   { transform: translate3d(-3vmax, 2vmax, 0) scale(1.08); }
+}
+.stage { position: relative; z-index: 1; }
+
+/* ----- Regular-Glas: Seitenleiste, Composer, Dropdown, Blöcke ----- */
+.chat-column:not(.collapsed),
+.composer,
+.model-dropdown,
+.block {
+  background: var(--lg-regular-bg);
+  -webkit-backdrop-filter: blur(var(--lg-blur)) saturate(.67);
+  backdrop-filter: blur(var(--lg-blur)) saturate(.67);
+  border: 0;
+  box-shadow: var(--lg-rim-regular), var(--lg-shadow);
+}
+
+/* Seitenleiste schwebt wie in macOS 26 statt bündig am Rand zu kleben */
+.chat-column:not(.collapsed) {
+  margin: 10px 0 10px 10px;
+  border-radius: 22px;
+}
+.chat-column.collapsed { background: none; }
+
+.composer { border-radius: 26px; }
+.composer:focus-within {
+  box-shadow:
+    var(--lg-rim-regular),
+    0 0 0 1px color-mix(in srgb, var(--sig-active) 50%, transparent),
+    var(--lg-shadow);
+}
+.model-dropdown { border-radius: 16px; }
+.block { border-radius: 16px; }
+.block-title { border-bottom-color: rgb(255 255 255 / .08); }
+
+/* ----- Rund-Buttons: kleine Glas-Pillen ----- */
+.icon-btn {
+  background: rgb(60 58 54 / .55);
+  -webkit-backdrop-filter: blur(var(--lg-blur)) saturate(.67);
+  backdrop-filter: blur(var(--lg-blur)) saturate(.67);
+  border: 0;
+  border-radius: 50%;
+  opacity: .9;
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / .16),
+    inset 0 -1px 0 rgb(255 255 255 / .12),
+    1px 0 0 rgb(0 0 0 / .45),
+    -1px 0 0 rgb(0 0 0 / .45);
+}
+.icon-btn:hover { opacity: 1; background: rgb(255 255 255 / .16); border: 0; }
+.icon-btn:active { transform: scale(1.08); transition: transform 120ms; }
+.chat-toggle-btn, .quit-btn { box-shadow: var(--lg-rim-regular), var(--lg-shadow); }
+
+/* Sprechmodus-/Senden-Button: Clear-Glas als Akzent */
+#speechSendBtn.send {
+  background: var(--lg-clear-bg);
+  -webkit-backdrop-filter: blur(var(--lg-clear-blur)) saturate(1.06);
+  backdrop-filter: blur(var(--lg-clear-blur)) saturate(1.06);
+  border: 0;
+  box-shadow: var(--lg-rim-clear);
+  color: var(--text);
+}
+
+/* ----- Chat | Code: Regular-Spur mit Clear-Schieber ----- */
+.mode-switch {
+  background: rgb(0 0 0 / .28);
+  -webkit-backdrop-filter: blur(var(--lg-blur)) saturate(.67);
+  backdrop-filter: blur(var(--lg-blur)) saturate(.67);
+  border: 0;
+  box-shadow: var(--lg-rim-regular);
+}
+.mode-opt.active {
+  background: var(--lg-clear-bg);
+  -webkit-backdrop-filter: blur(var(--lg-clear-blur)) saturate(1.06);
+  backdrop-filter: blur(var(--lg-clear-blur)) saturate(1.06);
+  box-shadow: var(--lg-rim-clear);
+  color: var(--text);
+}
+
+/* Modell-Pille erst bei Hover als Glas */
+.model-btn:hover {
+  background: rgb(255 255 255 / .10);
+  -webkit-backdrop-filter: blur(var(--lg-clear-blur)) saturate(1.06);
+  backdrop-filter: blur(var(--lg-clear-blur)) saturate(1.06);
+  border-color: transparent;
+  box-shadow: var(--lg-rim-clear);
+}
+.model-option:hover { background: rgb(255 255 255 / .10); }
+.model-option.active, .conv-item.active { background: rgb(255 255 255 / .10); }
+.conv-item:hover { background: rgb(255 255 255 / .08); }
+.conv-new-btn { border: 0; background: rgb(255 255 255 / .08); box-shadow: inset 0 1px 0 rgb(255 255 255 / .14); border-radius: 12px; }
+.conv-new-btn:hover { background: rgb(255 255 255 / .14); }
+.conv-sidebar { border-bottom-color: rgb(255 255 255 / .08); }
+.log, .conv-list, .conv-transcript { scrollbar-color: rgb(255 255 255 / .22) transparent; }
+
+/* Browser ohne backdrop-filter oder bei "Transparenz reduzieren": wieder deckend */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .chat-column:not(.collapsed), .composer, .model-dropdown, .block, .icon-btn, .mode-switch {
+    background: var(--housing);
+  }
+}
+@media (prefers-reduced-transparency: reduce) {
+  body::before { display: none; }
+  .chat-column:not(.collapsed), .composer, .model-dropdown, .block,
+  .icon-btn, .mode-switch, .mode-opt.active, #speechSendBtn.send, .model-btn:hover {
+    background: var(--housing);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) { body::before { animation: none; } }
