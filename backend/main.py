@@ -436,11 +436,18 @@ def _build_app_shell(frontend_dir: Path, static_prefix: str) -> str:
         if (frontend_dir / "camera-tracking.js").exists()
         else ""
     )
-    # Liquid-Glass-Schicht: nur wenn die Datei im jeweiligen Frontend-Ordner liegt —
+    # Liquid Glass: nur wenn die Dateien im jeweiligen Frontend-Ordner liegen —
     # /backup (frontend_backup/) hat sie nicht und bleibt die unveränderte alte UI.
     glass_css = (
         '    <link rel="stylesheet" href="{p}/liquid-glass.css?v={v}">\n'.format(p=static_prefix, v=_BUILD)
         if (frontend_dir / "liquid-glass.css").exists()
+        else ""
+    )
+    # glassEffect() nach Apples API (siehe liquid-glass.js) - nach claude-app.js,
+    # weil es die von buildUi() erzeugten Elemente verglast.
+    glass_js = (
+        '    <script src="{p}/liquid-glass.js?v={v}"></script>\n'.format(p=static_prefix, v=_BUILD)
+        if (frontend_dir / "liquid-glass.js").exists()
         else ""
     )
     assets = (
@@ -451,6 +458,7 @@ def _build_app_shell(frontend_dir: Path, static_prefix: str) -> str:
         + camera_script
         + larp_script
         + '    <script src="{p}/claude-app.js?v={v}"></script>\n'.format(p=static_prefix, v=_BUILD)
+        + glass_js
     )
     return html.replace("</body>", f"{assets}  </body>")
 
