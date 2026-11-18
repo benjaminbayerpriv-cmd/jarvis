@@ -5,9 +5,11 @@
                Skript (Brechung, Luminanz-Kennlinie, Unschärfe).
                WebKit/Mac-App: lineare Näherung derselben Messwerte.
      ::after   helle 1-px-Lichtkante.
-   Beide Schichten haben Apples "continuous" Eckenform (clip-path aus dem
-   Skript). Alles gilt nur, solange Liquid Glass eingeschaltet ist
-   (html.lg-on, Einstellungen -> Erscheinungsbild).
+   Beide Schichten haben Apples "continuous" Eckenform (corner-shape:
+   superellipse aus dem Skript; ohne Unterstützung runde Ecken). Bewusst kein
+   clip-path: der schaltet backdrop-filter in Chrome ab.
+   Alles gilt nur, solange Liquid Glass eingeschaltet ist (html.lg-on,
+   Einstellungen -> Erscheinungsbild).
    Inline-Styles aus claude-app.js werden mit !important überschrieben.
    ===================================================================== */
 
@@ -52,8 +54,8 @@ html.lg-on #jsApp .js-sidebar {
   position: absolute;
   inset: 0;
   z-index: -1;
-  border-radius: inherit;
-  clip-path: var(--lg-clip, none);
+  border-radius: var(--lg-shape-radius, inherit);
+  corner-shape: var(--lg-corner, round);
   pointer-events: none;
   -webkit-backdrop-filter: blur(var(--lg-blur-regular, 5px)) saturate(1.7) brightness(.5);
   backdrop-filter: blur(var(--lg-blur-regular, 5px)) saturate(1.7) brightness(.5);
@@ -86,8 +88,8 @@ html.lg-on #jsApp .js-sidebar {
   content: "";
   position: absolute;
   inset: 0;
-  border-radius: inherit;
-  clip-path: var(--lg-clip, none);
+  border-radius: var(--lg-shape-radius, inherit);
+  corner-shape: var(--lg-corner, round);
   pointer-events: none;
   background: var(--lg-rim, none) center / 100% 100% no-repeat;
 }
@@ -101,14 +103,42 @@ html.lg-on #jsApp .js-sidebar {
   background-color: rgb(255 255 255 / var(--lg-lift, .147)) !important;
 }
 /* Startseite | Code wie ein SwiftUI-Schalter: In Ruhe ein heller Knopf,
-   gedrückt eine klare Glaslinse (~1,5 x breiter, ~1,75 x höher, gemessen),
-   die über den Beschriftungen liegt und sie bricht. */
-#jsApp .js-mode-indicator.lg::before { background-color: rgb(255 255 255 / .16) !important; }
-#jsApp .js-mode-indicator.lg.lg-lifted {
-  transform: scale(1.32, 1.6);
-  z-index: 2;
+   gedrückt eine klare Glaslinse über den Beschriftungen (Größe und Bewegung
+   rechnet liquid-glass.js als Feder). Deckend <-> Glas in ~70 ms wie gemessen. */
+#jsApp .js-mode-indicator.lg::before {
+  background-color: rgb(255 255 255 / .16) !important;
+  transition: background-color .07s linear;
 }
+#jsApp .js-mode-indicator.lg.lg-lifted { z-index: 2; }
 #jsApp .js-mode-indicator.lg.lg-lifted::before { background-color: rgb(255 255 255 / .02) !important; }
+
+/* Vorschau in den Einstellungen: festes Muster, auf dem man Unschärfe,
+   Brechung und Lichtkante direkt sieht. */
+.js-glass-preview {
+  position: relative;
+  height: 112px;
+  border-radius: 14px;
+  overflow: hidden;
+  isolation: isolate;
+  background:
+    repeating-linear-gradient(90deg, rgb(255 255 255 / .9) 0 10px, transparent 10px 20px),
+    linear-gradient(120deg, #d97757, #7c58d6 45%, #2a62ff 70%, #34beaa);
+}
+.js-glass-preview-label {
+  position: absolute; left: 14px; top: 10px;
+  font: 600 22px/1 var(--font-anthropic-serif, Georgia, serif);
+  color: #111; letter-spacing: .02em;
+}
+.js-glass-preview-regular {
+  position: absolute; left: 14px; right: 110px; bottom: 14px; height: 52px;
+  display: flex; align-items: center; justify-content: center;
+  color: var(--jsText, #f0efe8); font-size: 12.5px;
+}
+.js-glass-preview-clear {
+  position: absolute; right: 18px; top: 22px; width: 74px; height: 74px;
+  display: flex; align-items: center; justify-content: center;
+  color: #fff; font-size: 11.5px;
+}
 
 /* Chat-Blasen: Glas statt grauer Fläche. */
 #jsApp .js-you .js-text.lg { color: var(--jsText) !important; }
@@ -132,5 +162,5 @@ html.lg-on #jsSpeechTerm .xterm { filter: url(#lg-black-transparent); }
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .lg-interactive.lg-pressed, #jsApp .js-mode-indicator.lg.lg-lifted { transform: none; }
+  .lg-interactive.lg-pressed { transform: none; }
 }

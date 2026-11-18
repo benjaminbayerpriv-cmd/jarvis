@@ -113,10 +113,16 @@
   // 1,6-Fache des Radius - so liegt die Ecke bei 45° gleich weit innen wie ein
   // Kreisbogen mit demselben Radius, läuft aber krümmungsstetig in die Kante.
   // Kapseln und Kreise bleiben wie bei Apple echte Halbkreise.
+  // Die Form entsteht per CSS corner-shape: superellipse() (Chromium). Kein
+  // clip-path: Ein clip-path auf der Glasschicht macht sie zur "Backdrop
+  // Root" - in Chrome 157 blieb backdrop-filter dann komplett wirkungslos.
+  // Ohne corner-shape (WebKit) normale runde Ecken, Karten passend dazu.
   const CONTINUOUS_N = 3.4, CONTINUOUS_EXTENT = 1.6;
+  const CORNER_SHAPE = typeof CSS !== 'undefined' && CSS.supports && CSS.supports('corner-shape', 'superellipse(2)');
   function geometry(shape, r, w, h) {
     const half = Math.min(w, h) / 2;
     if (shape === 'capsule' || shape === 'circle' || r >= half) return { e: half, n: 2 };
+    if (!CORNER_SHAPE) return { e: r, n: 2 };
     return { e: Math.min(r * CONTINUOUS_EXTENT, half), n: CONTINUOUS_N };
   }
 
@@ -135,23 +141,9 @@
     return [g.e - qy, 0, Math.sign(cy)];
   }
 
-  // Umriss als clip-path, damit die Glasfläche genau diese Form hat.
-  function shapePath(w, h, g) {
-    const pts = [];
-    const corner = (cx, cy, sx, sy, from) => {
-      for (let i = 0; i <= 12; i++) {
-        const t = (from + i / 12 * 0.5) * Math.PI;
-        const c = Math.cos(t), sn = Math.sin(t);
-        const px = Math.sign(c) * Math.pow(Math.abs(c), 2 / g.n) * g.e;
-        const py = Math.sign(sn) * Math.pow(Math.abs(sn), 2 / g.n) * g.e;
-        pts.push(`${(cx + px * sx).toFixed(2)} ${(cy + py * sy).toFixed(2)}`);
-      }
-    };
-    corner(w - g.e, g.e, 1, -1, 0);      // oben rechts
-    corner(g.e, g.e, 1, -1, 0.5);        // oben links
-    corner(g.e, h - g.e, 1, -1, 1);      // unten links
-    corner(w - g.e, h - g.e, 1, -1, 1.5); // unten rechts
-    return `path('M ${pts.join(' L ')} Z')`;
+  // corner-shape für diese Geometrie: superellipse(K) mit 2^K = Exponent.
+  function cornerCss(g) {
+    return { radius: g.e.toFixed(2) + 'px', shape: g.n === 2 ? 'round' : `superellipse(${Math.log2(g.n).toFixed(3)})` };
   }
 
   // Brechungsprofil über die Randzone: gewölbte Kante (Squircle), senkrecht
@@ -293,7 +285,9 @@
     const p = GLASS[look][state.glass.variant];
     const g = geometry(state.shape, radiusFor(el, state.shape, w, h), w, h);
     el.dataset.lgLook = look;
-    el.style.setProperty('--lg-clip', shapePath(w, h, g));
+    const corner = cornerCss(g);
+    el.style.setProperty('--lg-shape-radius', corner.radius);
+    el.style.setProperty('--lg-corner', corner.shape);
     el.style.setProperty('--lg-rim', `url(${lightRimMap(w, h, g)})`);
     if (CAN_LENS) {
       const tint = state.glass.tintColor ? luminanceOf(state.glass.tintColor) : null;
@@ -312,7 +306,7 @@
     const state = states.get(el);
     if (!state) return;
     el.classList.remove('lg', 'lg-regular', 'lg-clear', 'lg-interactive', 'lg-lens', 'lg-tinted', 'lg-pressed');
-    ['--lg-backdrop', '--lg-tint', '--lg-radius', '--lg-rim', '--lg-clip', '--lg-lift'].forEach((k) => el.style.removeProperty(k));
+    ['--lg-backdrop', '--lg-tint', '--lg-radius', '--lg-rim', '--lg-shape-radius', '--lg-corner', '--lg-lift'].forEach((k) => el.style.removeProperty(k));
     delete el.dataset.lgLook;
     if (state.addedRelative) el.style.position = '';
     if (state.origTransition != null) el.style.transition = state.origTransition;
@@ -413,6 +407,8 @@
     ['#jsSpeechCaption > div', Glass.regular, { cornerRadius: 22 }],
     ['#jsSpeechTerm', Glass.regular, { cornerRadius: 16 }],
     ['#jsApp .js-you .js-text', Glass.regular, { cornerRadius: 18 }],
+    ['#jsSettingsSheet .js-glass-preview-regular', Glass.regular, { cornerRadius: 16 }],
+    ['#jsSettingsSheet .js-glass-preview-clear', Glass.clear, 'capsule'],
   ];
 
   function applyAll() {
@@ -425,84 +421,150 @@
     }
   }
 
-  // Startseite | Code wie ein SwiftUI-Schalter (macOS 27, mit echten
-  // Mausereignissen an einem SwiftUI-Toggle beobachtet): In Ruhe ein heller
-  // Knopf. Gedrückt wird er in ~50 ms zur klaren Glaslinse, rund 1,5-mal so
-  // breit und 1,75-mal so hoch, größer als die Schiene, und bricht, was
-  // darunter liegt. Beim Ziehen folgt die Linse dem Zeiger, beim Loslassen
-  // schrumpft sie federnd zurück und rastet an der näheren Seite ein.
-  const SPRING = 'cubic-bezier(.3,1.45,.45,1)';
+  // Startseite | Code wie ein SwiftUI-Schalter. Gemessen an einem echten
+  // SwiftUI-Toggle (macOS 27, Video mit 100 Bildern/s, Bild für Bild):
+  // - Knopf drücken: in ~70 ms von deckend zu Glas, die Linse wächst in
+  //   ~150 ms ohne Überschwingen um +24 px Breite und +18 px Höhe.
+  // - Ziehen: die Linse folgt dem Zeiger 1:1, bei Tempo nur ~5 % flacher.
+  // - Loslassen: schrumpft in ~100 ms, wird wieder deckend.
+  // - Klick daneben: keine Linse, keine Dehnung - der Knopf gleitet als Feder
+  //   in ~260 ms mit kaum sichtbarem Nachschwingen.
+  // Umgesetzt als Federsimulation pro Frame (unterbrechbar, Geschwindigkeit
+  // bleibt erhalten) statt CSS-Übergängen. claude-app.js setzt weiter nur
+  // left/width; die Bewegung dazwischen läuft als transform (FLIP).
+  // Federwerte per Kurvenanpassung an die gemessenen Bilder: Gleiten trifft
+  // die Messpunkte auf ±0,02 (0,49 nach 90 ms, 1,02 nach 300 ms).
+  const MOVE = { response: 0.385, damping: 0.79 };
+  const LIFT = { up: { response: 0.245, damping: 0.84 }, down: { response: 0.2, damping: 0.9 } };
+  const LENS_GROW = { x: 24, y: 18 };
+  function springStep(pos, vel, target, response, damping, dt) {
+    const k = Math.pow(2 * Math.PI / response, 2);
+    const c = 2 * damping * Math.sqrt(k);
+    // Halbschritte für Stabilität bei langen Frames.
+    for (let i = 0; i < 2; i++) {
+      const h = dt / 2;
+      const acc = -k * (pos - target) - c * vel;
+      vel += acc * h;
+      pos += vel * h;
+    }
+    return [pos, vel];
+  }
+
   function wireSegmented(track) {
     const thumb = track.querySelector('.js-mode-indicator');
     if (!thumb || thumb.dataset.lgSegmented) return;
     thumb.dataset.lgSegmented = '1';
-    let last = parseFloat(thumb.style.left) || 0;
+    const st = { x: 0, vx: 0, lift: 0, vlift: 0, liftTarget: 0, dragging: false, raf: 0, last: 0 };
+    let lastLeft = parseFloat(thumb.style.left) || 0;
     let drag = null;
-    const springTransition = `left .5s ${SPRING}, width .5s ${SPRING}, transform .32s ${SPRING}`;
-    const pills = () => [...track.querySelectorAll('.js-pill')];
+    const WIDTH_TRANSITION = 'width .3s cubic-bezier(.25,.8,.35,1)';
+    const reduceMotion = () => matchMedia('(prefers-reduced-motion: reduce)').matches
+      || document.documentElement.classList.contains('jarvis-reduce-motion');
 
+    function render() {
+      const w = thumb.offsetWidth || 1, h = thumb.offsetHeight || 1;
+      let sx = 1 + st.lift * LENS_GROW.x / w;
+      let sy = 1 + st.lift * LENS_GROW.y / h;
+      const squash = st.lift * Math.min(0.05, Math.abs(st.vx) / 6000);
+      sx *= 1 + squash;
+      sy *= 1 - squash;
+      thumb.style.transform = `translateX(${st.x.toFixed(2)}px) scale(${sx.toFixed(4)}, ${sy.toFixed(4)})`;
+    }
+    function frame(now) {
+      const dt = Math.min(0.05, st.last ? (now - st.last) / 1000 : 1 / 60);
+      st.last = now;
+      if (!st.dragging) [st.x, st.vx] = springStep(st.x, st.vx, 0, MOVE.response, MOVE.damping, dt);
+      const lr = st.liftTarget > st.lift ? LIFT.up : LIFT.down;
+      [st.lift, st.vlift] = springStep(st.lift, st.vlift, st.liftTarget, lr.response, lr.damping, dt);
+      render();
+      const settled = !st.dragging && Math.abs(st.x) < 0.05 && Math.abs(st.vx) < 0.5
+        && Math.abs(st.lift - st.liftTarget) < 0.002 && Math.abs(st.vlift) < 0.01;
+      if (settled) {
+        st.x = 0; st.vx = 0; st.lift = st.liftTarget; st.vlift = 0;
+        render();
+        st.raf = 0; st.last = 0;
+        return;
+      }
+      st.raf = requestAnimationFrame(frame);
+    }
+    function kick() {
+      if (reduceMotion()) { st.x = 0; st.vx = 0; st.lift = st.liftTarget; render(); return; }
+      if (!st.raf) st.raf = requestAnimationFrame(frame);
+    }
+
+    // claude-app.js verschiebt den Knopf über left: sichtbar dort bleiben, wo
+    // er gerade ist, und von da aus zur neuen Stelle federn.
     new MutationObserver(() => {
-      // claude-app.js setzt beim Start kurz "none" und danach seine eigene
-      // Transition zurück - die Feder wieder einsetzen, sobald es fertig ist.
       const t = thumb.style.transition;
-      if (t !== 'none' && t !== springTransition) thumb.style.transition = springTransition;
+      if (t !== 'none' && t !== WIDTH_TRANSITION) thumb.style.transition = WIDTH_TRANSITION;
       const now = parseFloat(thumb.style.left) || 0;
-      if (Math.abs(now - last) < 1) return;
-      const dir = now > last ? 1 : -1;
-      last = now;
-      if (t === 'none' || drag) return;  // Erstplatzierung oder Ziehen: keine Tropfen-Animation
-      thumb.animate([
-        { transform: 'scale(1, 1)' },
-        { transform: `translateX(${dir * 3}px) scale(1.22, 0.88)`, offset: 0.35 },
-        { transform: `translateX(${-dir * 1.5}px) scale(0.96, 1.05)`, offset: 0.7 },
-        { transform: 'scale(1, 1)' },
-      ], { duration: 520, easing: 'cubic-bezier(.25,.8,.35,1)', composite: 'add' });
+      if (Math.abs(now - lastLeft) < 0.5) return;
+      const delta = lastLeft - now;
+      lastLeft = now;
+      if (t === 'none') return;  // Erstplatzierung beim Start: ohne Bewegung
+      st.x += delta;
+      // Sofort ausgleichen, nicht erst im nächsten Frame - sonst springt der
+      // Knopf für ein Bild ans Ziel.
+      render();
+      kick();
     }).observe(thumb, { attributes: true, attributeFilter: ['style'] });
 
+    const onThumb = (e) => {
+      const r = thumb.getBoundingClientRect();
+      return e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top - 6 && e.clientY <= r.bottom + 6;
+    };
     track.addEventListener('pointerdown', (e) => {
       if (e.button !== 0) return;
-      drag = { x: e.clientX, left: parseFloat(thumb.style.left) || 0, moved: false, id: e.pointerId };
-      thumb.classList.add('lg-lifted');
+      const grab = onThumb(e);
+      drag = { x: e.clientX, x0: st.x, moved: false, id: e.pointerId, grab, lastX: e.clientX, lastT: performance.now() };
+      if (grab) {
+        // Nur wer den Knopf selbst anfasst, bekommt die Glaslinse.
+        st.liftTarget = 1;
+        thumb.classList.add('lg-lifted');
+        kick();
+      }
     });
     track.addEventListener('pointermove', (e) => {
-      if (!drag || e.pointerId !== drag.id) return;
+      if (!drag || e.pointerId !== drag.id || !drag.grab) return;
       const dx = e.clientX - drag.x;
       if (!drag.moved) {
-        if (Math.abs(dx) < 4) return;
+        if (Math.abs(dx) < 3) return;
         drag.moved = true;
+        st.dragging = true;
         // Erst ab echter Bewegung einfangen - ein normaler Klick soll weiter
         // auf dem Knopf (Startseite/Code) landen.
         try { track.setPointerCapture(e.pointerId); } catch (err) {}
-        thumb.style.transition = 'none';
       }
+      const now = performance.now();
+      const left = parseFloat(thumb.style.left) || 0;
       const max = track.clientWidth - thumb.offsetWidth - 1;
-      thumb.style.left = Math.min(max, Math.max(1, drag.left + dx)) + 'px';
+      const x = Math.min(max - left, Math.max(1 - left, drag.x0 + dx));
+      const dt = Math.max(1, now - drag.lastT) / 1000;
+      st.vx = st.vx * 0.6 + ((x - st.x) / dt) * 0.4;
+      st.x = x;
+      drag.lastT = now;
+      kick();
     });
     const release = (e) => {
       if (!drag || (e && e.pointerId !== drag.id)) return;
-      const wasDrag = drag.moved;
+      const d = drag;
       drag = null;
+      st.dragging = false;
+      st.liftTarget = 0;
       thumb.classList.remove('lg-lifted');
-      if (!wasDrag) return;
-      thumb.style.transition = springTransition;
-      // An der näheren Seite einrasten.
-      const center = thumb.offsetLeft + thumb.offsetWidth / 2;
-      const target = pills().reduce((best, p) => {
-        const d = Math.abs(p.offsetLeft + p.offsetWidth / 2 - center);
-        return !best || d < best.d ? { p, d } : best;
+      kick();
+      if (!d.moved) return;
+      // An der näheren Seite einrasten; die Feder übernimmt die Geschwindigkeit.
+      const center = thumb.offsetLeft + st.x + thumb.offsetWidth / 2;
+      const target = [...track.querySelectorAll('.js-pill')].reduce((best, p) => {
+        const dist = Math.abs(p.offsetLeft + p.offsetWidth / 2 - center);
+        return !best || dist < best.dist ? { p, dist } : best;
       }, null);
-      if (!target) return;
-      if (target.p.classList.contains('active')) {
-        thumb.style.left = target.p.offsetLeft + 'px';
-        thumb.style.width = target.p.offsetWidth + 'px';
-      } else {
-        target.p.click();
-      }
+      if (target && !target.p.classList.contains('active')) target.p.click();
     };
     track.addEventListener('pointerup', release);
     track.addEventListener('pointercancel', release);
     track.addEventListener('lostpointercapture', release);
-    track.addEventListener('pointerleave', (e) => { if (drag && !drag.moved) release(e); });
   }
 
   let queued = false;

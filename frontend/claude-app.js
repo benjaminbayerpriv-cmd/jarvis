@@ -346,6 +346,11 @@
             <span style="font-size:12.5px;color:${C.textSoft};">Liquid Glass</span>
             ${settingsImmediateToggleHtml('jarvisGlassEnabled', 'Liquid Glass', 'Glasflächen nach Apples Vorbild für Seitenleiste, Eingabefeld, Menüs und Chat-Blasen.')}
             <div class="js-glass-controls" style="display:flex;flex-direction:column;gap:8px;">
+              <div class="js-glass-preview" aria-hidden="true">
+                <span class="js-glass-preview-label">Aa Glas</span>
+                <div class="js-glass-preview-regular">regular</div>
+                <div class="js-glass-preview-clear">clear</div>
+              </div>
             <label style="display:flex;align-items:center;gap:10px;font-size:12.5px;color:${C.textSoft};">
               <span style="flex:0 0 96px;">Unschärfe</span>
               <input class="js-glass-blur" type="range" min="0" max="20" step="1" style="flex:1;accent-color:${C.accent};" />
