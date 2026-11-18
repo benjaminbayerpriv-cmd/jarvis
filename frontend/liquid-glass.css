@@ -30,24 +30,20 @@
   --lg-shadow: 0 6px 22px rgb(0 0 0 / .30);
 }
 
-/* Glas braucht etwas Farbiges dahinter: ruhiger Verlauf in den Akzentfarben */
+/* Hintergrund: ruhig und fast schwarz wie ein dunkles macOS-Fenster, nur zwei
+   sehr schwache, unbewegte Lichtschimmer, damit das Glas seine Kanten zeigt.
+   (Vorher: große, wandernde Farbflecken - wirkte bunt und unruhig und lag
+   direkt unter dem Chattext.) */
 html, body { background: var(--jsBg, #151515) !important; }
 body::before {
   content: "";
   position: fixed;
-  inset: -10vmax;
+  inset: 0;
   z-index: 0;
   pointer-events: none;
   background:
-    radial-gradient(38vmax 38vmax at 18% 28%, rgb(217 119 87 / .50), transparent 70%),
-    radial-gradient(34vmax 34vmax at 82% 24%, rgb(76 108 255 / .38), transparent 70%),
-    radial-gradient(40vmax 40vmax at 62% 82%, rgb(124 88 214 / .36), transparent 70%),
-    radial-gradient(30vmax 30vmax at 12% 86%, rgb(52 190 170 / .28), transparent 70%);
-  animation: lg-drift 48s ease-in-out infinite alternate;
-}
-@keyframes lg-drift {
-  from { transform: translate3d(0, 0, 0) scale(1); }
-  to   { transform: translate3d(-3vmax, 2vmax, 0) scale(1.08); }
+    radial-gradient(70vw 60vh at 0% 0%, rgb(255 255 255 / .045), transparent 70%),
+    radial-gradient(60vw 50vh at 100% 100%, rgb(255 255 255 / .03), transparent 70%);
 }
 #jsApp { background: transparent !important; }
 
@@ -66,14 +62,15 @@ body::before {
   box-shadow: var(--lg-rim-regular), var(--lg-shadow) !important;
 }
 
-/* Seitenleiste schwebt wie in macOS 26 */
+/* Seitenleiste schwebt wie in macOS 26. Breite inkl. Abstand bleibt 308 px,
+   sonst verrutscht alles, was links an 308 px ausgerichtet ist (Composer). */
 #jsApp .js-sidebar {
-  margin: 10px 0 10px 10px !important;
-  height: calc(100% - 20px) !important;
-  border-radius: 22px !important;
+  margin: 8px 0 8px 8px !important;
+  height: calc(100% - 16px) !important;
+  width: 300px !important;
+  flex: 0 0 300px !important;
+  border-radius: 20px !important;
 }
-/* Verlauf unter dem Composer weg, sonst deckt er den Hintergrund ab */
-#jsApp .js-composer { background: none !important; }
 #jsApp .js-composer [style*="0 4px 20px rgba(0,0,0,.18)"] { border-radius: 26px !important; }
 #jsApp .js-settings-card, #jsApp .js-project-card { border-radius: 16px !important; }
 #jsApp .js-chatitem-menu, #jsApp .js-projects-sort-menu { border-radius: 16px !important; }
@@ -122,7 +119,6 @@ body::before {
     backdrop-filter: none !important;
   }
 }
-@media (prefers-reduced-motion: reduce) { body::before { animation: none; } }
 
 /* Anfassen: an NSGlassEffectView(effectIsInteractive) gemessen – kurzer Puls
    (~+1,25 % Größe, ~+5 % Helligkeit), klingt in ~160 ms ab, auch wenn gedrückt bleibt. */
