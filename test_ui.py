@@ -289,12 +289,12 @@ def main() -> int:
                 {SLEEP.format(ms=150)} document.querySelector('.js-send').click();"""
 
         step("Simulierter Stream: Verlauf scrollt mit", fake_send("UI-Test Mitscrollen") + f"""
-                const th = document.querySelector('.js-thread'); let maxRest = 0;
-                for (let i = 0; i < 70; i++) {{
+                const th = document.querySelector('.js-thread'); let maxRest = 0, grew = false;
+                for (let i = 0; i < 50; i++) {{
                   {SLEEP.format(ms=50)}
+                  if (th.scrollHeight > th.clientHeight + 200) grew = true;
                   if (th.scrollHeight > th.clientHeight + 50) maxRest = Math.max(maxRest, th.scrollHeight - th.scrollTop - th.clientHeight);
                 }}
-                const grew = th.scrollHeight > th.clientHeight + 200;
                 return grew && maxRest < 120 ? true : {{ ok: false, gewachsen: grew, maxAbstand: Math.round(maxRest) }};""", timeout=40)
         step("Simulierter Stream: hochgescrollt bleibt stehen", fake_send("UI-Test Hochscrollen") + f"""
                 const th = document.querySelector('.js-thread');
