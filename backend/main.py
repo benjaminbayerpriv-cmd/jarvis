@@ -436,16 +436,8 @@ def _build_app_shell(frontend_dir: Path, static_prefix: str) -> str:
         if (frontend_dir / "camera-tracking.js").exists()
         else ""
     )
-    # Liquid-Glass-Schicht: nur wenn die Datei im jeweiligen Frontend-Ordner liegt —
-    # /backup (frontend_backup/) hat sie nicht und bleibt die unveränderte alte UI.
-    glass_css = (
-        '    <link rel="stylesheet" href="{p}/liquid-glass.css?v={v}">\n'.format(p=static_prefix, v=_BUILD)
-        if (frontend_dir / "liquid-glass.css").exists()
-        else ""
-    )
     assets = (
-        glass_css
-        + '    <link rel="stylesheet" href="{p}/xterm.css?v={v}\">\n'.format(p=static_prefix, v=_BUILD)
+        '    <link rel="stylesheet" href="{p}/xterm.css?v={v}\">\n'.format(p=static_prefix, v=_BUILD)
         + '    <script src="{p}/xterm.js?v={v}"></script>\n'.format(p=static_prefix, v=_BUILD)
         + '    <script src="{p}/xterm-addon-fit.js?v={v}"></script>\n'.format(p=static_prefix, v=_BUILD)
         + camera_script
