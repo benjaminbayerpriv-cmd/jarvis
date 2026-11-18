@@ -12,7 +12,7 @@ from typing import Callable
 
 import requests
 
-from . import confirm, config, hardware, last_target, mcp_server, memory, tools
+from . import confirm, config, error_log, hardware, last_target, mcp_server, memory, tools
 
 
 class ModelError(RuntimeError):
@@ -2866,6 +2866,10 @@ def _stream_reply_impl(user_message: str, history: list | None = None, turn_id: 
             # Nothing ran and nothing was said — "Alles klar." here read like
             # a confirmation of something that never happened.
             empty = "Da ist bei mir gerade keine Antwort zustande gekommen, frag bitte nochmal."
+            # Kein Absturz, aber ein Fehler aus Nutzersicht: festhalten, mit
+            # dem, was das Modell stattdessen geliefert hat (oft nur Denken).
+            error_log.record("model", "leere Antwort", f"Keine Antwort auf: {str(user_message)[:200]}",
+                             context={"rohtext": str(locals().get("content_acc", ""))[:400], "model": str(config.LM_STUDIO_MODEL)})
             yield {"type": "sentence", "text": empty}
             full_text_parts.append(empty)
 

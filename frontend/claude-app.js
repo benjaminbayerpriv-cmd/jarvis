@@ -12,6 +12,52 @@
 
   const $ = (s, r = document) => r.querySelector(s);
 
+  // ------------------------------------------------------- Fehlerprotokoll
+  // Jeder Fehler der Oberfläche geht an /errors/client und landet in
+  // logs/errors.jsonl (backend/error_log.py) — auch die, die niemand bemerkt.
+  // Pro Sitzung jede Meldung höchstens dreimal, insgesamt höchstens 200.
+  (() => {
+    const seen = new Map();
+    let sent = 0;
+    const NOISE = /ResizeObserver loop|Script error\.?$|AbortError|The user aborted a request|NotAllowedError/i;
+    const report = (kind, message, stack, extra) => {
+      try {
+        message = String(message || '').slice(0, 1000);
+        if (!message || NOISE.test(message) || sent >= 200) return;
+        const key = kind + '|' + message;
+        const n = (seen.get(key) || 0) + 1;
+        seen.set(key, n);
+        if (n > 3) return;
+        sent += 1;
+        const body = JSON.stringify({
+          kind, message, stack: String(stack || '').slice(0, 4000), url: location.pathname + location.search,
+          line: extra && extra.line, col: extra && extra.col,
+          context: { view: document.querySelector('#jsApp')?.className || '', ua: navigator.userAgent.slice(0, 120) },
+        });
+        fetch('/errors/client', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body, keepalive: true }).catch(() => {});
+      } catch (e) { /* das Protokoll darf nie selbst stören */ }
+    };
+    window.addEventListener('error', (e) => {
+      // Ressourcen-Ladefehler (Bild, Skript) haben kein e.error, aber ein target.
+      if (e.target && e.target !== window && (e.target.src || e.target.href)) {
+        report('resource', 'Konnte nicht laden: ' + (e.target.src || e.target.href), '', null);
+        return;
+      }
+      report('error', e.message, e.error && e.error.stack, { line: e.lineno, col: e.colno });
+    }, true);
+    window.addEventListener('unhandledrejection', (e) => {
+      const r = e.reason;
+      report('unhandledrejection', r && r.message ? r.message : String(r), r && r.stack, null);
+    });
+    const origError = console.error.bind(console);
+    console.error = (...args) => {
+      origError(...args);
+      const err = args.find((a) => a instanceof Error);
+      report('console.error', args.map((a) => (a instanceof Error ? a.message : typeof a === 'string' ? a : (() => { try { return JSON.stringify(a); } catch (x) { return String(a); } })())).join(' '), err && err.stack, null);
+    };
+    window.jarvisReportError = report;
+  })();
+
   // Setzt den Cursor eines (leeren) contenteditable an dessen Anfang. Nötig,
   // weil der Platzhalter (CSS ::before) im Renderfluss vor dem echten, leeren
   // Inhalt steht — der Browser platziert den Cursor beim Fokussieren sonst

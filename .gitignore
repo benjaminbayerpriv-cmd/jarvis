@@ -19,3 +19,5 @@ launcher/dist/
 launcher/*.spec
 .jarvis/
 .jarvis_fork_bases.json
+# Fehlerprotokoll (backend/error_log.py)
+logs/
