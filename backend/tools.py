@@ -19,7 +19,7 @@ from urllib.parse import parse_qs, quote_plus, unquote, urlparse
 
 import requests
 
-from . import alpaca_client, browser_agent, config, confirm, jarvis_browser, last_target, memory, opencode_agent, panel, platform_utils
+from . import alpaca_client, browser_agent, config, confirm, error_log, jarvis_browser, last_target, memory, opencode_agent, panel, platform_utils
 
 IS_WINDOWS = platform.system() == "Windows"
 _NO_WINDOW = 0x08000000 if IS_WINDOWS else 0  # CREATE_NO_WINDOW
@@ -2110,5 +2110,6 @@ def call_tool(name: str, arguments: dict) -> str:
         return result
     except Exception as exc:
         result = f"Fehler beim Ausführen von {name}: {exc}"
+        error_log.record_exception("tool", name, exc, {"arguments": str(arguments)[:400]})
         panel.push("action", id=action_id, action=name, status="fehlgeschlagen", detail=result)
         return result

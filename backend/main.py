@@ -25,7 +25,7 @@ from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import browser_agent, config, conversations, fillers, hardware, jarvis_browser, llm_client, mcp_server, memory, opencode_agent, panel, projects, stt, transcript_log, tts, vector_memory
+from . import browser_agent, config, conversations, error_log, fillers, hardware, jarvis_browser, llm_client, mcp_server, memory, opencode_agent, panel, projects, stt, transcript_log, tts, vector_memory
 
 
 @asynccontextmanager
@@ -122,6 +122,14 @@ def _origin_allowed(origin: str | None, host: str | None) -> bool:
         return True
     netloc = origin.split("://", 1)[-1].rstrip("/")
     return bool(host) and netloc.lower() == host.lower()
+
+
+@app.exception_handler(Exception)
+async def _log_unhandled(request, exc: Exception):
+    """Jede Ausnahme, die bis hierher durchschlägt, wäre sonst nur ein
+    stummes 500 gewesen — jetzt steht sie im Fehlerprotokoll."""
+    error_log.record_exception("backend", f"{request.method} {request.url.path}", exc)
+    return Response(status_code=500, content=b"Interner Fehler (steht im Fehlerprotokoll)")
 
 
 @app.middleware("http")
@@ -342,6 +350,16 @@ class SummarizeResponse(BaseModel):
     summary: str
 
 
+class ClientError(BaseModel):
+    kind: str = "error"
+    message: str = ""
+    stack: str = ""
+    url: str = ""
+    line: int | None = None
+    col: int | None = None
+    context: dict = {}
+
+
 class BrowserResult(BaseModel):
     id: str
     ok: bool
@@ -377,6 +395,10 @@ def _freeze_snapshot(html: str) -> str:
     html = re.sub(r"<iframe\b[^>]*>.*?</iframe>\s*", "", html, flags=re.DOTALL | re.IGNORECASE)
     html = re.sub(r"<iframe\b[^>]*/?>", "", html, flags=re.IGNORECASE)
     html = re.sub(r"<(?:link|img)\b[^>]*https?://[^\"'>]*anthropic\.com[^>]*>", "", html, flags=re.IGNORECASE)
+    # Verweise des Snapshots auf Dateien, die es hier nicht gibt (z. B.
+    # /manifest.json): jeder Seitenaufruf erzeugte sonst 404-Fehler in der
+    # Konsole und im Fehlerprotokoll.
+    html = re.sub(r"<link\b[^>]*rel=[\"']manifest[\"'][^>]*>\s*", "", html, flags=re.IGNORECASE)
     return html
 
 
@@ -804,6 +826,7 @@ def chat_stream(req: ChatRequest):
             else:
                 fallback = "Da ist bei mir intern etwas schiefgelaufen, frag bitte nochmal."
                 print(f"[chat] Unerwarteter Fehler: {exc}\n{traceback.format_exc()}")
+                error_log.record_exception("backend", "chat/stream", exc, {"message": req.message[:300]})
             audio_b64 = ""
             if req.is_speech:
                 try:
@@ -1751,6 +1774,24 @@ async def ws_endpoint(websocket: WebSocket):
         # In finally: any other exit used to leave a dead socket in the list.
         if websocket in active_sockets:
             active_sockets.remove(websocket)
+
+
+@app.post("/errors/client")
+def client_error(err: ClientError):
+    """Fehler der Oberfläche (window.onerror, unbehandelte Promises,
+    console.error) — siehe reportClientError in frontend/claude-app.js."""
+    context = dict(err.context or {})
+    if err.url:
+        context["url"] = err.url
+    if err.line is not None:
+        context["line"] = f"{err.line}:{err.col or 0}"
+    error_log.record("frontend", err.kind or "error", err.message, stack=err.stack, context=context)
+    return {"ok": True}
+
+
+@app.get("/errors")
+def list_errors(limit: int = 200):
+    return {"errors": error_log.read(max(1, min(limit, 2000)))}
 
 
 @app.get("/jarvis-browser/status")

@@ -108,6 +108,10 @@ def build_parser() -> argparse.ArgumentParser:
     tests = sub.add_parser("test", help="test_jarvis.py und test_features.py ausführen")
     tests.add_argument("--script", choices=["test_jarvis.py", "test_features.py"], help="nur dieses")
 
+    errors = sub.add_parser("errors", help="Fehlerprotokoll (logs/errors.jsonl) zusammengefasst anzeigen")
+    errors.add_argument("--all", action="store_true", help="jeden Eintrag einzeln statt gruppiert")
+    errors.add_argument("--clear", action="store_true", help="Protokoll leeren")
+
     sub.add_parser("config", help="config.json anzeigen")
     config_set = sub.add_parser("set", help="Einstellung in .env setzen (KEY=VALUE)")
     config_set.add_argument("pairs", nargs="+", metavar="KEY=WERT")
@@ -319,6 +323,45 @@ def cmd_test(args) -> int:
     return 1 if failed else 0
 
 
+def cmd_errors(args) -> int:
+    path = ctx.ROOT / "logs" / "errors.jsonl"
+    if args.clear:
+        for f in (path, path.with_suffix(".jsonl.1")):
+            f.unlink(missing_ok=True)
+        ui.ok("Fehlerprotokoll geleert.")
+        return 0
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        ui.ok("Keine Fehler protokolliert.")
+        return 0
+    entries = []
+    for line in lines:
+        try:
+            entries.append(json.loads(line))
+        except ValueError:
+            continue
+    if not entries:
+        ui.ok("Keine Fehler protokolliert.")
+        return 0
+    if args.all:
+        for e in entries:
+            print(f"{e.get('time')}  [{e.get('source')}/{e.get('kind')}]  {e.get('message')}")
+            if e.get("context"):
+                print(f"    {json.dumps(e['context'], ensure_ascii=False)[:300]}")
+        return 0
+    groups: dict[tuple, list] = {}
+    for e in entries:
+        key = (e.get("source"), e.get("kind"), e.get("message"))
+        groups.setdefault(key, []).append(e)
+    ranked = sorted(groups.items(), key=lambda kv: kv[1][-1].get("time", ""), reverse=True)
+    print(f"{len(entries)} Einträge, {len(groups)} verschiedene Fehler (neueste zuerst):\n")
+    for (source, kind, message), items in ranked:
+        count = sum(1 + int(i.get("repeated_before") or 0) for i in items)
+        print(f"{items[-1].get('time')}  {count:>4}x  [{source}/{kind}]  {str(message)[:160]}")
+    return 0
+
+
 def cmd_doctor(args) -> int:
     _, warns, fails = doctor.run()
     return 1 if fails else 0
@@ -345,6 +388,7 @@ COMMANDS = {
     "deps": lambda args: install.ensure_deps(force=args.force),
     "update": lambda args: install.update(),
     "doctor": cmd_doctor,
+    "errors": cmd_errors,
     "status": cmd_status,
     "start": lambda args: (server.start(not args.no_browser, not args.no_wait)
                            and (server.hotkey_start() if args.hotkey else True)),
