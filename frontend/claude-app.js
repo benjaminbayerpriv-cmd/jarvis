@@ -2309,11 +2309,18 @@
     restartCodeTerminal();
   }
 
+  // Diktat gehört zu dem Chat, in dem man es eingeschaltet hat: beim Wechsel in
+  // einen anderen oder neuen Chat wird es beendet, statt dort weiterzuschreiben.
+  function endDictationForChatSwitch() {
+    if (dictating) setDictating(false);
+  }
+
   async function openConversation(id, projectId) {
     closeProjectsView();
     closeSettings();
     currentProjectId = projectId || null;
     if (id === currentConversationId) { navRecord(); return; }
+    endDictationForChatSwitch();
     saveComposerDraft(currentConversationId);
     currentConversationId = id;
     lsSet(modeKey(activeMode), id);
@@ -2328,6 +2335,7 @@
     // Orb/Terminal schließen), statt ihn stumm im Hintergrund weiterlaufen zu
     // lassen, während man schon im neuen, getippten Chat gelandet ist.
     if (speechMode) exitSpeech();
+    endDictationForChatSwitch();
     saveComposerDraft(currentConversationId);
     currentProjectId = null;
     currentConversationId = activeMode + '-' + (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2));
@@ -3133,8 +3141,19 @@
   }
 
   // ---------------------------------------------------------------- thread
+  // Folgt der Verlauf einer laufenden Antwort nach unten? Ja, solange man am
+  // Ende steht; scrollt man selbst nach oben, um etwas nachzulesen, bleibt die
+  // Ansicht dort stehen (sonst risse jedes neue Wort sie wieder weg).
+  let threadPinned = true;
+  let threadScrollWired = null;
   function ensureThread() {
     if (!threadEl) { const m = $('.js-thread', uiEl); if (m) threadEl = m; }
+    if (threadEl && threadScrollWired !== threadEl) {
+      threadScrollWired = threadEl;
+      threadEl.addEventListener('scroll', () => {
+        threadPinned = threadEl.scrollHeight - threadEl.scrollTop - threadEl.clientHeight < 140;
+      }, { passive: true });
+    }
     return threadEl;
   }
   function addThreadTurn(role, text, attachments) {
@@ -3179,6 +3198,9 @@
     actions.appendChild(copyBtn);
     row.appendChild(actions);
     el.appendChild(row);
+    // Eine neue Nachricht (eigene oder Antwort-Beginn) springt immer nach unten
+    // und startet das Mitscrollen neu.
+    threadPinned = true;
     el.scrollTop = el.scrollHeight;
     syncWelcome();
     return inner;
@@ -4092,6 +4114,9 @@
     el.innerHTML = renderMarkdown(text);
     const prevLen = Number(el.dataset.revealedLen || 0);
     el.dataset.revealedLen = String(wrapCharsForReveal(el, prevLen));
+    // Die Antwort wächst nach unten: mitscrollen, damit der Text nicht unter
+    // das Eingabefeld läuft (das Polster unten im Verlauf hält Abstand dazu).
+    scrollThread();
   }
 
   // Nach einem Abbruch (Backend-Neustart, Netzwerkruckler) neu verbinden —
@@ -4131,7 +4156,7 @@
 
   function scrollThread() {
     const el = ensureThread();
-    if (el) el.scrollTop = el.scrollHeight;
+    if (el && threadPinned) el.scrollTop = el.scrollHeight;
   }
 
   function renderPanelItem(item) {
