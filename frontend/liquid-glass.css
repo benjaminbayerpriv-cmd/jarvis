@@ -1,141 +1,166 @@
 /* =====================================================================
-   LIQUID GLASS für die laufende Jarvis-Oberfläche (claude-app.js).
-   Wird nur eingebunden, wenn diese Datei im Frontend-Ordner liegt (siehe
-   backend/main.py, _build_app_shell). /backup bleibt die unveränderte alte
-   Oberfläche. Ausschalten: Datei umbenennen/löschen und Server neu starten.
-
-   Werte gemessen an einer nativen NSGlassEffectView (macOS 27, dunkel):
-     Regular: Gauß σ ≈ 8,4 px, Entsättigung ~0,67, abgedunkelt,
-              heller 1-px-Rand oben/unten, dunkle Linie an den Seiten,
-              kleiner Schatten nach unten.
-     Clear:   σ ≈ 11,4 px, Schwarzwerte leicht angehoben, Farben bleiben,
-              stärkerer heller Rand, kein Schatten.
-   Die UI nutzt Inline-Styles, deshalb überall !important.
+   Liquid Glass — Darstellung zu frontend/liquid-glass.js (glassEffect).
+   Schichten wie bei Apples NSGlassEffectView, ohne Schlagschatten:
+     ::before  Glasfläche. Chromium: Apples Kette als SVG-Filter aus dem
+               Skript (Brechung, Luminanz-Kennlinie, Unschärfe).
+               WebKit/Mac-App: lineare Näherung derselben Messwerte.
+     ::after   helle 1-px-Lichtkante.
+   Beide Schichten haben Apples "continuous" Eckenform (corner-shape:
+   superellipse aus dem Skript; ohne Unterstützung runde Ecken). Bewusst kein
+   clip-path: der schaltet backdrop-filter in Chrome ab.
+   Alles gilt nur, solange Liquid Glass eingeschaltet ist (html.lg-on,
+   Einstellungen -> Erscheinungsbild).
+   Inline-Styles aus claude-app.js werden mit !important überschrieben.
    ===================================================================== */
 
-:root {
-  --lg-blur: 8.4px;
-  --lg-clear-blur: 11.4px;
-  --lg-clear-bg: rgb(255 255 255 / .10);
-  --lg-rim-regular:
-    inset 0 1px 0 rgb(255 255 255 / .16),
-    inset 0 -1px 0 rgb(255 255 255 / .12),
-    1px 0 0 rgb(0 0 0 / .55),
-    -1px 0 0 rgb(0 0 0 / .55);
-  --lg-rim-clear:
-    inset 0 1px 0 rgb(255 255 255 / .34),
-    inset 0 -1px 0 rgb(255 255 255 / .30),
-    inset 1px 0 0 rgb(0 0 0 / .22),
-    inset -1px 0 0 rgb(0 0 0 / .22);
-  --lg-shadow: 0 6px 22px rgb(0 0 0 / .30);
-}
-
-/* Glas braucht etwas Farbiges dahinter: ruhiger Verlauf in den Akzentfarben */
-html, body { background: var(--jsBg, #151515) !important; }
-body::before {
+/* Ruhiger, fast schwarzer Hintergrund mit zwei schwachen Lichtschimmern. */
+html.lg-on, html.lg-on body { background: var(--jsBg, #151515) !important; }
+html.lg-on body::before {
   content: "";
   position: fixed;
-  inset: -10vmax;
+  inset: 0;
   z-index: 0;
   pointer-events: none;
   background:
-    radial-gradient(38vmax 38vmax at 18% 28%, rgb(217 119 87 / .50), transparent 70%),
-    radial-gradient(34vmax 34vmax at 82% 24%, rgb(76 108 255 / .38), transparent 70%),
-    radial-gradient(40vmax 40vmax at 62% 82%, rgb(124 88 214 / .36), transparent 70%),
-    radial-gradient(30vmax 30vmax at 12% 86%, rgb(52 190 170 / .28), transparent 70%);
-  animation: lg-drift 48s ease-in-out infinite alternate;
+    radial-gradient(70vw 60vh at 0% 0%, rgb(255 255 255 / .045), transparent 70%),
+    radial-gradient(60vw 50vh at 100% 100%, rgb(255 255 255 / .03), transparent 70%);
 }
-@keyframes lg-drift {
-  from { transform: translate3d(0, 0, 0) scale(1); }
-  to   { transform: translate3d(-3vmax, 2vmax, 0) scale(1.08); }
-}
-#jsApp { background: transparent !important; }
+html.lg-on #jsApp { background: transparent !important; }
 
-/* ----- Regular-Glas ----- */
-#jsApp .js-sidebar,
-#jsApp .js-composer [style*="0 4px 20px rgba(0,0,0,.18)"],
-#jsApp .js-settings-card,
-#jsApp .js-chatitem-menu,
-#jsApp .js-projects-sort-menu,
-#jsApp .js-project-card,
-#jsApp [style*="0 10px 30px rgba(0,0,0,.4)"] {
-  background: color-mix(in srgb, var(--jsBgSurface3, #1f1f1e) 72%, transparent) !important;
-  -webkit-backdrop-filter: blur(var(--lg-blur)) saturate(.67) !important;
-  backdrop-filter: blur(var(--lg-blur)) saturate(.67) !important;
-  border: 0 !important;
-  box-shadow: var(--lg-rim-regular), var(--lg-shadow) !important;
+/* Schwebende Seitenleiste wie in macOS 26 (inkl. Abstand weiter 308 px breit). */
+html.lg-on #jsApp .js-sidebar {
+  margin: 8px 0 8px 8px !important;
+  height: calc(100% - 16px) !important;
+  width: 300px !important;
+  flex: 0 0 300px !important;
+  border-right: 0 !important;
 }
 
-/* Seitenleiste schwebt wie in macOS 26 */
-#jsApp .js-sidebar {
-  margin: 10px 0 10px 10px !important;
-  height: calc(100% - 20px) !important;
-  border-radius: 22px !important;
+/* ------------------------------------------------------------ Glas */
+.lg {
+  isolation: isolate;
+  background: transparent !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
 }
-/* Verlauf unter dem Composer weg, sonst deckt er den Hintergrund ab */
-#jsApp .js-composer { background: none !important; }
-#jsApp .js-composer [style*="0 4px 20px rgba(0,0,0,.18)"] { border-radius: 26px !important; }
-#jsApp .js-settings-card, #jsApp .js-project-card { border-radius: 16px !important; }
-#jsApp .js-chatitem-menu, #jsApp .js-projects-sort-menu { border-radius: 16px !important; }
+.lg[style*="--lg-radius"] { border-radius: var(--lg-radius) !important; }
 
-/* Startseite | Code: Regular-Spur mit Clear-Schieber */
-#jsApp .js-mode {
-  background: rgb(0 0 0 / .28) !important;
-  -webkit-backdrop-filter: blur(var(--lg-blur)) saturate(.67) !important;
-  backdrop-filter: blur(var(--lg-blur)) saturate(.67) !important;
-  box-shadow: var(--lg-rim-regular) !important;
+/* Näherung ohne SVG-Filter, aus den gemessenen Kennlinien linear gefittet:
+   regular dunkel  Glas ≈ 0,085 + 0,46 · L, Farbanteil 0,78
+   clear           Glas ≈ 0,10  + 0,71 · L, Farbanteil 0,95
+   regular hell    Glas ≈ 0,647 + 0,31 · L, Farbanteil 0,7  */
+.lg::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: var(--lg-shape-radius, inherit);
+  corner-shape: var(--lg-corner, round);
+  pointer-events: none;
+  -webkit-backdrop-filter: blur(var(--lg-blur-regular, 5px)) saturate(1.7) brightness(.5);
+  backdrop-filter: blur(var(--lg-blur-regular, 5px)) saturate(1.7) brightness(.5);
+  background: rgb(255 255 255 / .085);
+  transition: background-color .2s ease-out;
 }
-#jsApp .js-mode-indicator {
-  background: var(--lg-clear-bg) !important;
-  -webkit-backdrop-filter: blur(var(--lg-clear-blur)) saturate(1.06) !important;
-  backdrop-filter: blur(var(--lg-clear-blur)) saturate(1.06) !important;
-  box-shadow: var(--lg-rim-clear) !important;
+.lg-clear::before {
+  -webkit-backdrop-filter: blur(var(--lg-blur-clear, 2px)) saturate(1.33) brightness(.79);
+  backdrop-filter: blur(var(--lg-blur-clear, 2px)) saturate(1.33) brightness(.79);
+  background: rgb(255 255 255 / .1);
+}
+[data-lg-look="light"].lg-regular::before {
+  -webkit-backdrop-filter: blur(var(--lg-blur-regular, 5px)) saturate(2.2) brightness(.88);
+  backdrop-filter: blur(var(--lg-blur-regular, 5px)) saturate(2.2) brightness(.88);
+  background: rgb(255 255 255 / .647);
+}
+.lg-tinted::before {
+  background: color-mix(in srgb, var(--lg-tint) 85%, transparent);
 }
 
-/* Aktive Navigationszeile als helles Glas */
-#jsApp .js-navrow.active, #jsApp .js-new.active {
-  background: var(--lg-clear-bg) !important;
-  box-shadow: var(--lg-rim-clear) !important;
+/* Chromium: Apples Filterkette aus liquid-glass.js. */
+.lg.lg-lens[style*="--lg-backdrop"]::before {
+  -webkit-backdrop-filter: var(--lg-backdrop);
+  backdrop-filter: var(--lg-backdrop);
+  background: transparent;
 }
 
-/* Eingabefelder in Glasflächen: dunkle Mulde statt deckender Fläche */
-#jsApp .js-setup-lmurl, #jsApp .js-setup-apikey, #jsApp .js-settings-input {
-  background: rgb(0 0 0 / .28) !important;
-  border: 0 !important;
-  box-shadow: inset 0 1px 0 rgb(0 0 0 / .35), inset 0 -1px 0 rgb(255 255 255 / .10) !important;
+/* Lichtkante: oben am hellsten, unten schwächer, seitlich kaum. */
+.lg::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: var(--lg-shape-radius, inherit);
+  corner-shape: var(--lg-corner, round);
+  pointer-events: none;
+  background: var(--lg-rim, none) center / 100% 100% no-repeat;
+}
+.lg-tinted { color: #fff !important; }
+
+/* .interactive(): Apples Druck-Ebene hellt die Fläche auf (+0,147 regular,
+   +0,2 clear), dazu ein kurzer Größenpuls. */
+.lg-interactive { cursor: pointer; }
+.lg-interactive.lg-pressed { transform: scale(1.0125); }
+.lg-interactive.lg-pressed::before {
+  background-color: rgb(255 255 255 / var(--lg-lift, .147)) !important;
+}
+/* Startseite | Code wie ein SwiftUI-Schalter: In Ruhe ein heller Knopf,
+   gedrückt eine klare Glaslinse über den Beschriftungen (Größe und Bewegung
+   rechnet liquid-glass.js als Feder). Deckend <-> Glas in ~70 ms wie gemessen. */
+#jsApp .js-mode-indicator.lg::before {
+  background-color: rgb(255 255 255 / .16) !important;
+  transition: background-color .07s linear;
+}
+#jsApp .js-mode-indicator.lg.lg-lifted { z-index: 2; }
+#jsApp .js-mode-indicator.lg.lg-lifted::before { background-color: rgb(255 255 255 / .02) !important; }
+
+/* Vorschau in den Einstellungen: festes Muster, auf dem man Unschärfe,
+   Brechung und Lichtkante direkt sieht. */
+.js-glass-preview {
+  position: relative;
+  height: 112px;
+  border-radius: 14px;
+  overflow: hidden;
+  isolation: isolate;
+  background:
+    repeating-linear-gradient(90deg, rgb(255 255 255 / .9) 0 10px, transparent 10px 20px),
+    linear-gradient(120deg, #d97757, #7c58d6 45%, #2a62ff 70%, #34beaa);
+}
+.js-glass-preview-label {
+  position: absolute; left: 14px; top: 10px;
+  font: 600 22px/1 var(--font-anthropic-serif, Georgia, serif);
+  color: #111; letter-spacing: .02em;
+}
+.js-glass-preview-regular {
+  position: absolute; left: 14px; right: 110px; bottom: 14px; height: 52px;
+  display: flex; align-items: center; justify-content: center;
+  color: var(--jsText, #f0efe8); font-size: 12.5px;
+}
+.js-glass-preview-clear {
+  position: absolute; right: 18px; top: 22px; width: 74px; height: 74px;
+  display: flex; align-items: center; justify-content: center;
+  color: #fff; font-size: 11.5px;
 }
 
-/* Kein backdrop-filter oder "Transparenz reduzieren": wieder deckend */
+/* Chat-Blasen: Glas statt grauer Fläche. */
+#jsApp .js-you .js-text.lg { color: var(--jsText) !important; }
+
+/* Code-Tab und Sprachmodus-Terminal: Schwarz wird durchsichtig (Filter aus
+   liquid-glass.js: Deckkraft aus der Helligkeit), Text bleibt deckend. */
+html.lg-on #jsApp .js-code-terminal,
+html.lg-on #jsSpeechTerm { background: transparent !important; }
+html.lg-on #jsApp .js-code-terminal .xterm,
+html.lg-on #jsSpeechTerm .xterm { filter: url(#lg-black-transparent); }
+
+/* Ohne backdrop-filter oder mit "Transparenz reduzieren": deckend. */
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-  #jsApp .js-sidebar, #jsApp .js-settings-card, #jsApp .js-chatitem-menu,
-  #jsApp .js-projects-sort-menu, #jsApp .js-project-card,   #jsApp .js-composer [style*="0 4px 20px rgba(0,0,0,.18)"] {
-    background: var(--jsBgSurface3, #1f1f1e) !important;
-  }
+  .lg::before { background: var(--jsBgSurface3, #1f1f1e); }
 }
 @media (prefers-reduced-transparency: reduce) {
-  body::before { display: none; }
-  #jsApp .js-sidebar, #jsApp .js-settings-card, #jsApp .js-chatitem-menu,
-  #jsApp .js-projects-sort-menu, #jsApp .js-project-card,   #jsApp .js-composer [style*="0 4px 20px rgba(0,0,0,.18)"], #jsApp .js-mode, #jsApp .js-mode-indicator,
-  #jsApp [style*="0 10px 30px rgba(0,0,0,.4)"] {
-    background: var(--jsBgSurface3, #1f1f1e) !important;
+  .lg::before, .lg.lg-lens[style*="--lg-backdrop"]::before {
     -webkit-backdrop-filter: none !important;
     backdrop-filter: none !important;
+    background: var(--jsBgSurface3, #1f1f1e) !important;
   }
 }
-@media (prefers-reduced-motion: reduce) { body::before { animation: none; } }
-
-/* Anfassen: an NSGlassEffectView(effectIsInteractive) gemessen – kurzer Puls
-   (~+1,25 % Größe, ~+5 % Helligkeit), klingt in ~160 ms ab, auch wenn gedrückt bleibt. */
-@keyframes lg-press {
-  0%   { transform: scale(1);      filter: brightness(1); }
-  30%  { transform: scale(1.0125); filter: brightness(1.05); }
-  100% { transform: scale(1);      filter: brightness(1); }
-}
-#jsApp .js-pill:active, #jsApp .js-new:active, #jsApp .js-navrow:active,
-#jsApp .js-mode:active, #jsApp .js-settings-row:active {
-  animation: lg-press 160ms ease-out;
-}
 @media (prefers-reduced-motion: reduce) {
-  #jsApp .js-pill:active, #jsApp .js-new:active, #jsApp .js-navrow:active,
-  #jsApp .js-mode:active, #jsApp .js-settings-row:active { animation: none; }
+  .lg-interactive.lg-pressed { transform: none; }
 }

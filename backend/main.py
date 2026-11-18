@@ -458,11 +458,18 @@ def _build_app_shell(frontend_dir: Path, static_prefix: str) -> str:
         if (frontend_dir / "camera-tracking.js").exists()
         else ""
     )
-    # Liquid-Glass-Schicht: nur wenn die Datei im jeweiligen Frontend-Ordner liegt —
+    # Liquid Glass: nur wenn die Dateien im jeweiligen Frontend-Ordner liegen —
     # /backup (frontend_backup/) hat sie nicht und bleibt die unveränderte alte UI.
     glass_css = (
         '    <link rel="stylesheet" href="{p}/liquid-glass.css?v={v}">\n'.format(p=static_prefix, v=_BUILD)
         if (frontend_dir / "liquid-glass.css").exists()
+        else ""
+    )
+    # glassEffect() nach Apples API (siehe liquid-glass.js) - nach claude-app.js,
+    # weil es die von buildUi() erzeugten Elemente verglast.
+    glass_js = (
+        '    <script src="{p}/liquid-glass.js?v={v}"></script>\n'.format(p=static_prefix, v=_BUILD)
+        if (frontend_dir / "liquid-glass.js").exists()
         else ""
     )
     assets = (
@@ -473,6 +480,7 @@ def _build_app_shell(frontend_dir: Path, static_prefix: str) -> str:
         + camera_script
         + larp_script
         + '    <script src="{p}/claude-app.js?v={v}"></script>\n'.format(p=static_prefix, v=_BUILD)
+        + glass_js
     )
     return html.replace("</body>", f"{assets}  </body>")
 
@@ -645,6 +653,92 @@ def speak_stream(req: TtsStreamRequest):
         yield json.dumps({"type": "done", "elapsed_ms": int((time.time() - start) * 1000)}) + "\n"
 
     return _ClosingStreamingResponse(generate(), media_type="application/x-ndjson")
+
+
+# ------------------------------------------------------------ Hintergrundbild
+# Ein vom Nutzer hochgeladenes Bild hinter der ganzen Oberfläche (Einstellungen
+# -> Erscheinungsbild). Liegt im Backend statt im Browser-Speicher, damit es im
+# Browser und in der Mac-App (eigener WebView-Speicher) gleich aussieht.
+WALLPAPER_DIR = Path(__file__).resolve().parent / "wallpaper"
+_WALLPAPER_MAX_BYTES = 25 * 1024 * 1024
+# Dateityp aus den ersten Bytes, nicht aus Dateiname oder Content-Type.
+_WALLPAPER_SIGNATURES = (
+    (b"\xff\xd8\xff", "jpg", "image/jpeg"),
+    (b"\x89PNG\r\n\x1a\n", "png", "image/png"),
+    (b"GIF87a", "gif", "image/gif"),
+    (b"GIF89a", "gif", "image/gif"),
+)
+
+
+def _wallpaper_kind(head: bytes) -> tuple[str, str] | None:
+    for magic, ext, mime in _WALLPAPER_SIGNATURES:
+        if head.startswith(magic):
+            return ext, mime
+    if head[:4] == b"RIFF" and head[8:12] == b"WEBP":
+        return "webp", "image/webp"
+    if head[4:8] == b"ftyp" and head[8:12] in (b"avif", b"avis"):
+        return "avif", "image/avif"
+    return None
+
+
+def _current_wallpaper() -> tuple[Path, str] | None:
+    if not WALLPAPER_DIR.is_dir():
+        return None
+    for path in WALLPAPER_DIR.glob("wallpaper.*"):
+        with path.open("rb") as f:
+            kind = _wallpaper_kind(f.read(16))
+        if kind:
+            return path, kind[1]
+    return None
+
+
+def _wallpaper_status() -> dict:
+    current = _current_wallpaper()
+    if not current:
+        return {"set": False, "url": None}
+    return {"set": True, "url": f"/wallpaper?v={int(current[0].stat().st_mtime)}"}
+
+
+@app.get("/wallpaper/status")
+def wallpaper_status():
+    return _wallpaper_status()
+
+
+@app.get("/wallpaper")
+def get_wallpaper():
+    current = _current_wallpaper()
+    if not current:
+        raise HTTPException(status_code=404, detail="Kein Hintergrundbild gesetzt.")
+    path, mime = current
+    # Die URL trägt die Änderungszeit (?v=), der Browser darf es also behalten.
+    return Response(path.read_bytes(), media_type=mime, headers={"Cache-Control": "private, max-age=31536000"})
+
+
+@app.post("/wallpaper")
+async def upload_wallpaper(image: UploadFile = File(...)):
+    data = await image.read(_WALLPAPER_MAX_BYTES + 1)
+    if len(data) > _WALLPAPER_MAX_BYTES:
+        raise HTTPException(status_code=413, detail="Das Bild ist größer als 25 MB.")
+    kind = _wallpaper_kind(data[:16])
+    if not kind:
+        raise HTTPException(status_code=415, detail="Nur JPEG, PNG, WebP, GIF oder AVIF.")
+    WALLPAPER_DIR.mkdir(parents=True, exist_ok=True)
+    target = WALLPAPER_DIR / f"wallpaper.{kind[0]}"
+    tmp = target.with_suffix(target.suffix + ".tmp")
+    tmp.write_bytes(data)
+    for old in WALLPAPER_DIR.glob("wallpaper.*"):
+        if old not in (target, tmp):
+            old.unlink(missing_ok=True)
+    os.replace(tmp, target)
+    return _wallpaper_status()
+
+
+@app.delete("/wallpaper")
+def delete_wallpaper():
+    if WALLPAPER_DIR.is_dir():
+        for old in WALLPAPER_DIR.glob("wallpaper.*"):
+            old.unlink(missing_ok=True)
+    return _wallpaper_status()
 
 
 @app.post("/stt")

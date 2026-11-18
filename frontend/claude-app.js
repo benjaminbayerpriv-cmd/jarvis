@@ -177,6 +177,27 @@
   }
   applyReduceMotion(getJarvisPref('jarvisReduceMotion', false));
 
+  // Hintergrundbild (Einstellungen -> Erscheinungsbild). Das Bild liegt im
+  // Backend (/wallpaper), damit Browser und Mac-App dasselbe zeigen; nur das
+  // Abdunkeln ist eine reine Ansichts-Einstellung in localStorage.
+  const WALLPAPER_DIM_DEFAULT = 35;
+  function getWallpaperDim() {
+    const v = parseInt(lsGet('jarvisWallpaperDim'), 10);
+    return Number.isFinite(v) ? Math.min(80, Math.max(0, v)) : WALLPAPER_DIM_DEFAULT;
+  }
+  function applyWallpaperDim(pct) {
+    document.documentElement.style.setProperty('--jsWallpaperDim', pct + '%');
+  }
+  function applyWallpaper(url) {
+    const root = document.documentElement;
+    if (url) root.style.setProperty('--jsWallpaper', `url("${url}")`);
+    else root.style.removeProperty('--jsWallpaper');
+    root.classList.toggle('jarvis-has-wallpaper', !!url);
+    document.dispatchEvent(new CustomEvent('jarvis-wallpaper', { detail: { url } }));
+  }
+  applyWallpaperDim(getWallpaperDim());
+  fetch('/wallpaper/status').then((r) => r.json()).then((j) => applyWallpaper(j.set ? j.url : null)).catch(() => {});
+
   // Einstellungen-Panel: jede .env-Variable aus backend/config.py, die
   // nicht schon ihr eigenes dediziertes UI hat (LM-Studio-URL/Modell,
   // Code-Verzeichnis — siehe buildUi()), landet datengetrieben hier. Eine
@@ -337,7 +358,7 @@
           ${settingsIconBadge(SETTINGS_ICONS.palette)}
           <span style="flex:1;min-width:0;display:flex;flex-direction:column;gap:2px;">
             <span style="font-size:14px;font-weight:600;color:${C.text};">Erscheinungsbild</span>
-            <span style="font-size:12px;color:${C.textDim};">Farbschema und Bewegung</span>
+            <span style="font-size:12px;color:${C.textDim};">Farbschema, Hintergrundbild, Liquid Glass und Bewegung</span>
           </span>
           <span class="js-settings-chevron-appearance" style="color:${C.textDim};transition:transform .15s;flex:0 0 auto;">${ICONS.chevronDown}</span>
         </button>
@@ -346,6 +367,52 @@
             <span style="font-size:12.5px;color:${C.textSoft};">Farbschema</span>
             <div class="js-theme-swatches" style="display:flex;gap:14px;flex-wrap:wrap;">
               ${JARVIS_THEMES.map(jarvisThemeSwatchHtml).join('')}
+            </div>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:8px;">
+            <span style="font-size:12.5px;color:${C.textSoft};">Hintergrundbild</span>
+            <div style="display:flex;gap:12px;align-items:center;">
+              <span class="js-wallpaper-preview" style="width:96px;height:60px;flex:0 0 auto;border-radius:10px;background:${C.bg} center / cover no-repeat;box-shadow:inset 0 0 0 1px ${C.border};"></span>
+              <div style="display:flex;flex-direction:column;gap:6px;min-width:0;">
+                <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                  <button class="js-wallpaper-pick" style="padding:7px 12px;border:1px solid ${C.border};border-radius:8px;background:none;color:${C.text};font-size:12.5px;cursor:pointer;font-family:${C.font};">Bild wählen…</button>
+                  <button class="js-wallpaper-remove" style="padding:7px 12px;border:1px solid ${C.border};border-radius:8px;background:none;color:${C.textSoft};font-size:12.5px;cursor:pointer;font-family:${C.font};">Entfernen</button>
+                </div>
+                <span class="js-wallpaper-status" style="font-size:11.5px;color:${C.textDim};">JPEG, PNG, WebP, GIF oder AVIF, bis 25 MB</span>
+              </div>
+            </div>
+            <label class="js-wallpaper-dim-row" style="display:flex;align-items:center;gap:10px;font-size:12.5px;color:${C.textSoft};">
+              <span style="flex:0 0 auto;">Abdunkeln</span>
+              <input class="js-wallpaper-dim" type="range" min="0" max="80" step="5" style="flex:1;accent-color:${C.accent};" />
+              <span class="js-wallpaper-dim-value" style="flex:0 0 36px;text-align:right;color:${C.textDim};"></span>
+            </label>
+            <input class="js-wallpaper-file" type="file" accept="image/jpeg,image/png,image/webp,image/gif,image/avif" style="display:none;" />
+          </div>
+          <div style="display:flex;flex-direction:column;gap:10px;">
+            <span style="font-size:12.5px;color:${C.textSoft};">Liquid Glass</span>
+            ${settingsImmediateToggleHtml('jarvisGlassEnabled', 'Liquid Glass', 'Glasflächen nach Apples Vorbild für Seitenleiste, Eingabefeld, Menüs und Chat-Blasen.')}
+            <div class="js-glass-controls" style="display:flex;flex-direction:column;gap:8px;">
+              <div class="js-glass-preview" aria-hidden="true">
+                <span class="js-glass-preview-label">Aa Glas</span>
+                <div class="js-glass-preview-regular">regular</div>
+                <div class="js-glass-preview-clear">clear</div>
+              </div>
+            <label style="display:flex;align-items:center;gap:10px;font-size:12.5px;color:${C.textSoft};">
+              <span style="flex:0 0 96px;">Unschärfe</span>
+              <input class="js-glass-blur" type="range" min="0" max="20" step="1" style="flex:1;accent-color:${C.accent};" />
+              <span class="js-glass-blur-value" style="flex:0 0 44px;text-align:right;color:${C.textDim};"></span>
+            </label>
+            <label style="display:flex;align-items:center;gap:10px;font-size:12.5px;color:${C.textSoft};">
+              <span style="flex:0 0 96px;">Lichtbrechung</span>
+              <input class="js-glass-refraction" type="range" min="0" max="100" step="5" style="flex:1;accent-color:${C.accent};" />
+              <span class="js-glass-refraction-value" style="flex:0 0 44px;text-align:right;color:${C.textDim};"></span>
+            </label>
+            <label style="display:flex;align-items:center;gap:10px;font-size:12.5px;color:${C.textSoft};">
+              <span style="flex:0 0 96px;">Lichtkante</span>
+              <input class="js-glass-rim" type="range" min="0" max="200" step="10" style="flex:1;accent-color:${C.accent};" />
+              <span class="js-glass-rim-value" style="flex:0 0 44px;text-align:right;color:${C.textDim};"></span>
+            </label>
+              <button class="js-glass-reset" style="align-self:flex-start;padding:6px 11px;border:1px solid ${C.border};border-radius:8px;background:none;color:${C.textSoft};font-size:12px;cursor:pointer;font-family:${C.font};">Standardwerte</button>
             </div>
           </div>
           ${settingsImmediateToggleHtml('jarvisReduceMotion', 'Bewegung reduzieren', 'Schaltet Übergänge und Animationen in der Oberfläche ab.')}
@@ -1824,6 +1891,22 @@
       }
       body.js-app-active > :not(#jsApp):not(#jarvisOrb):not(#jarvisOrbHit):not(#jsSpeechTerm):not(#jsCamWindow):not(#jsSpeechbar):not(#jsSpeechCaption):not(#jsSettingsSheet):not(#jsNewProjectSheet):not(#jsRenameChatSheet):not(#jsBtwWindow):not(#jsNotice):not(#jsModelLoad):not(#jsModelFitNotice):not(#jsWarmLock):not(#jarvisLarp):not(script):not(style) { display:none !important; }
       body.js-app-active { overflow:hidden; }
+      /* Hintergrundbild: liegt fest hinter allem, abgedunkelt mit der
+         Hintergrundfarbe des Farbschemas (dunkel wie hell lesbar). */
+      html.jarvis-has-wallpaper body::before {
+        content:""; position:fixed; inset:0; z-index:0; pointer-events:none;
+        background:
+          linear-gradient(color-mix(in srgb, var(--jsBg) var(--jsWallpaperDim, 35%), transparent), color-mix(in srgb, var(--jsBg) var(--jsWallpaperDim, 35%), transparent)),
+          var(--jsWallpaper) center / cover no-repeat var(--jsBg) !important;
+      }
+      html.jarvis-has-wallpaper #jsApp { background:transparent !important; }
+      /* Der Verlauf unter dem Eingabefeld würde als dunkler Balken über dem
+         Bild liegen - stattdessen blendet der Chat selbst nach unten aus. */
+      html.jarvis-has-wallpaper #jsApp .js-composer { background:none !important; }
+      html.jarvis-has-wallpaper #jsApp .js-thread {
+        -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 160px), transparent calc(100% - 50px));
+        mask-image: linear-gradient(to bottom, #000 calc(100% - 160px), transparent calc(100% - 50px));
+      }
       /* Jeder neu gestreamte Buchstabe (siehe setAssistantText/wrapCharsForReveal)
          erscheint erst unscharf und schärft sich dann ein, statt abrupt
          aufzuploppen. Nur .js-char-new bekommt die Animation — bereits
@@ -3134,6 +3217,62 @@
       });
     });
 
+    // Hintergrundbild: hochladen, entfernen, abdunkeln.
+    const wpPreview = $('.js-wallpaper-preview', settingsSheetEl);
+    const wpFile = $('.js-wallpaper-file', settingsSheetEl);
+    const wpStatus = $('.js-wallpaper-status', settingsSheetEl);
+    const wpRemove = $('.js-wallpaper-remove', settingsSheetEl);
+    const wpDim = $('.js-wallpaper-dim', settingsSheetEl);
+    const wpDimValue = $('.js-wallpaper-dim-value', settingsSheetEl);
+    const wpDimRow = $('.js-wallpaper-dim-row', settingsSheetEl);
+    const WP_HINT = 'JPEG, PNG, WebP, GIF oder AVIF, bis 25 MB';
+    const paintWallpaperControls = (url) => {
+      if (wpPreview) wpPreview.style.backgroundImage = url ? `url("${url}")` : 'none';
+      if (wpRemove) wpRemove.style.display = url ? '' : 'none';
+      if (wpDimRow) wpDimRow.style.display = url ? 'flex' : 'none';
+    };
+    paintWallpaperControls(document.documentElement.classList.contains('jarvis-has-wallpaper')
+      ? (getComputedStyle(document.documentElement).getPropertyValue('--jsWallpaper').match(/url\("?([^")]+)"?\)/) || [])[1]
+      : null);
+    document.addEventListener('jarvis-wallpaper', (e) => paintWallpaperControls(e.detail.url));
+    if (wpDim) {
+      wpDim.value = String(getWallpaperDim());
+      if (wpDimValue) wpDimValue.textContent = wpDim.value + ' %';
+      wpDim.addEventListener('input', () => {
+        applyWallpaperDim(wpDim.value);
+        lsSet('jarvisWallpaperDim', wpDim.value);
+        if (wpDimValue) wpDimValue.textContent = wpDim.value + ' %';
+      });
+    }
+    const wpPick = $('.js-wallpaper-pick', settingsSheetEl);
+    if (wpPick && wpFile) wpPick.addEventListener('click', () => wpFile.click());
+    if (wpFile) wpFile.addEventListener('change', async () => {
+      const file = wpFile.files && wpFile.files[0];
+      wpFile.value = '';
+      if (!file) return;
+      if (wpStatus) wpStatus.textContent = 'Lädt hoch…';
+      try {
+        const form = new FormData();
+        form.append('image', file, file.name);
+        const r = await fetch('/wallpaper', { method: 'POST', body: form });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(j.detail || 'Hochladen fehlgeschlagen.');
+        applyWallpaper(j.url);
+        if (wpStatus) wpStatus.textContent = 'Gesetzt.';
+      } catch (err) {
+        if (wpStatus) wpStatus.textContent = err.message || 'Hochladen fehlgeschlagen.';
+      }
+      setTimeout(() => { if (wpStatus) wpStatus.textContent = WP_HINT; }, 3000);
+    });
+    if (wpRemove) wpRemove.addEventListener('click', async () => {
+      try {
+        await fetch('/wallpaper', { method: 'DELETE' });
+        applyWallpaper(null);
+      } catch (e) {
+        if (wpStatus) wpStatus.textContent = 'Entfernen fehlgeschlagen.';
+      }
+    });
+
     const wireImmediateToggle = (key, getInitial, onChange) => {
       const input = $(`.js-immediate-toggle-${key}`, settingsSheetEl);
       const track = $(`.js-immediate-toggle-track-${key}`, settingsSheetEl);
@@ -3152,6 +3291,49 @@
       });
     };
     wireImmediateToggle('jarvisReduceMotion', () => getJarvisPref('jarvisReduceMotion', false), applyReduceMotion);
+
+    // Liquid Glass (frontend/liquid-glass.js): an/aus und die drei Regler.
+    // Die Werte liegen dort unter localStorage "jarvisGlass"; ist das Skript
+    // geladen, wirkt jede Änderung sofort über JarvisGlass.configure().
+    const GLASS_DEFAULTS = { enabled: true, blur: 5, refraction: 60, rim: 1 };
+    const readGlass = () => {
+      if (window.JarvisGlass) return window.JarvisGlass.config();
+      try { return { ...GLASS_DEFAULTS, ...JSON.parse(lsGet('jarvisGlass') || '{}') }; } catch (e) { return { ...GLASS_DEFAULTS }; }
+    };
+    const writeGlass = (next) => {
+      if (window.JarvisGlass) return window.JarvisGlass.configure(next);
+      const merged = { ...readGlass(), ...next };
+      lsSet('jarvisGlass', JSON.stringify(merged));
+      return merged;
+    };
+    const glassSliders = [
+      { key: 'blur', toUi: (v) => v, fromUi: (v) => v, label: (v) => v + ' px' },
+      { key: 'refraction', toUi: (v) => v, fromUi: (v) => v, label: (v) => String(v) },
+      { key: 'rim', toUi: (v) => Math.round(v * 100), fromUi: (v) => v / 100, label: (v) => Math.round(v * 100) + ' %' },
+    ];
+    const glassControls = $('.js-glass-controls', settingsSheetEl);
+    const paintGlass = () => {
+      const cfg = readGlass();
+      for (const s of glassSliders) {
+        const input = $(`.js-glass-${s.key}`, settingsSheetEl);
+        const value = $(`.js-glass-${s.key}-value`, settingsSheetEl);
+        if (input) input.value = String(s.toUi(cfg[s.key]));
+        if (value) value.textContent = s.label(cfg[s.key]);
+      }
+      if (glassControls) {
+        glassControls.style.opacity = cfg.enabled ? '1' : '.4';
+        glassControls.style.pointerEvents = cfg.enabled ? '' : 'none';
+      }
+    };
+    wireImmediateToggle('jarvisGlassEnabled', () => readGlass().enabled, (on) => { writeGlass({ enabled: on }); paintGlass(); });
+    for (const s of glassSliders) {
+      const input = $(`.js-glass-${s.key}`, settingsSheetEl);
+      if (!input) continue;
+      input.addEventListener('input', () => { writeGlass({ [s.key]: s.fromUi(Number(input.value)) }); paintGlass(); });
+    }
+    const glassReset = $('.js-glass-reset', settingsSheetEl);
+    if (glassReset) glassReset.addEventListener('click', () => { writeGlass({ ...GLASS_DEFAULTS }); paintGlass(); });
+    paintGlass();
 
     if (modelBtnEl) modelBtnEl.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); toggleModelMenu(modelBtnEl); });
     if (pdModelBtn) pdModelBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); toggleModelMenu(pdModelBtn); });
