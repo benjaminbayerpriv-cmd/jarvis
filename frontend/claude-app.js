@@ -312,7 +312,7 @@
           ${settingsIconBadge(SETTINGS_ICONS.palette)}
           <span style="flex:1;min-width:0;display:flex;flex-direction:column;gap:2px;">
             <span style="font-size:14px;font-weight:600;color:${C.text};">Erscheinungsbild</span>
-            <span style="font-size:12px;color:${C.textDim};">Farbschema, Hintergrundbild und Bewegung</span>
+            <span style="font-size:12px;color:${C.textDim};">Farbschema, Hintergrundbild, Liquid Glass und Bewegung</span>
           </span>
           <span class="js-settings-chevron-appearance" style="color:${C.textDim};transition:transform .15s;flex:0 0 auto;">${ICONS.chevronDown}</span>
         </button>
@@ -341,6 +341,28 @@
               <span class="js-wallpaper-dim-value" style="flex:0 0 36px;text-align:right;color:${C.textDim};"></span>
             </label>
             <input class="js-wallpaper-file" type="file" accept="image/jpeg,image/png,image/webp,image/gif,image/avif" style="display:none;" />
+          </div>
+          <div style="display:flex;flex-direction:column;gap:10px;">
+            <span style="font-size:12.5px;color:${C.textSoft};">Liquid Glass</span>
+            ${settingsImmediateToggleHtml('jarvisGlassEnabled', 'Liquid Glass', 'Glasflächen nach Apples Vorbild für Seitenleiste, Eingabefeld, Menüs und Chat-Blasen.')}
+            <div class="js-glass-controls" style="display:flex;flex-direction:column;gap:8px;">
+            <label style="display:flex;align-items:center;gap:10px;font-size:12.5px;color:${C.textSoft};">
+              <span style="flex:0 0 96px;">Unschärfe</span>
+              <input class="js-glass-blur" type="range" min="0" max="20" step="1" style="flex:1;accent-color:${C.accent};" />
+              <span class="js-glass-blur-value" style="flex:0 0 44px;text-align:right;color:${C.textDim};"></span>
+            </label>
+            <label style="display:flex;align-items:center;gap:10px;font-size:12.5px;color:${C.textSoft};">
+              <span style="flex:0 0 96px;">Lichtbrechung</span>
+              <input class="js-glass-refraction" type="range" min="0" max="100" step="5" style="flex:1;accent-color:${C.accent};" />
+              <span class="js-glass-refraction-value" style="flex:0 0 44px;text-align:right;color:${C.textDim};"></span>
+            </label>
+            <label style="display:flex;align-items:center;gap:10px;font-size:12.5px;color:${C.textSoft};">
+              <span style="flex:0 0 96px;">Lichtkante</span>
+              <input class="js-glass-rim" type="range" min="0" max="200" step="10" style="flex:1;accent-color:${C.accent};" />
+              <span class="js-glass-rim-value" style="flex:0 0 44px;text-align:right;color:${C.textDim};"></span>
+            </label>
+              <button class="js-glass-reset" style="align-self:flex-start;padding:6px 11px;border:1px solid ${C.border};border-radius:8px;background:none;color:${C.textSoft};font-size:12px;cursor:pointer;font-family:${C.font};">Standardwerte</button>
+            </div>
           </div>
           ${settingsImmediateToggleHtml('jarvisReduceMotion', 'Bewegung reduzieren', 'Schaltet Übergänge und Animationen in der Oberfläche ab.')}
         </div>
@@ -3210,6 +3232,49 @@
       });
     };
     wireImmediateToggle('jarvisReduceMotion', () => getJarvisPref('jarvisReduceMotion', false), applyReduceMotion);
+
+    // Liquid Glass (frontend/liquid-glass.js): an/aus und die drei Regler.
+    // Die Werte liegen dort unter localStorage "jarvisGlass"; ist das Skript
+    // geladen, wirkt jede Änderung sofort über JarvisGlass.configure().
+    const GLASS_DEFAULTS = { enabled: true, blur: 5, refraction: 60, rim: 1 };
+    const readGlass = () => {
+      if (window.JarvisGlass) return window.JarvisGlass.config();
+      try { return { ...GLASS_DEFAULTS, ...JSON.parse(lsGet('jarvisGlass') || '{}') }; } catch (e) { return { ...GLASS_DEFAULTS }; }
+    };
+    const writeGlass = (next) => {
+      if (window.JarvisGlass) return window.JarvisGlass.configure(next);
+      const merged = { ...readGlass(), ...next };
+      lsSet('jarvisGlass', JSON.stringify(merged));
+      return merged;
+    };
+    const glassSliders = [
+      { key: 'blur', toUi: (v) => v, fromUi: (v) => v, label: (v) => v + ' px' },
+      { key: 'refraction', toUi: (v) => v, fromUi: (v) => v, label: (v) => String(v) },
+      { key: 'rim', toUi: (v) => Math.round(v * 100), fromUi: (v) => v / 100, label: (v) => Math.round(v * 100) + ' %' },
+    ];
+    const glassControls = $('.js-glass-controls', settingsSheetEl);
+    const paintGlass = () => {
+      const cfg = readGlass();
+      for (const s of glassSliders) {
+        const input = $(`.js-glass-${s.key}`, settingsSheetEl);
+        const value = $(`.js-glass-${s.key}-value`, settingsSheetEl);
+        if (input) input.value = String(s.toUi(cfg[s.key]));
+        if (value) value.textContent = s.label(cfg[s.key]);
+      }
+      if (glassControls) {
+        glassControls.style.opacity = cfg.enabled ? '1' : '.4';
+        glassControls.style.pointerEvents = cfg.enabled ? '' : 'none';
+      }
+    };
+    wireImmediateToggle('jarvisGlassEnabled', () => readGlass().enabled, (on) => { writeGlass({ enabled: on }); paintGlass(); });
+    for (const s of glassSliders) {
+      const input = $(`.js-glass-${s.key}`, settingsSheetEl);
+      if (!input) continue;
+      input.addEventListener('input', () => { writeGlass({ [s.key]: s.fromUi(Number(input.value)) }); paintGlass(); });
+    }
+    const glassReset = $('.js-glass-reset', settingsSheetEl);
+    if (glassReset) glassReset.addEventListener('click', () => { writeGlass({ ...GLASS_DEFAULTS }); paintGlass(); });
+    paintGlass();
 
     if (modelBtnEl) modelBtnEl.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); toggleModelMenu(modelBtnEl); });
     if (pdModelBtn) pdModelBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); toggleModelMenu(pdModelBtn); });
