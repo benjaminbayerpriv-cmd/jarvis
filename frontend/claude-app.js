@@ -1600,6 +1600,19 @@
       .js-bpane { flex:0 0 auto; width:0; height:100%; overflow:hidden; position:relative; background:${C.bg};
         transition:width .34s cubic-bezier(.32,.72,0,1); }
       .js-bpane.is-open { border-left:1px solid ${C.border}; }
+      /* Ganz auf der Chat-Seite: rechts davon liegt die echte Webseite als
+         natives Fenster-Element und fängt jeden Mausklick ab. */
+      .js-bp-resize { position:absolute; top:0; bottom:0; width:10px; right:var(--jb-pane-w); z-index:7;
+        cursor:col-resize; display:none; }
+      .js-bp-resize::after { content:''; position:absolute; top:0; bottom:0; right:0; width:2px; background:transparent; transition:background .15s; }
+      .js-bp-resize:hover::after, .js-bp-resize.is-dragging::after { background:${C.accent}; }
+      #jsApp.js-bp-open .js-bp-resize { display:block; }
+      /* Scrollbalken des Chats: breiter und links vom Ziehgriff der
+         Browser-Leiste — vorher lag der Griff genau darüber. */
+      .js-thread { scrollbar-width:auto !important; }
+      .js-thread::-webkit-scrollbar { width:12px; }
+      #jsApp.js-bp-open .js-main { padding-right:10px; box-sizing:border-box; }
+      #jsApp.js-bp-dragging, #jsApp.js-bp-dragging * { cursor:col-resize !important; user-select:none !important; }
       .js-bpane.no-anim, #jsApp.js-bp-noanim .js-composer { transition:none !important; }
       #jsApp .js-composer { right:var(--jb-pane-w) !important; transition:top .25s ease, bottom .25s ease, transform .25s ease, right .34s cubic-bezier(.32,.72,0,1); }
       .js-bp-tab { display:flex; align-items:center; gap:7px; flex:0 1 168px; min-width:38px; max-width:168px; height:30px; padding:0 6px 0 10px;
@@ -1677,9 +1690,19 @@
     let settleTimer = null;
     let lastUrl = '';
 
-    const paneWidth = () => {
+    // Breite: vom Nutzer gezogen (gespeichert) oder halbe Fläche. Der Chat
+    // behält immer mindestens 380 px, die Leiste mindestens 340 px.
+    const PANE_W_KEY = 'jarvis.browserPaneWidth';
+    let userPaneWidth = 0;
+    try { userPaneWidth = Number(localStorage.getItem(PANE_W_KEY)) || 0; } catch (e) {}
+    const paneLimits = () => {
       const avail = uiEl.clientWidth - ($('.js-sidebar', uiEl)?.offsetWidth || 0);
-      return Math.round(Math.max(360, Math.min(avail * 0.5, avail - 380)));
+      return { avail, min: 340, max: Math.max(340, avail - 380) };
+    };
+    const paneWidth = () => {
+      const { avail, min, max } = paneLimits();
+      const want = userPaneWidth || avail * 0.5;
+      return Math.round(Math.max(min, Math.min(want, max)));
     };
 
     // Liegt gerade ein Dialog über allem, muss die echte Ansicht weg — sie
@@ -1777,6 +1800,7 @@
       if (isOpen) return;
       isOpen = true;
       settled = false;
+      uiEl.classList.add('js-bp-open');
       pane.classList.add('is-open');
       toggle.classList.add('is-active');
       layout(true);
@@ -1789,6 +1813,7 @@
       if (!isOpen) return;
       isOpen = false;
       settled = false;
+      uiEl.classList.remove('js-bp-open');
       sendBounds(); // echte Ansicht sofort weg, dann einklappen
       toggle.classList.remove('is-active');
       layout(true);
@@ -1803,6 +1828,48 @@
       if (e.target === pane && e.propertyName === 'width') settle();
     });
     window.addEventListener('resize', () => { if (isOpen) { layout(false); sendBounds(); } });
+
+    // Ziehgriff an der linken Kante: Breite live ändern. Die echte Seite
+    // (natives Fenster-Element) wandert über sendBounds mit.
+    const grip = document.createElement('div');
+    grip.className = 'js-bp-resize';
+    grip.title = 'Ziehen, um die Breite zu ändern (Doppelklick: zurücksetzen)';
+    uiEl.appendChild(grip);
+    let drag = null;
+    grip.addEventListener('pointerdown', (e) => {
+      if (!isOpen || e.button !== 0) return;
+      e.preventDefault();
+      drag = { x: e.clientX, w: pane.offsetWidth };
+      grip.setPointerCapture(e.pointerId);
+      grip.classList.add('is-dragging');
+      uiEl.classList.add('js-bp-dragging');
+    });
+    grip.addEventListener('pointermove', (e) => {
+      if (!drag) return;
+      const { min, max } = paneLimits();
+      userPaneWidth = Math.round(Math.max(min, Math.min(drag.w + (drag.x - e.clientX), max)));
+      layout(false);
+      sendBounds();
+    });
+    const endDrag = (e) => {
+      if (!drag) return;
+      drag = null;
+      try { grip.releasePointerCapture(e.pointerId); } catch (x) {}
+      grip.classList.remove('is-dragging');
+      uiEl.classList.remove('js-bp-dragging');
+      try { localStorage.setItem(PANE_W_KEY, String(userPaneWidth)); } catch (x) {}
+      settled = true;
+      sendBounds();
+    };
+    grip.addEventListener('pointerup', endDrag);
+    grip.addEventListener('pointercancel', endDrag);
+    grip.addEventListener('dblclick', () => {
+      userPaneWidth = 0;
+      try { localStorage.removeItem(PANE_W_KEY); } catch (x) {}
+      // Während der Animation die echte Seite ausblenden (wie beim Öffnen):
+      // sonst blieb sie mit veralteter Größe stehen.
+      if (isOpen) { settled = false; sendBounds(); layout(true); }
+    });
     new ResizeObserver(() => { if (isOpen && settled) sendBounds(); }).observe(view);
 
     const call = (fn) => { if (api) Promise.resolve(fn()).then(applyState).catch(() => {}); };
@@ -3378,9 +3445,30 @@
     if (!threadEl) { const m = $('.js-thread', uiEl); if (m) threadEl = m; }
     if (threadEl && threadScrollWired !== threadEl) {
       threadScrollWired = threadEl;
-      threadEl.addEventListener('scroll', () => {
-        threadPinned = threadEl.scrollHeight - threadEl.scrollTop - threadEl.clientHeight < 140;
+      const th = threadEl;
+      const rest = () => th.scrollHeight - th.scrollTop - th.clientHeight;
+      // Nur echtes Hochscrollen durch den Nutzer stoppt das Mitscrollen.
+      // Früher zählte jedes scroll-Ereignis: Geht z. B. die Browser-Leiste
+      // auf, wird der Chat schmaler, der Text bricht neu um, der Browser
+      // korrigiert die Scrollposition selbst — und das galt als "hochgescrollt",
+      // die Antwort lief dann unter das Eingabefeld.
+      let userScrolling = false;
+      const unpinIfUp = () => { if (rest() > 4) threadPinned = false; };
+      th.addEventListener('wheel', (e) => { if (e.deltaY < 0) threadPinned = false; }, { passive: true });
+      th.addEventListener('touchmove', unpinIfUp, { passive: true });
+      th.addEventListener('pointerdown', () => { userScrolling = true; }, { passive: true });
+      window.addEventListener('pointerup', () => { userScrolling = false; }, { passive: true });
+      th.addEventListener('keydown', (e) => {
+        if (['ArrowUp', 'PageUp', 'Home'].includes(e.key)) threadPinned = false;
+      });
+      th.addEventListener('scroll', () => {
+        const near = rest() < 140;
+        if (near) threadPinned = true;           // wer wieder unten ist, wird mitgenommen
+        else if (userScrolling) threadPinned = false; // Bildlaufleiste von Hand gezogen
       }, { passive: true });
+      // Ändert sich die Breite (Browser-Leiste, Fenstergröße), bleibt ein
+      // mitlaufender Verlauf am Ende.
+      new ResizeObserver(() => { if (threadPinned) th.scrollTop = th.scrollHeight; }).observe(th);
     }
     return threadEl;
   }
@@ -4378,6 +4466,9 @@
       progressHostEl.style.cssText = `max-width:760px;margin:0 auto 26px;display:flex;flex-direction:column;gap:10px;font-family:${C.font};`;
       el.appendChild(progressHostEl);
       el.scrollTop = el.scrollHeight;
+      // Der Verlauf ist ab jetzt nicht mehr leer: Eingabefeld nach unten,
+      // sonst lag es mittig über den Karten.
+      syncWelcome();
     }
     return progressHostEl;
   }
@@ -4487,6 +4578,11 @@
       scrollThread();
       return;
     }
+    // Werkzeug-Meldungen gehen an jedes offene Fenster (panel.push ist
+    // global) — auch für Anfragen, die gar nicht von hier kamen (eine zweite
+    // Jarvis-Instanz, ein Test, die Kommandozeile). Nur zeigen, solange hier
+    // selbst eine Antwort läuft oder der Sprachmodus aktiv ist.
+    if (item.kind === 'action' && !busy && !speechMode) return;
     const host = progressHost();
     if (!host) return;
     const kind = item.kind;
@@ -4506,8 +4602,21 @@
       if (status === 'done') { col = '#3dbd7d'; txt = item.action ? (item.action + ' fertig') : 'fertig'; tail = ''; }
       else if (status === 'failed' || status === 'fehlgeschlagen') { col = '#e5534b'; txt = item.action ? (item.action + ' fehlgeschlagen') : 'fehlgeschlagen'; tail = ''; }
       else if (status === 'started') { txt = item.label || (item.action ? item.action : 'build'); tail = 'läuft'; }
-      const detail = item.detail || '';
-      block.innerHTML = `<span style="width:9px;height:9px;border-radius:50%;background:${col};flex:0 0 auto;"></span><span style="flex:1 1 auto;color:${C.text};">${escapeHtml(txt)}${detail ? ' <span style="color:' + C.textDim + ';">' + escapeHtml(detail) + '</span>' : ''}</span><span style="color:${col};font-size:12px;flex:0 0 auto;">${escapeHtml(tail)}</span>`;
+      // Werkzeug-Ergebnisse (z. B. der komplette Text einer gelesenen Webseite)
+      // gehören nicht in den Verlauf: Die Karte nennt nur, was passiert ist.
+      // Den vollen Text gibt es per Klick bzw. als Tooltip, gekürzt.
+      const friendly = kind === 'action' && item.action && TOOL_STATUS_LABELS[item.action]
+        ? TOOL_STATUS_LABELS[item.action].replace(/\s*…$/, '') : '';
+      if (friendly) {
+        txt = friendly;
+        if (status === 'done' || status === 'erfolgreich') { col = '#3dbd7d'; tail = 'erledigt'; }
+        else if (status === 'failed' || status === 'fehlgeschlagen') { tail = 'fehlgeschlagen'; }
+      }
+      const fullDetail = String(item.detail || '').replace(/^\[Seitendaten[^\]]*\]\s*/, '');
+      const failedNow = status === 'failed' || status === 'fehlgeschlagen';
+      const shortDetail = failedNow && fullDetail ? fullDetail.split('\n')[0].slice(0, 140) + (fullDetail.length > 140 ? ' …' : '') : '';
+      block.title = fullDetail.slice(0, 1500);
+      block.innerHTML = `<span style="width:9px;height:9px;border-radius:50%;background:${col};flex:0 0 auto;"></span><span style="flex:1 1 auto;min-width:0;color:${C.text};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(txt)}${shortDetail ? ' <span style="color:' + C.textDim + ';">' + escapeHtml(shortDetail) + '</span>' : ''}</span><span style="color:${col};font-size:12px;flex:0 0 auto;">${escapeHtml(tail)}</span>`;
       scrollThread();
       return;
     }

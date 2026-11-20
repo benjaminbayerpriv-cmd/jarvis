@@ -216,9 +216,15 @@ def main() -> int:
             document.querySelector('.js-new').click(); {SLEEP.format(ms=500)}
             const turns = document.querySelectorAll('.js-thread .js-turn').length;
             return turns === 0 ? true : {{ ok: false, turns }};""")
-        page.js("document.querySelector('.js-editor').focus(); return true;")
-        time.sleep(0.4)  # Fokus und Cursor müssen gesetzt sein, sonst geht der Text ins Leere
-        page.call("Input.insertText", {"text": "Testentwurf"})
+        # Direkt nach dem Laden geht getippter Text im unsichtbaren Browser
+        # manchmal ins Leere (Fokus noch nicht gesetzt): bis zu dreimal versuchen.
+        for _attempt in range(3):
+            page.js("document.querySelector('.js-editor').focus(); return true;")
+            time.sleep(0.4)
+            page.call("Input.insertText", {"text": "Testentwurf"})
+            time.sleep(0.2)
+            if page.js("return document.querySelector('.js-editor').innerText.includes('Testentwurf');"):
+                break
         step("Eingabefeld nimmt Text an", f"""
             const ed = document.querySelector('.js-editor');
             {SLEEP.format(ms=200)}
@@ -296,10 +302,21 @@ def main() -> int:
                   if (th.scrollHeight > th.clientHeight + 50) maxRest = Math.max(maxRest, th.scrollHeight - th.scrollTop - th.clientHeight);
                 }}
                 return grew && maxRest < 120 ? true : {{ ok: false, gewachsen: grew, maxAbstand: Math.round(maxRest) }};""", timeout=40)
+        step("Simulierter Stream: Browser-Leiste geht mittendrin auf", fake_send("UI-Test Leiste") + f"""
+                const th = document.querySelector('.js-thread'); let maxRest = 0, grew = false;
+                for (let i = 0; i < 50; i++) {{
+                  {SLEEP.format(ms=50)}
+                  if (i === 30 && window.jarvisBrowserPane) window.jarvisBrowserPane.open();
+                  if (th.scrollHeight > th.clientHeight + 200) grew = true;
+                  if (i > 32 && th.scrollHeight > th.clientHeight + 50) maxRest = Math.max(maxRest, th.scrollHeight - th.scrollTop - th.clientHeight);
+                }}
+                if (window.jarvisBrowserPane) window.jarvisBrowserPane.close();
+                {SLEEP.format(ms=500)}
+                return grew && maxRest < 120 ? true : {{ ok: false, gewachsen: grew, maxAbstand: Math.round(maxRest) }};""", timeout=40)
         step("Simulierter Stream: hochgescrollt bleibt stehen", fake_send("UI-Test Hochscrollen") + f"""
                 const th = document.querySelector('.js-thread');
                 for (let i = 0; i < 40 && th.scrollHeight < th.clientHeight + 300; i++) {{ {SLEEP.format(ms=60)} }}
-                th.scrollTop = 0; {SLEEP.format(ms=50)}
+                th.dispatchEvent(new WheelEvent('wheel', {{ deltaY: -400, bubbles: true }})); th.scrollTop = 0; {SLEEP.format(ms=50)}
                 let maxTop = 0;
                 for (let i = 0; i < 30; i++) {{ {SLEEP.format(ms=60)} maxTop = Math.max(maxTop, th.scrollTop); }}
                 return maxTop < 40 ? true : {{ ok: false, sprangZurueckBis: Math.round(maxTop) }};""", timeout=40)

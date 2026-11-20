@@ -58,6 +58,8 @@ class JarvisBrowserWindow:
         self.webview = webview
         self.ws_url = ws_url
         self.inject_path = root_dir / "frontend" / "jarvis-browser-inject.js"
+        global LOG_FILE
+        LOG_FILE = root_dir / "launcher" / "browser.log"
         self.state_file = state_file
         self.tabs: list[_Tab] = [_Tab()]
         self._active: _Tab = self.tabs[0]
@@ -459,6 +461,15 @@ class JarvisBrowserWindow:
         window = self.window
         if window is None:
             raise BrowserError("Das Browser-Fenster ist geschlossen. Mit browser_open eine Seite öffnen.")
+        # pywebview führt Skripte erst aus, wenn die Seite "before_load"
+        # gemeldet hat. Lädt eine Seite nicht fertig (hängender Server,
+        # endlose Weiterleitung), kam das nie — jeder Aufruf wartete bis zum
+        # Zeitlimit, ein browser_open hing so über eine Minute. Nach kurzer
+        # Wartezeit das Signal selbst setzen und die (halb geladene) Seite lesen.
+        gate = window.events.before_load
+        if not gate.is_set() and not gate.wait(min(6.0, timeout)):
+            _log("Seite meldet kein before_load — Skript läuft trotzdem.")
+            gate.set()
         box: dict = {}
 
         def run() -> None:
@@ -717,6 +728,10 @@ class JarvisBrowserWindow:
             return {"id": cid, "ok": False, "error": f"Browser-Fehler bei {action}: {exc}"}
 
     def _run(self) -> None:
+        """Befehlskanal. Die Befehle laufen in einem eigenen Arbeits-Thread:
+        Früher lief jeder Befehl direkt in dieser Schleife — hing einer (z. B.
+        beim Laden einer Seite), kamen keine Lebenszeichen mehr beim Backend
+        an, und Jarvis hielt den Browser für "nicht verbunden", dauerhaft."""
         from websockets.sync.client import connect
 
         while not self._stop.is_set():
@@ -725,21 +740,99 @@ class JarvisBrowserWindow:
                     self.ws_url, additional_headers={"Origin": self.ws_url.replace("ws://", "http://").split("/jarvis")[0]},
                     open_timeout=5, close_timeout=2, max_size=16 * 1024 * 1024,
                 ) as ws:
-                    while not self._stop.is_set():
-                        try:
-                            raw = ws.recv(timeout=10)
-                        except TimeoutError:
-                            ws.send(json.dumps({"type": "heartbeat"}))
-                            continue
-                        try:
-                            command = json.loads(raw)
-                        except ValueError:
-                            continue
-                        if isinstance(command, dict) and command.get("action"):
-                            ws.send(json.dumps(self._handle(command)))
-            except Exception:  # noqa: BLE001 - Backend noch nicht da/neu gestartet: wieder versuchen
-                pass
+                    self._serve(ws)
+            except Exception as exc:  # noqa: BLE001 - Backend noch nicht da/neu gestartet: wieder versuchen
+                if not isinstance(exc, (ConnectionError, OSError, TimeoutError)):
+                    _log(f"Kanal-Fehler: {type(exc).__name__}: {exc}")
             self._stop.wait(2)
+
+    def _serve(self, ws) -> None:
+        import queue
+
+        results: queue.Queue = queue.Queue()
+        pending: list[dict] = []
+        running: dict = {}  # {"command", "since", "dumped"}
+        last_beat = 0.0
+
+        def work(command: dict) -> None:
+            results.put(self._handle(command))
+
+        def start_next() -> None:
+            if running or not pending:
+                return
+            command = pending.pop(0)
+            running.update(command=command, since=time.monotonic(), dumped=False)
+            threading.Thread(target=work, args=(command,), name=f"jb-{command.get('action')}", daemon=True).start()
+
+        while not self._stop.is_set():
+            now = time.monotonic()
+            if now - last_beat >= 8:
+                ws.send(json.dumps({"type": "heartbeat"}))
+                last_beat = now
+            # fertige Befehle zurückmelden
+            while True:
+                try:
+                    reply = results.get_nowait()
+                except queue.Empty:
+                    break
+                ws.send(json.dumps(reply))
+                # Eine verspätete Antwort eines aufgegebenen Befehls darf den
+                # gerade laufenden nicht als "fertig" markieren.
+                if running and reply.get("id") == running["command"].get("id"):
+                    running.clear()
+            # hängt ein Befehl? Nach 30 s festhalten, wo; nach 70 s aufgeben
+            if running:
+                age = now - running["since"]
+                cmd = running["command"]
+                if age > 30 and not running["dumped"]:
+                    running["dumped"] = True
+                    _log(f"Befehl {cmd.get('action')} hängt seit {age:.0f} s:\n" + _thread_stacks())
+                if age > 70:
+                    _log(f"Befehl {cmd.get('action')} nach {age:.0f} s aufgegeben.")
+                    ws.send(json.dumps({"id": cmd.get("id"), "ok": False,
+                                        "error": "Der Jarvis-Browser hängt bei diesem Befehl. Seite neu laden oder Tab schließen."}))
+                    running.clear()  # kommt seine Antwort doch noch, verwirft das Backend sie (unbekannte id)
+            start_next()
+            try:
+                raw = ws.recv(timeout=0.25)
+            except TimeoutError:
+                continue
+            try:
+                command = json.loads(raw)
+            except ValueError:
+                continue
+            if isinstance(command, dict) and command.get("action"):
+                pending.append(command)
+
+LOG_FILE = None  # wird in JarvisBrowserWindow.__init__ gesetzt (launcher/browser.log)
+
+
+def _log(message: str) -> None:
+    """Fehlersuche ohne Konsole (die Jarvis.exe hat keine): in launcher/browser.log."""
+    path = LOG_FILE
+    if path is None:
+        return
+    try:
+        if path.exists() and path.stat().st_size > 1_000_000:
+            path.unlink()
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write(time.strftime("%Y-%m-%d %H:%M:%S ") + message + "\n")
+    except OSError:
+        pass
+
+
+def _thread_stacks() -> str:
+    import sys
+    import traceback
+
+    names = {t.ident: t.name for t in threading.enumerate()}
+    out = []
+    for ident, frame in sys._current_frames().items():  # noqa: SLF001 - nur zur Fehlersuche
+        name = names.get(ident, "?")
+        if not name.startswith(("jb-", "jarvis-browser", "Thread", "MainThread")):
+            continue
+        out.append(f"--- {name}\n" + "".join(traceback.format_stack(frame)[-12:]))
+    return "\n".join(out)
 
 
 def _own_ports(ws_url: str) -> set[int]:

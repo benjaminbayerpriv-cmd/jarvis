@@ -801,6 +801,10 @@ def _open_url(url: str) -> str:
         return "Konnte das nicht tun: Ich öffne nur http- und https-Adressen."
     if not url.lower().startswith(("http://", "https://")):
         url = "https://" + url
+    # Läuft die Jarvis-App, öffnet sich alles in ihrem eigenen Browser —
+    # nicht zusätzlich im Chrome oder Standardbrowser des Nutzers.
+    if _use_jarvis_browser():
+        return _browser_open(url)
     if browser_agent.agent.connected():
         result = browser_agent.agent.command("open_url", {"url": url})
         if not result.startswith("Browser-Agent nicht verbunden"):
@@ -810,10 +814,18 @@ def _open_url(url: str) -> str:
     return f"{url} geöffnet."
 
 
+def _use_jarvis_browser() -> bool:
+    """Jarvis-Browser verbunden (Jarvis.exe läuft) und nicht per
+    config.json {"jarvis_browser_default": false} abgeschaltet."""
+    return jarvis_browser.agent.connected() and bool(config.load_config().get("jarvis_browser_default", True))
+
+
 def _open_in_browser(url: str, via_agent) -> str:
     """Use the Chrome extension when it's connected, otherwise the default
     browser — like _open_url. Without this fallback YouTube/web searches
     simply failed on every machine without the extension installed."""
+    if _use_jarvis_browser():
+        return _browser_open(url)
     if browser_agent.agent.connected():
         result = via_agent()
         if not result.startswith("Browser-Agent nicht verbunden"):
@@ -836,6 +848,9 @@ def _web_search(query: str) -> str:
     """Real search when a Tavily key is configured; otherwise open a results
     page in the browser — and say plainly that no results came back, so the
     model doesn't make some up."""
+    if not config.TAVILY_API_KEY and _use_jarvis_browser():
+        # Liefert echte Quellentexte statt nur einer Ergebnisseite im Chrome.
+        return _browser_research(query)
     if not config.TAVILY_API_KEY:
         url = f"https://www.google.com/search?q={quote_plus(query or '')}"
         opened = _open_in_browser(url, lambda: browser_agent.agent.web_search(query))
